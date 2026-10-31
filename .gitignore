@@ -22,3 +22,6 @@ TestResults/
 *.db-shm
 *.db-wal
 deploy/central/.env
+
+# Topaz report exports for reconciliation: real station data, never commit
+samples/
