@@ -56,6 +56,15 @@ Auth: station enrolls with name + shared `Topaz__EnrollmentKey` → per-station 
 - Timestamps are local wall-clock without zone; the agent attaches the station offset (`Station:TimeZone`), central stores `timestamptz`.
 - Topaz triggers call UDFs (`MD5`) that do not exist outside a Topaz install, so writing to a Topaz DB copy in a plain Firebird container fails — irrelevant for the agent (read-only), but matters when simulating changes in tests: use tables without such triggers (e.g. `flSesTanks`) or synthetic schemas.
 
+## Reconciliation with Topaz reports
+
+`tools/reconcile/` compares central data with Topaz's own XML exports (period `DataPacket`, aggregated shift export); usage in its README. Put exports in `samples/` (git-ignored, real data). Rules learned from it, encoded in `003_shift_report.sql` views (`v_shift_*`, `item_rests_at`) and covered by `Shift_report_views_follow_topaz_rules`:
+- cash vs cashless comes from `flOrders.Remark = 'Б'` / `AmountCashless > 0` (`fuel_sales.payment_kind`), not from the payment mode name;
+- revenue is `Amount`; `AmountCash`/`AmountCashless` are the prepaid amounts before the per-litre discount;
+- Topaz groups payment modes by name (several ids share one name) and counts zero-volume orders;
+- shift item rests are as of the shift end; period reports cut by operation time, not by shift.
+Re-run the reconciliation after changing projections or views.
+
 ## Hard rules
 
 - Never write to the Topaz database. Agent SQL must stay `SELECT`-only (`SqlBuilder`) inside the read-only transaction (`FirebirdTopazSource`).

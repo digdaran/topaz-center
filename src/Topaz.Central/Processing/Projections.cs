@@ -80,7 +80,8 @@ public static class Projections
                        N("amount_cashless", "AmountCashless"), N("amount_discount", "AmountDiscount"), N("amount_bonuses", "AmountBonuses"),
                        N("mass", "Mass"), N("density", "Density"), N("temperature", "Temperature"), I("status_order", "StatusOrder"),
                        I("order_source", "OrderSource"), I("card_type", "CardType"), T("card_code", "CardCode"),
-                       I("fiscal_number", "FiscalNumber"), B("driver_id", "DriverID"), B("agent_id", "AgentID")],
+                       I("fiscal_number", "FiscalNumber"), B("driver_id", "DriverID"), B("agent_id", "AgentID"),
+                       T("remark", "Remark"), N("price_pump", "PricePump"), T("tax_str", "TaxStr")],
         },
         new()
         {

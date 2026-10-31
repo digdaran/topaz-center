@@ -43,14 +43,25 @@ raw_batches  →  records (+ record_versions)  →  нормализованны
 | `v_item_stock` | остатки товаров = сумма регистра `rgItemRests` по складу и товару |
 | `v_fuel_sales` | `fuel_sales` с названиями АЗС, топлива и вида оплаты (для BI) |
 | `v_station_status` | состояние АЗС: сколько молчит, очередь агента, ошибки, backlog на сервере |
+| `v_agents`, `v_partners`, `v_cashes`, `v_doc_types` | справочники клиентов, контрагентов, касс, типов документов |
+| `v_shift_fuel_outcomes` | ≙ раздел `OutcomesByRetail` отчёта смены Топаза: отпуск топлива по резервуару, рукаву, топливу, названию вида оплаты, `Remark`, агенту и карте |
+| `v_shift_cash_flow` | ≙ `CashFlow`: движение денег по кассам за смену (регистр `rgCashes`) |
+| `v_shift_item_sales` | ≙ `ItemOutcomesByRetail`: продажи товаров за смену |
+| `item_rests_at(station, момент)` | ≙ `ItemRests`: остатки товаров на момент времени (в отчёте смены — на момент закрытия) |
+| `v_shift_totals` | итоги смены: литры, выручка (наличные / безнал / смешанная), магазин, разница счётчиков ТРК |
+
+Представления `v_shift_*` и `item_rests_at` сверены с реальным экспортом смены Топаза (0 расхождений), подробности в [topaz-schema.md](topaz-schema.md#сверка-с-отчётами-топаза-2026-10-31).
+
+В `fuel_sales.payment_kind` хранится способ оплаты, как его проводит Топаз: `cashless`, если `AmountCashless > 0` (пометка «Б»), `cash`, `mixed` или `none` (`Amount = 0`: тех. прокачка, переливы, прерванный налив). Название вида оплаты для этого не годится.
 
 Остальные таблицы Топаза доступны через `records` (`WHERE dataset = '…'`, поля через `data->>'Колонка'`) или через `/api/v1/export/{dataset}`.
 
 ## Примеры запросов
 
 ```sql
--- Продажи топлива по АЗС и видам топлива за вчера (в московском времени)
-SELECT station, fuel_name, payment_mode, sum(volume) AS liters, sum(amount) AS rub
+-- Продажи топлива по АЗС и видам топлива за вчера (в московском времени).
+-- Как и в отчётах Топаза «за период», фильтр по времени операции, а не по сменам.
+SELECT station, fuel_name, payment_kind, sum(volume) AS liters, sum(amount) AS rub
 FROM v_fuel_sales
 WHERE sold_at >= date_trunc('day', now() AT TIME ZONE 'Europe/Moscow') - interval '1 day'
   AND sold_at <  date_trunc('day', now() AT TIME ZONE 'Europe/Moscow')

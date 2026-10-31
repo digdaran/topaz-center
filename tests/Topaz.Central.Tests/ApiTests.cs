@@ -154,6 +154,40 @@ public sealed class ApiTests(CentralFixture fx) : IClassFixture<CentralFixture>
         Assert.Equal(4, await fx.QueryAsync<long>("SELECT count(*) FROM record_versions WHERE station_id = @s", args));
     }
 
+    /// <summary>Rules found by reconciling with a real Topaz shift export (docs/topaz-schema.md).</summary>
+    [PostgresFact]
+    public async Task Shift_report_views_follow_topaz_rules()
+    {
+        var st = await fx.EnrollAsync("АЗС-views");
+        RecordChange Row(string dataset, string key, JsonObject data) => new() { Dataset = dataset, Key = key, Hash = Hash(dataset + key + data.ToJsonString()), Data = data };
+        RecordChange Sale(int id, decimal volume, decimal amount, int mode, string remark, decimal cash, decimal cashless) => Row("flOrders", id.ToString(), new JsonObject
+        {
+            ["OrderID"] = id, ["SessionID"] = 80, ["Volume"] = volume, ["Amount"] = amount, ["Price"] = 48m, ["PaymentModeID"] = mode,
+            ["Remark"] = remark, ["AmountCash"] = cash, ["AmountCashless"] = cashless, ["DateTime"] = "2026-10-27T10:00:00.0000+03:00",
+        });
+        var batch = Batch(1,
+            Row("dcPaymentModes", "109", new JsonObject { ["PaymentModeID"] = 109, ["Name"] = "НАЛИЧКА" }),
+            Row("dcPaymentModes", "115", new JsonObject { ["PaymentModeID"] = 115, ["Name"] = "НАЛИЧКА" }),
+            Row("dcPaymentModes", "114", new JsonObject { ["PaymentModeID"] = 114, ["Name"] = "Терминал Альфабанк" }),
+            Sale(1, 30m, 1410m, 115, "", 1440m, 0m),        // prepaid 1440, discount → cost 1410
+            Sale(2, 0m, 0m, 115, "", 0m, 0m),                // aborted fuelling: still counted
+            Sale(3, 10m, 480m, 109, "", 480m, 0m),           // other id, same name → same group
+            Sale(4, 20m, 960m, 114, "Б", 0m, 960m),          // 'Б' = cashless
+            Sale(5, 5m, 240m, 114, "", 240m, 0m));           // terminal mode without 'Б' = booked as cash
+        (await fx.Client(st.Token).PostAsync("/api/v1/batches", Gzip(batch))).EnsureSuccessStatusCode();
+        await fx.WaitProcessedAsync();
+        var s = new { s = st.StationId };
+
+        Assert.Equal(3, await fx.QueryAsync<long>("SELECT count(*) FROM v_shift_fuel_outcomes WHERE station_id = @s", s));
+        Assert.Equal(3, await fx.QueryAsync<long>("SELECT order_count FROM v_shift_fuel_outcomes WHERE station_id = @s AND payment_mode = 'НАЛИЧКА'", s));
+        Assert.Equal(1890m, await fx.QueryAsync<decimal>("SELECT amount FROM v_shift_fuel_outcomes WHERE station_id = @s AND payment_mode = 'НАЛИЧКА'", s));
+        Assert.Equal(1920m, await fx.QueryAsync<decimal>("SELECT amount_cash FROM v_shift_fuel_outcomes WHERE station_id = @s AND payment_mode = 'НАЛИЧКА'", s));
+        Assert.Equal("cashless", await fx.QueryAsync<string>("SELECT payment_kind FROM fuel_sales WHERE station_id = @s AND order_id = 4", s));
+        Assert.Equal("cash", await fx.QueryAsync<string>("SELECT payment_kind FROM fuel_sales WHERE station_id = @s AND order_id = 5", s));
+        Assert.Equal("none", await fx.QueryAsync<string>("SELECT payment_kind FROM fuel_sales WHERE station_id = @s AND order_id = 2", s));
+        Assert.Equal("Б", await fx.QueryAsync<string>("SELECT remark FROM fuel_sales WHERE station_id = @s AND order_id = 4", s));
+    }
+
     [PostgresFact]
     public async Task Unknown_datasets_are_kept_generically()
     {
