@@ -86,6 +86,37 @@ function Users() {
   );
 }
 
+interface FuelRow { station_id: string; station: string; fuel_id: number; fuel_name: string; fuel_type: string; manual: boolean; is_deleted: boolean }
+
+/** Station fuel names → canonical fuel types, so stations can be compared and summed. */
+function FuelTypes() {
+  const qc = useQueryClient();
+  const { message } = App.useApp();
+  const { data, isLoading } = useQuery({ queryKey: ['catalog-fuels'], queryFn: () => api<{ types: { code: string; name: string }[]; fuels: FuelRow[] }>('/catalog/fuels') });
+  const save = async (r: FuelRow, fuelType: string | null) => {
+    try {
+      await api(`/catalog/fuels/${r.station_id}/${r.fuel_id}`, { method: 'PUT', body: { fuel_type: fuelType } });
+      qc.invalidateQueries();
+      message.success('Сохранено');
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+  return (
+    <Table<FuelRow> size="small" rowKey={(r) => `${r.station_id}/${r.fuel_id}`} loading={isLoading} dataSource={data?.fuels} pagination={false}
+      columns={[
+        { title: 'АЗС', dataIndex: 'station' },
+        { title: 'Топливо в Топазе', dataIndex: 'fuel_name', render: (v, r) => <>{v} {r.is_deleted && <Tag>удалено</Tag>}</> },
+        {
+          title: 'Вид для отчётов', dataIndex: 'fuel_type', render: (v: string, r) => (
+            <Select style={{ width: 180 }} value={v} onChange={(t) => save(r, t)} options={data?.types.map((t) => ({ value: t.code, label: t.name }))} />
+          ),
+        },
+        { title: '', dataIndex: 'manual', render: (m: boolean, r) => (m ? <Button size="small" type="link" onClick={() => save(r, null)}>сбросить</Button> : <Tag>определено автоматически</Tag>) },
+      ]} />
+  );
+}
+
 function AuditLog() {
   const { data, isLoading } = useQuery({ queryKey: ['audit'], queryFn: () => api<AuditRow[]>('/audit?limit=500') });
   return (
@@ -138,6 +169,7 @@ export default function SettingsPage() {
   const items = [
     ...(me.role === 'owner' ? [
       { key: 'users', label: 'Пользователи', children: <Users /> },
+      { key: 'fuels', label: 'Виды топлива', children: <FuelTypes /> },
       { key: 'audit', label: 'Журнал действий', children: <AuditLog /> },
     ] : []),
     { key: 'profile', label: 'Мой пароль', children: <Profile /> },

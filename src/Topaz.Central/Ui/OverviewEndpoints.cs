@@ -37,29 +37,39 @@ public static class AnalyticsSql
         station_id = ANY(@st) AND doc_at >= @utcFrom AND doc_at < @utcTo AND local_date BETWEEN @from::date AND @to::date
         """;
 
-    public const string FuelKpiColumns = """
-        COALESCE(sum(amount), 0) AS fuel_revenue,
-        COALESCE(sum(volume) FILTER (WHERE is_sale), 0) AS liters,
-        count(*) FILTER (WHERE is_sale) AS orders,
-        count(*) FILTER (WHERE volume = 0) AS aborted,
-        COALESCE(sum(volume) FILTER (WHERE payment_kind = 'none' AND volume > 0), 0) AS service_liters,
-        COALESCE(sum(amount) FILTER (WHERE payment_kind = 'cashless'), 0) AS cashless,
-        COALESCE(sum(amount) FILTER (WHERE payment_kind = 'mixed'), 0) AS mixed,
-        COALESCE(sum(amount_discount), 0) AS discounts
+    /// <summary>Day-level filter on the rollups (agg_*): exact local days, no time-of-day.</summary>
+    public const string AggWhere = "station_id = ANY(@st) AND local_date BETWEEN @from::date AND @to::date";
+    public const string AggFuelWhere = AggWhere + " AND (@fuel::text IS NULL OR fuel_name = @fuel)";
+
+    public const string AggFuelKpiColumns = """
+        COALESCE(sum(revenue), 0) AS fuel_revenue,
+        COALESCE(sum(liters), 0) AS liters,
+        COALESCE(sum(orders), 0) AS orders,
+        COALESCE(sum(aborted), 0) AS aborted,
+        COALESCE(sum(service_liters), 0) AS service_liters,
+        COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'cashless'), 0) AS cashless,
+        COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'mixed'), 0) AS mixed,
+        COALESCE(sum(discounts), 0) AS discounts
         """;
 
-    public const string ShopKpiColumns = """
-        COALESCE(sum(amount), 0) AS shop_revenue,
-        count(DISTINCT receipt_id) AS shop_receipts,
-        COALESCE(sum(quantity), 0) AS shop_items
-        """;
+    /// <summary>Bucket of a rollup day for day/week/month granularity.</summary>
+    public static string DayBucket(UiFilter f) => f.Granularity switch
+    {
+        "week" => "date_trunc('week', local_date::timestamp)",
+        "month" => "date_trunc('month', local_date::timestamp)",
+        _ => "local_date::timestamp",
+    };
 
     public static async Task<Kpi> KpiAsync(NpgsqlConnection c, UiFilter f)
     {
-        var kpi = await c.QuerySingleAsync<Kpi>($"SELECT {FuelKpiColumns} FROM v_fuel_sales_local WHERE {FuelWhere}", f.Args);
+        var kpi = await c.QuerySingleAsync<Kpi>($"SELECT {AggFuelKpiColumns} FROM v_agg_fuel WHERE {AggFuelWhere}", f.Args);
         if (f.Fuel is null)
         {
-            var shop = await c.QuerySingleAsync<Kpi>($"SELECT {ShopKpiColumns} FROM v_shop_lines_local WHERE {ShopWhere}", f.Args);
+            var shop = await c.QuerySingleAsync<Kpi>($"""
+                SELECT COALESCE(sum(amount), 0) AS shop_revenue, COALESCE(sum(receipts), 0) AS shop_receipts,
+                       (SELECT COALESCE(sum(quantity), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_items
+                FROM agg_shop_receipts_daily WHERE {AggWhere}
+                """, f.Args);
             kpi.ShopRevenue = shop.ShopRevenue;
             kpi.ShopReceipts = shop.ShopReceipts;
             kpi.ShopItems = shop.ShopItems;
@@ -78,15 +88,33 @@ public static class OverviewEndpoints
 
     private static async Task<IResult> Overview(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
     {
-        var (f, error) = await UiFilter.ParseAsync(ctx, scope);
+        var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
-        await using var c = await db.OpenConnectionAsync(ctx.RequestAborted);
+        var f = fp!;
+        var ct = ctx.RequestAborted;
+        var par = new SalesAnalyticsEndpoints.Par(db, ct);
+        async Task<T> With<T>(Func<NpgsqlConnection, Task<T>> run)
+        {
+            await using var c = await db.OpenConnectionAsync(ct);
+            return await run(c);
+        }
 
-        var current = await AnalyticsSql.KpiAsync(c, f!);
-        var cmp = f!.ComparePeriod();
-        var previous = cmp is null ? null : await AnalyticsSql.KpiAsync(c, cmp);
-
-        var series = await c.QueryAsync($"""
+        var cmp = f.ComparePeriod();
+        var currentT = With(c => AnalyticsSql.KpiAsync(c, f));
+        var previousT = cmp is null ? Task.FromResult<Kpi?>(null) : With<Kpi?>(async c => await AnalyticsSql.KpiAsync(c, cmp));
+        var seriesT = f.Granularity != "hour" ? par.Q($"""
+            WITH fuel AS (
+                SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(revenue) AS fuel_revenue, sum(liters) AS liters, sum(orders) AS orders
+                FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1),
+            shop AS (
+                SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(amount) AS shop_revenue, sum(receipts) AS shop_receipts
+                FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere} AND @fuel::text IS NULL GROUP BY 1)
+            SELECT to_char(COALESCE(fuel.bucket, shop.bucket), 'YYYY-MM-DD"T"HH24:MI') AS bucket,
+                   COALESCE(fuel_revenue, 0) AS fuel_revenue, COALESCE(liters, 0) AS liters, COALESCE(orders, 0) AS orders,
+                   COALESCE(shop_revenue, 0) AS shop_revenue, COALESCE(shop_receipts, 0) AS shop_receipts
+            FROM fuel FULL JOIN shop ON shop.bucket = fuel.bucket
+            ORDER BY 1
+            """, f.Args) : par.Q($"""
             WITH fuel AS (
                 SELECT {f.Bucket("local_ts")} AS bucket, sum(amount) AS fuel_revenue, sum(volume) FILTER (WHERE is_sale) AS liters,
                        count(*) FILTER (WHERE is_sale) AS orders
@@ -100,15 +128,13 @@ public static class OverviewEndpoints
             FROM fuel FULL JOIN shop ON shop.bucket = fuel.bucket
             ORDER BY 1
             """, f.Args);
-
-        var byFuel = await c.QueryAsync($"""
-            SELECT COALESCE(fuel_name, '?') AS fuel, sum(volume) FILTER (WHERE is_sale) AS liters, sum(amount) AS revenue
-            FROM v_fuel_sales_local WHERE {AnalyticsSql.FuelWhere} GROUP BY 1 ORDER BY 3 DESC NULLS LAST
+        var byFuelT = par.Q($"""
+            SELECT ft.name AS fuel, sum(a.liters) AS liters, sum(a.revenue) AS revenue
+            FROM v_agg_fuel a JOIN fuel_types ft ON ft.code = a.fuel_type
+            WHERE {AnalyticsSql.AggFuelWhere} GROUP BY ft.name, ft.sort ORDER BY 3 DESC NULLS LAST
             """, f.Args);
-
-        var stations = await StationRows(c, f);
-
-        var offline = await c.QueryAsync("""
+        var stationsT = With(c => StationRows(c, f));
+        var problemsT = par.Q("""
             SELECT v.id AS station_id, COALESCE(NULLIF(s.display_name, ''), v.name) AS station, v.last_seen_at,
                    extract(epoch FROM v.silent_for)::bigint AS silent_seconds, v.agent_queue_pending, v.agent_queue_dead, v.topaz_db_ok
             FROM v_station_status v JOIN stations s ON s.id = v.id
@@ -117,7 +143,11 @@ public static class OverviewEndpoints
             ORDER BY v.silent_for DESC NULLS FIRST
             """, new { st = f.Stations });
 
-        return Results.Ok(new { filter = Describe(f), current, previous, series, by_fuel = byFuel, stations, problems = offline });
+        return Results.Ok(new
+        {
+            filter = Describe(f), current = await currentT, previous = await previousT, series = await seriesT, by_fuel = await byFuelT,
+            stations = await stationsT, problems = await problemsT,
+        });
     }
 
     private static async Task<IResult> StationComparison(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
@@ -130,10 +160,10 @@ public static class OverviewEndpoints
 
     /// <summary>One KPI row per station (ranking / comparison).</summary>
     internal static async Task<IEnumerable<dynamic>> StationRows(NpgsqlConnection c, UiFilter f) => await c.QueryAsync($"""
-        WITH fuel AS (SELECT station_id, {AnalyticsSql.FuelKpiColumns}, count(DISTINCT local_date) AS active_days
-                      FROM v_fuel_sales_local WHERE {AnalyticsSql.FuelWhere} GROUP BY station_id),
-             shop AS (SELECT station_id, {AnalyticsSql.ShopKpiColumns}
-                      FROM v_shop_lines_local WHERE {AnalyticsSql.ShopWhere} AND @fuel::text IS NULL GROUP BY station_id)
+        WITH fuel AS (SELECT station_id, {AnalyticsSql.AggFuelKpiColumns}, count(DISTINCT local_date) AS active_days
+                      FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY station_id),
+             shop AS (SELECT station_id, sum(amount) AS shop_revenue, sum(receipts) AS shop_receipts
+                      FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere} AND @fuel::text IS NULL GROUP BY station_id)
         SELECT sn.station_id, sn.station, sn.region, sn.group_name,
                COALESCE(fuel.fuel_revenue, 0) AS fuel_revenue, COALESCE(fuel.liters, 0) AS liters, COALESCE(fuel.orders, 0) AS orders,
                COALESCE(fuel.aborted, 0) AS aborted, COALESCE(fuel.cashless, 0) AS cashless, COALESCE(fuel.discounts, 0) AS discounts,

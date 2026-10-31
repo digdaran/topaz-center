@@ -64,7 +64,7 @@ public static class AdminUiEndpoints
         return Results.Ok(rows);
     }
 
-    private static async Task<IResult> UpdateStation(Guid id, StationUpdate body, ClaimsPrincipal user, NpgsqlDataSource db)
+    private static async Task<IResult> UpdateStation(Guid id, StationUpdate body, ClaimsPrincipal user, NpgsqlDataSource db, Topaz.Central.Processing.RollupRefresher rollups)
     {
         await using var c = await db.OpenConnectionAsync();
         if (body.TimeZone is { Length: > 0 } tz && !await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = @tz)", new { tz }))
@@ -78,6 +78,9 @@ public static class AdminUiEndpoints
             WHERE id = @id
             """, new { id, body.DisplayName, body.TimeZone, body.Region, body.GroupName, body.Address });
         if (n == 0) return Results.NotFound();
+        if (!string.IsNullOrEmpty(body.TimeZone))
+            await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) VALUES (@id, 'all')", new { id }); // local days shift
+        rollups.Notify();
         await Audit.WriteAsync(db, user, "station_updated", "station:" + id, body);
         return Results.NoContent();
     }

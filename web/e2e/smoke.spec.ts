@@ -15,6 +15,9 @@ export async function signIn(page: Page, user = login, pass = password) {
 /** Every page opens without JS errors or failed API calls; a screenshot is kept for review. */
 const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/', title: 'Обзор', wait: 'Выручка и литры' },
+  { path: '/fuel', title: 'Топливо', wait: 'Цена по дням' },
+  { path: '/demand', title: 'Спрос', wait: 'Тренд и прогноз' },
+  { path: '/items', title: 'Товары', wait: 'Выручка по группам' },
   { path: '/shifts', title: 'Смены' },
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },
@@ -39,6 +42,7 @@ for (const p of PAGES) {
     await expect(page.getByRole('heading', { name: p.title, level: 3 })).toBeVisible();
     if (p.wait) await expect(page.getByText(p.wait).first()).toBeVisible();
     await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1500); // let chart animations finish before the screenshot
     await page.screenshot({ path: `test-results/screens/${info.project.name}${p.path.replace(/\//g, '_') || '_'}.png`, fullPage: true });
     expect(errors).toEqual([]);
   });

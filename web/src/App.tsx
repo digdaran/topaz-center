@@ -1,6 +1,6 @@
 import {
-  AppstoreOutlined, BarChartOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, LogoutOutlined, MenuOutlined,
-  ScheduleOutlined, SettingOutlined, ShopOutlined, UserOutlined,
+  AppstoreOutlined, BarChartOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
+  ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
 import { lazy, ReactNode, Suspense, useState } from 'react';
@@ -14,6 +14,9 @@ const OverviewPage = lazy(() => import('./pages/OverviewPage'));
 const ShiftsPage = lazy(() => import('./pages/ShiftsPage'));
 const ShiftCardPage = lazy(() => import('./pages/ShiftCardPage'));
 const DataPage = lazy(() => import('./pages/DataPage'));
+const FuelPage = lazy(() => import('./pages/FuelPage'));
+const DemandPage = lazy(() => import('./pages/DemandPage'));
+const ItemsPage = lazy(() => import('./pages/ItemsPage'));
 const StationsPage = lazy(() => import('./pages/StationsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
@@ -26,6 +29,9 @@ interface NavItem {
 
 export const NAV: NavItem[] = [
   { key: '/', label: 'Обзор', icon: <DashboardOutlined /> },
+  { key: '/fuel', label: 'Топливо', icon: <FireOutlined /> },
+  { key: '/demand', label: 'Спрос', icon: <LineChartOutlined /> },
+  { key: '/items', label: 'Товары', icon: <ShoppingOutlined /> },
   { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
   { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
   { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
@@ -105,6 +111,9 @@ export default function App() {
                 <Suspense fallback={<Loading />}>
                   <Routes>
                     <Route path="/" element={<OverviewPage />} />
+                    <Route path="/fuel" element={<FuelPage />} />
+                    <Route path="/demand" element={<DemandPage />} />
+                    <Route path="/items" element={<ItemsPage />} />
                     <Route path="/shifts" element={<ShiftsPage />} />
                     <Route path="/shifts/:station/:session" element={<ShiftCardPage />} />
                     <Route path="/stations" element={<StationsPage />} />

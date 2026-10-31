@@ -170,15 +170,20 @@ public static class IngestEndpoints
         return status == "accepted" ? Results.Json(ack, Protocol.Json, statusCode: 202) : Results.Json(ack, Protocol.Json, statusCode: 200);
     }
 
-    internal static async Task<IResult> Heartbeat(HeartbeatRequest body, HttpContext ctx, NpgsqlDataSource db)
+    internal static async Task<IResult> Heartbeat(HeartbeatRequest body, HttpContext ctx, NpgsqlDataSource db, RollupRefresher rollups)
     {
         var station = ctx.Station();
         await using var conn = await db.OpenConnectionAsync(ctx.RequestAborted);
         await conn.ExecuteAsync("""
-            UPDATE stations SET last_seen_at = now(), last_ip = @ip, agent_version = @version,
-                machine_name = COALESCE(@machine, machine_name), last_heartbeat = @hb::jsonb,
-                time_zone = CASE WHEN NOT time_zone_manual AND @tz IN (SELECT name FROM pg_timezone_names) THEN @tz ELSE time_zone END
-            WHERE id = @id
+            WITH old AS (SELECT time_zone FROM stations WHERE id = @id),
+            upd AS (
+                UPDATE stations SET last_seen_at = now(), last_ip = @ip, agent_version = @version,
+                    machine_name = COALESCE(@machine, machine_name), last_heartbeat = @hb::jsonb,
+                    time_zone = CASE WHEN NOT time_zone_manual AND @tz IN (SELECT name FROM pg_timezone_names) THEN @tz ELSE time_zone END
+                WHERE id = @id
+                RETURNING time_zone)
+            INSERT INTO rollup_dirty (station_id, kind)
+            SELECT @id, 'all' FROM old, upd WHERE old.time_zone <> upd.time_zone
             """, new
         {
             id = station.Id,
@@ -188,6 +193,7 @@ public static class IngestEndpoints
             hb = JsonSerializer.Serialize(body, Protocol.Json),
             tz = body.TimeZone ?? "",
         });
+        rollups.Notify(); // a time zone change marked the station's rollups dirty
         return Results.Json(new HeartbeatResponse { ServerTime = DateTimeOffset.UtcNow }, Protocol.Json);
     }
 }

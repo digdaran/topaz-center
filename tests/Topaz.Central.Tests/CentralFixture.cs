@@ -78,12 +78,12 @@ public sealed class CentralFixture : IAsyncLifetime
         return await c.QuerySingleAsync<T>(sql, args);
     }
 
-    /// <summary>Waits until the background processor has handled every received batch.</summary>
+    /// <summary>Waits until every received batch is processed and the daily rollups are refreshed.</summary>
     public async Task WaitProcessedAsync()
     {
         for (var i = 0; i < 200; i++)
         {
-            if (await QueryAsync<long>("SELECT count(*) FROM raw_batches WHERE status = 'received'") == 0) return;
+            if (await QueryAsync<long>("SELECT (SELECT count(*) FROM raw_batches WHERE status = 'received') + (SELECT count(*) FROM rollup_dirty)") == 0) return;
             await Task.Delay(50);
         }
         throw new TimeoutException("Batches were not processed in time");

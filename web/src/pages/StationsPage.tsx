@@ -1,6 +1,7 @@
 import { EditOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Badge, Button, Form, Input, Modal, Select, Table, Tag, Tooltip } from 'antd';
+import { App, Badge, Button, Form, Input, Modal, Select, Table, Tabs, Tag, Tooltip } from 'antd';
+import StationCompare from './StationCompare';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { useMe } from '../auth/auth';
@@ -51,6 +52,9 @@ export default function StationsPage() {
   return (
     <>
       <PageTitle title="АЗС" />
+      <Tabs destroyInactiveTabPane items={[
+        { key: 'compare', label: 'Сравнение', children: <StationCompare /> },
+        { key: 'status', label: 'Состояние и настройки', children: (
       <QueryState error={error} loading={isLoading}>
         <Table<StationRow>
           size="small"
@@ -72,6 +76,8 @@ export default function StationsPage() {
           ]}
         />
       </QueryState>
+        ) },
+      ]} />
       <Modal open={!!edit} title={`АЗС: ${edit?.topaz_name}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item name="display_name" label="Название в интерфейсе" extra="Пусто — как в Топазе / при установке агента"><Input maxLength={100} /></Form.Item>

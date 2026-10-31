@@ -27,7 +27,7 @@ public sealed class BatchSignal
 /// as 'failed' and blocks only its own station (visible in metrics and the admin API) until an
 /// admin reprocesses it, so no later state silently overtakes it.
 /// </summary>
-public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, IOptions<CentralOptions> options, ILogger<BatchProcessor> log)
+public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, RollupRefresher rollups, IOptions<CentralOptions> options, ILogger<BatchProcessor> log)
     : BackgroundService
 {
     // Oldest unprocessed batch of any station that has no earlier unprocessed/failed batch.
@@ -82,6 +82,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, IOpt
             await conn.ExecuteAsync("UPDATE raw_batches SET status = 'processed', processed_at = now(), error = NULL WHERE id = @Id", new { batch.Id }, tx);
             await tx.CommitAsync(ct);
             AppMetrics.ProcessingSeconds.Observe(sw.Elapsed.TotalSeconds);
+            rollups.Notify();
             return true;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -105,6 +106,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, IOpt
         if (batch.Payload is null) throw new InvalidOperationException("Payload was purged before processing");
         var envelope = JsonSerializer.Deserialize<BatchEnvelope>(batch.Payload, Protocol.Json)
                        ?? throw new InvalidOperationException("Empty payload");
+        var dirty = new DirtyDays();
 
         foreach (var item in envelope.Items)
         {
@@ -124,6 +126,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, IOpt
                     tx, cancellationToken: ct));
                 if (version is null) continue; // same content already stored (re-sent after agent state loss)
 
+                dirty.Add(item.Dataset, item.Data);
                 await InsertVersion(conn, tx, batch, item, version.Value, data, ct);
                 if (projection is not null)
                     await conn.ExecuteAsync(new CommandDefinition(projection.UpsertSql, new { station = batch.StationId, data }, tx, cancellationToken: ct));
@@ -138,11 +141,54 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, IOpt
                     """, new { station = batch.StationId, dataset = item.Dataset, key = item.Key, batch = batch.Id }, tx, cancellationToken: ct));
                 if (deleted is null) continue;
 
+                if (deleted.Data is not null) dirty.Add(item.Dataset, System.Text.Json.Nodes.JsonNode.Parse(deleted.Data)?.AsObject());
                 await InsertVersion(conn, tx, batch, item, deleted.Version, null, ct);
                 if (projection is not null && deleted.Data is not null)
                     await conn.ExecuteAsync(new CommandDefinition(projection.DeleteSql, new { station = batch.StationId, data = deleted.Data }, tx, cancellationToken: ct));
                 AppMetrics.RecordsApplied.WithLabels("delete").Inc();
             }
+        }
+        await dirty.SaveAsync(conn, tx, batch.StationId, ct);
+    }
+
+    /// <summary>Collects the UTC days whose daily rollups must be recomputed (see RollupRefresher).</summary>
+    private sealed class DirtyDays
+    {
+        private readonly HashSet<(string Kind, DateTime Day)> _days = new();
+        private readonly HashSet<long> _receipts = new();
+
+        public void Add(string dataset, System.Text.Json.Nodes.JsonObject? data)
+        {
+            if (data is null) return;
+            switch (dataset)
+            {
+                case "flOrders": AddTs("fuel", data["DateTime"]); break;
+                case "trFastTradeH": AddTs("shop", data["DateDoc"]); break;
+                case "trFastTradeD":
+                    if (data["FastTradeHID"] is { } h && long.TryParse(h.ToString(), out var id)) _receipts.Add(id);
+                    break;
+            }
+        }
+
+        private void AddTs(string kind, System.Text.Json.Nodes.JsonNode? ts)
+        {
+            if (ts is not null && DateTimeOffset.TryParse(ts.ToString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var at))
+                _days.Add((kind, at.UtcDateTime.Date));
+        }
+
+        public async Task SaveAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid station, CancellationToken ct)
+        {
+            if (_receipts.Count > 0)
+            {
+                var dates = await conn.QueryAsync<DateTime>(new CommandDefinition(
+                    "SELECT DISTINCT (doc_at AT TIME ZONE 'UTC')::date FROM shop_receipts WHERE station_id = @station AND receipt_id = ANY(@ids) AND doc_at IS NOT NULL",
+                    new { station, ids = _receipts.ToArray() }, tx, cancellationToken: ct));
+                foreach (var d in dates) _days.Add(("shop", d));
+            }
+            if (_days.Count == 0) return;
+            await conn.ExecuteAsync(new CommandDefinition(
+                "INSERT INTO rollup_dirty (station_id, kind, utc_date) SELECT @station, k, d FROM unnest(@kinds, @dates::date[]) AS t(k, d)",
+                new { station, kinds = _days.Select(x => x.Kind).ToArray(), dates = _days.Select(x => x.Day).ToArray() }, tx, cancellationToken: ct));
         }
     }
 

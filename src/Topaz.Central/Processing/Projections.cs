@@ -125,6 +125,12 @@ public static class Projections
         },
         new()
         {
+            Dataset = "rgItemRests", Table = "item_moves", Key = [B("move_id", "rgItemRestID")],
+            Columns = [B("item_id", "ItemID"), B("storage_id", "StorageID"), I("doc_type_id", "DocTypeID"), B("doc_id", "DocID"),
+                       Ts("moved_at", "Date"), N("quantity", "Quantity")],
+        },
+        new()
+        {
             Dataset = "sysEvents", Table = "station_events", Key = [B("event_id", "EventID")],
             Columns = [Ts("occurred_at", "DateTime"), B("category_id", "EventCategoryID"), T("message", "EventString"),
                        T("computer_name", "ComputerName"), T("source", "EventSource"), T("object", "EventObject")],

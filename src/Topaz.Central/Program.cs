@@ -36,6 +36,8 @@ builder.Services.AddSingleton<StationAuthFilter>();
 builder.Services.AddSingleton<AdminAuthFilter>();
 builder.Services.AddSingleton<BatchSignal>();
 builder.Services.AddSingleton<Migrator>();
+builder.Services.AddSingleton<RollupRefresher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RollupRefresher>());
 builder.Services.AddHostedService<BatchProcessor>();
 builder.Services.AddHostedService<StationMonitor>();
 builder.Services.AddUiAuth();
@@ -136,6 +138,7 @@ ui.MapUiOverview();
 ui.MapUiShifts();
 ui.MapUiData();
 ui.MapUiAdmin();
+ui.MapUiSalesAnalytics();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>

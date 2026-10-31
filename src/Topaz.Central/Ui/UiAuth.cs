@@ -203,6 +203,12 @@ public sealed class StationScope(NpgsqlDataSource db, IMemoryCache cache)
     {
         var uid = user.UserId();
         var owner = user.IsInRole(Roles.Owner);
+        if (owner)
+        {
+            // Not cached: a newly enrolled station must show up for the owner immediately (one tiny query).
+            await using var oc = await db.OpenConnectionAsync();
+            return (await oc.QueryAsync<Guid>("SELECT id FROM stations WHERE status <> 'revoked'")).ToArray();
+        }
         return (await cache.GetOrCreateAsync($"scope:{uid}:{owner}", async e =>
         {
             e.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(20);
