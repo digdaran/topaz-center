@@ -97,6 +97,8 @@ public sealed class HeartbeatRequest
     public string? TopazDbVersion { get; set; }
     public long? LastSessionId { get; set; }
     public bool? LastSessionOpen { get; set; }
+    /// <summary>IANA time zone of the Topaz local timestamps (station clock).</summary>
+    public string? TimeZone { get; set; }
 }
 
 public sealed class HeartbeatResponse

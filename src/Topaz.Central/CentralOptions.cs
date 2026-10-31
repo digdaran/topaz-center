@@ -15,4 +15,9 @@ public sealed class CentralOptions
     public int MaxProcessingAttempts { get; set; } = 5;
     public long MaxRequestBodyBytes { get; set; } = 64L * 1024 * 1024;
     public int BatchesPerMinutePerStation { get; set; } = 600;
+    /// <summary>Where cookie encryption keys are kept (a Docker volume); empty = in-memory (dev/tests).</summary>
+    public string? KeysDirectory { get; set; }
+    /// <summary>First start only: creates this owner if there are no users yet.</summary>
+    public string? BootstrapOwnerLogin { get; set; }
+    public string? BootstrapOwnerPassword { get; set; }
 }

@@ -81,7 +81,7 @@ public sealed class SenderWorker(Sender sender, AgentStatus status, ILogger<Send
     }
 }
 
-public sealed class HeartbeatWorker(CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, ILogger<HeartbeatWorker> log)
+public sealed partial class HeartbeatWorker(CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, ILogger<HeartbeatWorker> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -111,6 +111,7 @@ public sealed class HeartbeatWorker(CentralClient client, TokenStore tokens, Sta
                     TopazDbVersion = status.TopazDbVersion,
                     LastSessionId = status.LastSessionId,
                     LastSessionOpen = status.LastSessionOpen,
+                    TimeZone = IanaTimeZone(options.ResolveTimeZone()),
                 }, stoppingToken);
                 if (result.Outcome != SendOutcome.Acked)
                     log.LogDebug("Heartbeat not delivered: {Error}", result.Error);
@@ -122,4 +123,8 @@ public sealed class HeartbeatWorker(CentralClient client, TokenStore tokens, Sta
             }
         } while (await timer.WaitForNextTickAsync(stoppingToken).AsTask().ContinueWith(t => !t.IsCanceled && t.Result, TaskScheduler.Default));
     }
+
+    /// <summary>Windows zone ids ("Russian Standard Time") are converted to IANA ("Europe/Moscow").</summary>
+    internal static string? IanaTimeZone(TimeZoneInfo tz) =>
+        tz.HasIanaId ? tz.Id : TimeZoneInfo.TryConvertWindowsIdToIanaId(tz.Id, out var iana) ? iana : null;
 }

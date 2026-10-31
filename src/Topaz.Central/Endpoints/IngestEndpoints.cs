@@ -176,7 +176,8 @@ public static class IngestEndpoints
         await using var conn = await db.OpenConnectionAsync(ctx.RequestAborted);
         await conn.ExecuteAsync("""
             UPDATE stations SET last_seen_at = now(), last_ip = @ip, agent_version = @version,
-                machine_name = COALESCE(@machine, machine_name), last_heartbeat = @hb::jsonb
+                machine_name = COALESCE(@machine, machine_name), last_heartbeat = @hb::jsonb,
+                time_zone = CASE WHEN NOT time_zone_manual AND @tz IN (SELECT name FROM pg_timezone_names) THEN @tz ELSE time_zone END
             WHERE id = @id
             """, new
         {
@@ -185,6 +186,7 @@ public static class IngestEndpoints
             version = body.AgentVersion,
             machine = body.MachineName,
             hb = JsonSerializer.Serialize(body, Protocol.Json),
+            tz = body.TimeZone ?? "",
         });
         return Results.Json(new HeartbeatResponse { ServerTime = DateTimeOffset.UtcNow }, Protocol.Json);
     }

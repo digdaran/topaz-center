@@ -12,6 +12,8 @@ using Topaz.Central.Data;
 using Topaz.Central.Endpoints;
 using Topaz.Central.Monitoring;
 using Topaz.Central.Processing;
+using Topaz.Central.Ui;
+using Microsoft.AspNetCore.DataProtection;
 using Topaz.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -36,6 +38,11 @@ builder.Services.AddSingleton<BatchSignal>();
 builder.Services.AddSingleton<Migrator>();
 builder.Services.AddHostedService<BatchProcessor>();
 builder.Services.AddHostedService<StationMonitor>();
+builder.Services.AddUiAuth();
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("topaz-center");
+if (!string.IsNullOrWhiteSpace(options.KeysDirectory))
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(options.KeysDirectory));
+Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
 
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
@@ -67,6 +74,9 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("enroll", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+    o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1) }));
     o.AddPolicy("station", ctx => RateLimitPartition.GetFixedWindowLimiter(
         Tokens.Bearer(ctx) is { } t ? Convert.ToHexString(Tokens.Hash(t)) : ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = options.BatchesPerMinutePerStation, Window = TimeSpan.FromMinutes(1) }));
@@ -83,6 +93,10 @@ if (string.IsNullOrEmpty(options.EnrollmentKey))
     app.Logger.LogWarning("Topaz__EnrollmentKey is not set: new agents cannot enroll");
 
 await app.Services.GetRequiredService<Migrator>().MigrateAsync(CancellationToken.None);
+
+if (args.FirstOrDefault() == "create-user")
+    return await UserCommands.CreateUserAsync(app.Services, args[1..]);
+await UserCommands.BootstrapOwnerAsync(app.Services, options, app.Logger);
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler(e => e.Run(async ctx =>
@@ -103,6 +117,10 @@ app.UseSerilogRequestLogging(o => o.GetLevel = (ctx, _, ex) =>
     : ctx.Request.Path.StartsWithSegments("/health") || ctx.Request.Path.StartsWithSegments("/metrics") ? Serilog.Events.LogEventLevel.Verbose
     : Serilog.Events.LogEventLevel.Information);
 app.UseRequestDecompression();
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseRateLimiter();
 app.UseHttpMetrics();
 
@@ -112,7 +130,29 @@ app.MapMetrics("/metrics");
 app.MapIngest();
 app.MapAdmin();
 
+var ui = app.MapGroup(Protocol.ApiPrefix + "/ui").RequireAuthorization(Policies.Ui).AddEndpointFilter<UiAuthSetup.CsrfFilter>();
+ui.MapUiAuth();
+ui.MapUiOverview();
+ui.MapUiShifts();
+ui.MapUiData();
+ui.MapUiAdmin();
+// SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
+// agent with a misconfigured URL treat batches as delivered and drop them.
+app.MapFallback(async ctx =>
+{
+    var index = app.Environment.WebRootFileProvider.GetFileInfo("index.html");
+    if (!HttpMethods.IsGet(ctx.Request.Method) || ctx.Request.Path.StartsWithSegments("/api") || !index.Exists)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    ctx.Response.ContentType = "text/html; charset=utf-8";
+    ctx.Response.Headers.CacheControl = "no-cache";
+    await ctx.Response.SendFileAsync(index);
+}).AllowAnonymous();
+
 app.Run();
+return 0;
 
 internal sealed class PostgresHealthCheck(NpgsqlDataSource db) : IHealthCheck
 {
