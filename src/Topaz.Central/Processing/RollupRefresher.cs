@@ -80,13 +80,22 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_fuel_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""
             INSERT INTO agg_fuel_daily (station_id, local_date, fuel_id, payment_mode_id, payment_kind, revenue, liters, orders, aborted,
-                                        service_liters, discounts, last_price, last_sold_at)
-            SELECT station_id, local_date, COALESCE(fuel_id, 0), COALESCE(payment_mode_id, 0), payment_kind,
-                   COALESCE(sum(amount), 0), COALESCE(sum(volume) FILTER (WHERE is_sale), 0), count(*) FILTER (WHERE is_sale),
-                   count(*) FILTER (WHERE volume = 0), COALESCE(sum(volume) FILTER (WHERE payment_kind = 'none' AND volume > 0), 0),
-                   COALESCE(sum(amount_discount), 0), (array_agg(price ORDER BY sold_at DESC) FILTER (WHERE is_sale))[1], max(sold_at)
-            FROM v_fuel_sales_local
-            WHERE {where}{bound} AND local_date IS NOT NULL
+                                        service_liters, discounts, last_price, last_sold_at, cost_amount, costed_liters, costed_revenue, service_cost)
+            SELECT s.station_id, s.local_date, COALESCE(s.fuel_id, 0), COALESCE(s.payment_mode_id, 0), s.payment_kind,
+                   COALESCE(sum(s.amount), 0), COALESCE(sum(s.volume) FILTER (WHERE s.is_sale), 0), count(*) FILTER (WHERE s.is_sale),
+                   count(*) FILTER (WHERE s.volume = 0), COALESCE(sum(s.volume) FILTER (WHERE s.payment_kind = 'none' AND s.volume > 0), 0),
+                   COALESCE(sum(s.amount_discount), 0), (array_agg(s.price ORDER BY s.sold_at DESC) FILTER (WHERE s.is_sale))[1], max(s.sold_at),
+                   sum(s.volume * c.price) FILTER (WHERE s.is_sale AND c.price IS NOT NULL),
+                   COALESCE(sum(s.volume) FILTER (WHERE s.is_sale AND c.price IS NOT NULL), 0),
+                   COALESCE(sum(s.amount) FILTER (WHERE s.is_sale AND c.price IS NOT NULL), 0),
+                   sum(s.volume * c.price) FILTER (WHERE s.payment_kind = 'none' AND s.volume > 0 AND c.price IS NOT NULL)
+            FROM v_fuel_sales_local s
+            -- purchase price in effect at the moment of the sale
+            LEFT JOIN LATERAL (
+                SELECT fc.price_per_liter AS price FROM fuel_costs fc
+                WHERE fc.station_id = s.station_id AND fc.fuel_id = s.fuel_id AND fc.valid_from <= s.sold_at
+                ORDER BY fc.valid_from DESC LIMIT 1) c ON true
+            WHERE {where.Replace("station_id", "s.station_id").Replace("local_date", "s.local_date")}{bound.Replace("sold_at", "s.sold_at")} AND s.local_date IS NOT NULL
             GROUP BY 1, 2, 3, 4, 5
             """, args, tx, cancellationToken: ct, commandTimeout: 600));
     }
@@ -99,10 +108,19 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_shop_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_shop_receipts_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""
-            INSERT INTO agg_shop_daily (station_id, local_date, item_id, payment_mode_id, quantity, amount, lines, receipts)
-            SELECT station_id, local_date, COALESCE(item_id, 0), COALESCE(payment_mode_id, 0), COALESCE(sum(quantity), 0), COALESCE(sum(amount), 0),
-                   count(*), count(DISTINCT receipt_id)
-            FROM v_shop_lines_local WHERE {where}{bound} AND local_date IS NOT NULL
+            INSERT INTO agg_shop_daily (station_id, local_date, item_id, payment_mode_id, quantity, amount, lines, receipts, cost_amount, costed_amount)
+            SELECT l.station_id, l.local_date, COALESCE(l.item_id, 0), COALESCE(l.payment_mode_id, 0), COALESCE(sum(l.quantity), 0), COALESCE(sum(l.amount), 0),
+                   count(*), count(DISTINCT l.receipt_id),
+                   sum(l.quantity * c.cost) FILTER (WHERE c.cost IS NOT NULL),
+                   COALESCE(sum(l.amount) FILTER (WHERE c.cost IS NOT NULL), 0)
+            FROM v_shop_lines_local l
+            LEFT JOIN v_item_keys k ON k.station_id = l.station_id AND k.item_id = l.item_id
+            -- latest cost in effect at the sale; a station-specific price wins over an "all stations" one of the same date
+            LEFT JOIN LATERAL (
+                SELECT ic.cost FROM item_costs ic
+                WHERE ic.item_key = k.item_key AND (ic.station_id = l.station_id OR ic.station_id IS NULL) AND ic.valid_from <= l.doc_at
+                ORDER BY ic.valid_from DESC, (ic.station_id IS NULL) LIMIT 1) c ON true
+            WHERE {where.Replace("station_id", "l.station_id").Replace("local_date", "l.local_date")}{bound.Replace("doc_at", "l.doc_at")} AND l.local_date IS NOT NULL
             GROUP BY 1, 2, 3, 4
             """, args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""

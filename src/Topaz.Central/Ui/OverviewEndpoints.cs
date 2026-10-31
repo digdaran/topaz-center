@@ -18,6 +18,23 @@ public sealed class Kpi
     public long ShopReceipts { get; set; }
     public decimal ShopItems { get; set; }
 
+    // Money (owners/managers only; Redact() clears them for viewers).
+    public decimal? FuelCost { get; set; }
+    public decimal? FuelCostedRevenue { get; set; }
+    public decimal? CostedLiters { get; set; }
+    public decimal? ShopCost { get; set; }
+    public decimal? ShopCostedAmount { get; set; }
+
+    public decimal? Margin => FuelCost is null && ShopCost is null ? null
+        : (FuelCostedRevenue ?? 0) - (FuelCost ?? 0) + (ShopCostedAmount ?? 0) - (ShopCost ?? 0);
+    public decimal? FuelCoverage => CostedLiters is { } cl && Liters > 0 ? Math.Round(cl / Liters, 4) : null;
+
+    public Kpi Redact()
+    {
+        FuelCost = FuelCostedRevenue = CostedLiters = ShopCost = ShopCostedAmount = null;
+        return this;
+    }
+
     public decimal Revenue => FuelRevenue + ShopRevenue;
     public decimal? AvgFill => Orders > 0 ? Math.Round(Liters / Orders, 2) : null;
     public decimal? AvgFuelCheck => Orders > 0 ? Math.Round(FuelRevenue / Orders, 2) : null;
@@ -49,7 +66,8 @@ public static class AnalyticsSql
         COALESCE(sum(service_liters), 0) AS service_liters,
         COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'cashless'), 0) AS cashless,
         COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'mixed'), 0) AS mixed,
-        COALESCE(sum(discounts), 0) AS discounts
+        COALESCE(sum(discounts), 0) AS discounts,
+        sum(cost_amount) AS fuel_cost, COALESCE(sum(costed_revenue), 0) AS fuel_costed_revenue, COALESCE(sum(costed_liters), 0) AS costed_liters
         """;
 
     /// <summary>Bucket of a rollup day for day/week/month granularity.</summary>
@@ -67,12 +85,16 @@ public static class AnalyticsSql
         {
             var shop = await c.QuerySingleAsync<Kpi>($"""
                 SELECT COALESCE(sum(amount), 0) AS shop_revenue, COALESCE(sum(receipts), 0) AS shop_receipts,
-                       (SELECT COALESCE(sum(quantity), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_items
+                       (SELECT COALESCE(sum(quantity), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_items,
+                       (SELECT sum(cost_amount) FROM agg_shop_daily WHERE {AggWhere}) AS shop_cost,
+                       (SELECT COALESCE(sum(costed_amount), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_costed_amount
                 FROM agg_shop_receipts_daily WHERE {AggWhere}
                 """, f.Args);
             kpi.ShopRevenue = shop.ShopRevenue;
             kpi.ShopReceipts = shop.ShopReceipts;
             kpi.ShopItems = shop.ShopItems;
+            kpi.ShopCost = shop.ShopCost;
+            kpi.ShopCostedAmount = shop.ShopCostedAmount;
         }
         return kpi;
     }
@@ -145,7 +167,9 @@ public static class OverviewEndpoints
 
         return Results.Ok(new
         {
-            filter = Describe(f), current = await currentT, previous = await previousT, series = await seriesT, by_fuel = await byFuelT,
+            filter = Describe(f),
+            current = Roles.SeesMoney(ctx.User) ? await currentT : (await currentT).Redact(),
+            previous = Roles.SeesMoney(ctx.User) ? await previousT : (await previousT)?.Redact(), series = await seriesT, by_fuel = await byFuelT,
             stations = await stationsT, problems = await problemsT,
         });
     }

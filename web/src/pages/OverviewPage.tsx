@@ -10,6 +10,7 @@ export interface Kpi {
   fuel_revenue: number; liters: number; orders: number; aborted: number; service_liters: number; cashless: number; mixed: number;
   discounts: number; shop_revenue: number; shop_receipts: number; shop_items: number; revenue: number; avg_fill: number | null;
   avg_fuel_check: number | null; avg_shop_check: number | null; cashless_share: number | null; aborted_share: number | null;
+  margin: number | null; fuel_coverage: number | null;
 }
 
 export interface StationRow {
@@ -39,6 +40,7 @@ export default function OverviewPage() {
     { title: 'Выручка', value: c.revenue, previous: p?.revenue, format: money, hint: 'Топливо + магазин, по итоговой стоимости после скидок' },
     { title: 'Выручка топливо', value: c.fuel_revenue, previous: p?.fuel_revenue, format: money },
     { title: 'Выручка магазин', value: c.shop_revenue, previous: p?.shop_revenue, format: money },
+    ...(c.margin != null ? [{ title: 'Валовая маржа', value: c.margin, previous: p?.margin, format: money, hint: `По продажам с известной себестоимостью${c.fuel_coverage != null && c.fuel_coverage < 0.999 ? ` (топливо: ${pct(c.fuel_coverage)})` : ''}` }] : []),
     { title: 'Продано топлива', value: c.liters, previous: p?.liters, format: liters, hint: 'Без тех. прокачек и переливов' },
     { title: 'Заказы топлива', value: c.orders, previous: p?.orders, format: int, hint: 'Наливы с объёмом > 0, без тех. прокачек' },
     { title: 'Средний налив', value: c.avg_fill, previous: p?.avg_fill, format: liters },

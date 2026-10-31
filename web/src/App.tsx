@@ -1,5 +1,5 @@
 import {
-  AppstoreOutlined, BarChartOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
+  AimOutlined, AppstoreOutlined, BarChartOutlined, CalculatorOutlined, WalletOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
   ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
@@ -17,6 +17,9 @@ const DataPage = lazy(() => import('./pages/DataPage'));
 const FuelPage = lazy(() => import('./pages/FuelPage'));
 const DemandPage = lazy(() => import('./pages/DemandPage'));
 const ItemsPage = lazy(() => import('./pages/ItemsPage'));
+const FinancePage = lazy(() => import('./pages/FinancePage'));
+const PlansPage = lazy(() => import('./pages/PlansPage'));
+const CostsPage = lazy(() => import('./pages/CostsPage'));
 const StationsPage = lazy(() => import('./pages/StationsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
@@ -32,9 +35,12 @@ export const NAV: NavItem[] = [
   { key: '/fuel', label: 'Топливо', icon: <FireOutlined /> },
   { key: '/demand', label: 'Спрос', icon: <LineChartOutlined /> },
   { key: '/items', label: 'Товары', icon: <ShoppingOutlined /> },
+  { key: '/finance', label: 'Финансы', icon: <WalletOutlined />, roles: ['owner', 'manager'] },
+  { key: '/plans', label: 'План-факт', icon: <AimOutlined /> },
   { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
   { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
   { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
+  { key: '/costs', label: 'Себестоимость', icon: <CalculatorOutlined />, roles: ['owner', 'manager'] },
   { key: '/settings', label: 'Настройки', icon: <SettingOutlined /> },
 ];
 
@@ -114,6 +120,9 @@ export default function App() {
                     <Route path="/fuel" element={<FuelPage />} />
                     <Route path="/demand" element={<DemandPage />} />
                     <Route path="/items" element={<ItemsPage />} />
+                    <Route path="/finance" element={<FinancePage />} />
+                    <Route path="/plans" element={<PlansPage />} />
+                    <Route path="/costs" element={<CostsPage />} />
                     <Route path="/shifts" element={<ShiftsPage />} />
                     <Route path="/shifts/:station/:session" element={<ShiftCardPage />} />
                     <Route path="/stations" element={<StationsPage />} />

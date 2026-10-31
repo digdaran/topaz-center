@@ -18,6 +18,9 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/fuel', title: 'Топливо', wait: 'Цена по дням' },
   { path: '/demand', title: 'Спрос', wait: 'Тренд и прогноз' },
   { path: '/items', title: 'Товары', wait: 'Выручка по группам' },
+  { path: '/finance', title: 'Финансы', wait: 'Выручка и маржа' },
+  { path: '/plans', title: 'План-факт', wait: 'Нарастающим итогом' },
+  { path: '/costs', title: 'Себестоимость', wait: 'Текущие цены' },
   { path: '/shifts', title: 'Смены' },
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },
@@ -55,4 +58,22 @@ test('shift card opens from the list', async ({ page }, info) => {
   await expect(page.getByText(/Смена №\d+/)).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_shift_card.png`, fullPage: true });
+});
+
+test('a viewer sees no money: no finance/costs menu, no margin', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'one run is enough');
+  // Owner creates (or reuses) a viewer through the API.
+  const ownerLogin = await request.post('/api/v1/ui/auth/login', { headers: { 'X-Topaz-Ui': '1' }, data: { login, password } });
+  expect(ownerLogin.ok()).toBeTruthy();
+  const meta = await (await request.get('/api/v1/ui/meta')).json();
+  await request.post('/api/v1/ui/users', {
+    headers: { 'X-Topaz-Ui': '1' },
+    data: { login: 'e2e-viewer', name: 'Наблюдатель', role: 'viewer', password: 'viewer-password-1', stations: meta.stations.map((s: any) => s.id) },
+  });
+  await signIn(page, 'e2e-viewer', 'viewer-password-1');
+  await page.goto('/' + period);
+  await expect(page.getByText('Выручка и литры').first()).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Финансы' })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: 'Себестоимость' })).toHaveCount(0);
+  await expect(page.getByText('Валовая маржа')).toHaveCount(0);
 });

@@ -50,7 +50,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 {
     o.SerializerOptions.PropertyNamingPolicy = Protocol.Json.PropertyNamingPolicy;
     o.SerializerOptions.DictionaryKeyPolicy = null;
-    o.SerializerOptions.DefaultIgnoreCondition = Protocol.Json.DefaultIgnoreCondition;
+    // UI clients compare with null: always write null properties.
+    o.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never;
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddRequestDecompression(); // agents send gzip; decompressed size is capped by MaxRequestBodySize
@@ -139,6 +140,7 @@ ui.MapUiShifts();
 ui.MapUiData();
 ui.MapUiAdmin();
 ui.MapUiSalesAnalytics();
+ui.MapUiMoney();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>
