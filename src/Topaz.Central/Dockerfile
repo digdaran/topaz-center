@@ -1,4 +1,11 @@
 # Build from the repository root:  docker build -f src/Topaz.Central/Dockerfile -t topaz-central .
+FROM node:20-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
@@ -13,9 +20,12 @@ RUN dotnet publish src/Topaz.Central/Topaz.Central.csproj -c Release -o /app --n
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app .
+COPY --from=web /web/dist ./wwwroot
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_gcServer=0
 EXPOSE 8080
+# Writable dir for cookie keys (a named volume copies this ownership on first use).
+RUN mkdir -p /keys && chown app /keys
 # Non-root user shipped with the .NET 8 images.
 USER app
 ENTRYPOINT ["dotnet", "Topaz.Central.dll"]

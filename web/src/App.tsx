@@ -1,0 +1,123 @@
+import {
+  AppstoreOutlined, BarChartOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, LogoutOutlined, MenuOutlined,
+  ScheduleOutlined, SettingOutlined, ShopOutlined, UserOutlined,
+} from '@ant-design/icons';
+import { Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
+import { lazy, ReactNode, Suspense, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { RequireAuth, useLogout, useMe } from './auth/auth';
+import { useThemeMode } from './components/theme';
+import { Spin } from 'antd';
+
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const OverviewPage = lazy(() => import('./pages/OverviewPage'));
+const ShiftsPage = lazy(() => import('./pages/ShiftsPage'));
+const ShiftCardPage = lazy(() => import('./pages/ShiftCardPage'));
+const DataPage = lazy(() => import('./pages/DataPage'));
+const StationsPage = lazy(() => import('./pages/StationsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+
+interface NavItem {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  roles?: string[];
+}
+
+export const NAV: NavItem[] = [
+  { key: '/', label: 'Обзор', icon: <DashboardOutlined /> },
+  { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
+  { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
+  { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
+  { key: '/settings', label: 'Настройки', icon: <SettingOutlined /> },
+];
+
+function Shell({ children }: { children: ReactNode }) {
+  const me = useMe();
+  const logout = useLogout();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const screens = Grid.useBreakpoint();
+  const [drawer, setDrawer] = useState(false);
+  const { mode, setMode } = useThemeMode();
+  const selected = NAV.filter((n) => n.key !== '/' && location.pathname.startsWith(n.key)).map((n) => n.key)[0] ?? '/';
+  const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({ key: n.key, icon: n.icon, label: n.label }));
+  const menu = (
+    <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key + (e.key === '/settings' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
+  );
+  const desktop = !!screens.lg;
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      {desktop && (
+        <Layout.Sider width={220} theme="light" style={{ position: 'sticky', top: 0, height: '100vh', overflow: 'auto' }}>
+          <Flex align="center" gap={8} style={{ padding: '16px 20px' }}>
+            <BarChartOutlined style={{ fontSize: 22, color: '#1668dc' }} />
+            <Typography.Text strong style={{ fontSize: 16 }}>Topaz Center</Typography.Text>
+          </Flex>
+          {menu}
+        </Layout.Sider>
+      )}
+      <Layout>
+        <Layout.Header style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 12, background: 'transparent', height: 56 }}>
+          {!desktop && <Button icon={<MenuOutlined />} onClick={() => setDrawer(true)} aria-label="Меню" />}
+          {!desktop && <Typography.Text strong>Topaz Center</Typography.Text>}
+          <div style={{ flex: 1 }} />
+          <Button
+            type="text"
+            icon={<BulbOutlined />}
+            onClick={() => setMode(mode === 'dark' ? 'light' : mode === 'light' ? 'system' : 'dark')}
+            title={`Тема: ${mode === 'dark' ? 'тёмная' : mode === 'light' ? 'светлая' : 'как в системе'}`}
+          />
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'role', label: `Роль: ${{ owner: 'владелец', manager: 'управляющий', viewer: 'просмотр' }[me.role]}`, disabled: true },
+                { key: 'profile', label: 'Сменить пароль', icon: <AppstoreOutlined />, onClick: () => navigate('/settings/profile') },
+                { key: 'logout', label: 'Выйти', icon: <LogoutOutlined />, onClick: logout },
+              ],
+            }}
+          >
+            <Button type="text" icon={<UserOutlined />}>{desktop ? me.name : null}</Button>
+          </Dropdown>
+        </Layout.Header>
+        <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>{children}</Layout.Content>
+      </Layout>
+      <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="Topaz Center" styles={{ body: { padding: 0 } }}>
+        {menu}
+      </Drawer>
+    </Layout>
+  );
+}
+
+const Loading = () => <Spin style={{ display: 'block', margin: '96px auto' }} size="large" />;
+
+export default function App() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/*"
+          element={
+            <RequireAuth>
+              <Shell>
+                <Suspense fallback={<Loading />}>
+                  <Routes>
+                    <Route path="/" element={<OverviewPage />} />
+                    <Route path="/shifts" element={<ShiftsPage />} />
+                    <Route path="/shifts/:station/:session" element={<ShiftCardPage />} />
+                    <Route path="/stations" element={<StationsPage />} />
+                    <Route path="/data" element={<DataPage />} />
+                    <Route path="/settings/*" element={<SettingsPage />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Suspense>
+              </Shell>
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </Suspense>
+  );
+}

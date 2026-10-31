@@ -35,6 +35,12 @@ services:
       Topaz__AdminToken: ${TOPAZ_ADMIN_TOKEN:?set TOPAZ_ADMIN_TOKEN in .env}
       Topaz__RawRetentionDays: ${TOPAZ_RAW_RETENTION_DAYS:-90}
       Topaz__StationSilentMinutes: ${TOPAZ_STATION_SILENT_MINUTES:-15}
+      Topaz__KeysDirectory: /keys
+      Topaz__BootstrapOwnerLogin: ${TOPAZ_BOOTSTRAP_OWNER_LOGIN:-}
+      Topaz__BootstrapOwnerPassword: ${TOPAZ_BOOTSTRAP_OWNER_PASSWORD:-}
+      Topaz__TelegramBotToken: ${TOPAZ_TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - keys:/keys   # cookie encryption keys: sessions survive restarts
     networks: [backend, frontend]
     read_only: true
     tmpfs: [/tmp]
@@ -100,6 +106,7 @@ networks:
   frontend: {}
 
 volumes:
+  keys: {}
   pgdata: {}
   caddy_data: {}
   caddy_config: {}

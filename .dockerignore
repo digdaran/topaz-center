@@ -8,3 +8,5 @@
 deploy/
 docs/
 tests/
+**/node_modules/
+web/dist/
