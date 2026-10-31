@@ -1,0 +1,54 @@
+# Центральный сервис: установка
+
+Нужно: Ubuntu 22.04/24.04, Docker Engine 24+ с плагином compose, DNS-запись `A` домена на сервер, открытые порты 80 и 443.
+
+```bash
+git clone https://github.com/digdaran/topaz-center.git && cd topaz-center/deploy/central
+cp .env.example .env
+# заполните .env: DOMAIN, ACME_EMAIL и три секрета, например:
+#   POSTGRES_PASSWORD=$(openssl rand -base64 32)
+#   TOPAZ_ENROLLMENT_KEY=$(openssl rand -hex 16)
+#   TOPAZ_ADMIN_TOKEN=$(openssl rand -hex 32)
+chmod 600 .env
+docker compose up -d --build          # или CENTRAL_IMAGE=ghcr.io/<owner>/topaz-central:<версия> без --build
+docker compose ps
+curl https://$DOMAIN/health/live      # 200
+```
+
+При первом запуске Caddy сам получит сертификат Let's Encrypt, а сервис создаст схему БД.
+
+## Работа
+
+```bash
+ADMIN="Authorization: Bearer $TOPAZ_ADMIN_TOKEN"
+curl -H "$ADMIN" https://$DOMAIN/api/v1/admin/stations                 # АЗС и их состояние
+curl -H "$ADMIN" https://$DOMAIN/api/v1/admin/batches?status=failed    # пакеты с ошибкой обработки
+curl -H "$ADMIN" -X POST https://$DOMAIN/api/v1/admin/batches/123/reprocess
+curl -H "$ADMIN" -X POST https://$DOMAIN/api/v1/admin/stations/<id>/reset    # перед переустановкой агента
+curl -H "$ADMIN" "https://$DOMAIN/api/v1/export/flOrders?format=csv&updated_since=2026-10-01T00:00:00Z" -o orders.csv
+
+docker compose logs -f central        # JSON-логи
+docker compose exec postgres psql -U topaz topaz -c "select * from v_station_status"
+```
+
+## Мониторинг
+
+`docker compose --profile monitoring up -d` поднимает Prometheus на `127.0.0.1:9090` (открывать через `ssh -L 9090:localhost:9090`) с алертами из `monitoring/alerts.yml`: АЗС молчит, растёт очередь агента, есть dead-letter, обработка упала или отстаёт. Чтобы алерты приходили в Telegram или на почту, добавьте Alertmanager.
+
+## Бэкапы
+
+Контейнер `backup` раз в сутки делает `pg_dump` в `./backups` и хранит 14 дней. Копируйте эту папку за пределы сервера. Восстановление:
+
+```bash
+docker compose stop central
+docker compose exec -T postgres pg_restore -U topaz -d topaz --clean --if-exists < backups/topaz-YYYYMMDD-HHMM.dump
+docker compose start central
+```
+
+Даже если центральная БД потеряна безвозвратно, данные можно собрать заново: на каждой АЗС выполнить `TopazAgent.exe` с очищенным состоянием (`uninstall.ps1 -RemoveState`, `reset` на сервере, `install.ps1`), и агенты перечитают всё из Топаза.
+
+## Обновление
+
+```bash
+git pull && docker compose up -d --build     # миграции применятся при старте
+```

@@ -1,0 +1,24 @@
+# Topaz databases and backups: real station data, never commit
+*.fdb
+*.FDB
+*.gdb
+*.GDB
+*.fbk
+*.FBK
+
+# build
+bin/
+obj/
+artifacts/
+publish/
+TestResults/
+*.user
+.vs/
+.idea/
+
+# local state / secrets
+.env
+*.db
+*.db-shm
+*.db-wal
+deploy/central/.env

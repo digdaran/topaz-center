@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      firebird:
+        image: jacobalberty/firebird:2.5-ss
+        env:
+          ISC_PASSWORD: ci
+        ports: ["3050:3050"]
+    env:
+      TOPAZ_TEST_PG: Host=localhost;Username=postgres;Password=ci;Database=postgres
+      TOPAZ_TEST_FB_HOST: localhost
+      TOPAZ_TEST_FB_PASSWORD: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Wait for Firebird
+        run: for i in $(seq 1 30); do (echo > /dev/tcp/localhost/3050) 2>/dev/null && break; sleep 2; done
+      - run: dotnet restore
+      - run: dotnet build --no-restore -c Release
+      - run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx" --results-directory TestResults
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults
+
+  agent-package:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [win-x64, win-x86]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish self-contained single-file agent
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}; [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION=1.0.0-ci.${GITHUB_RUN_NUMBER}
+          dotnet publish src/Topaz.Agent -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=none -p:Version=$VERSION -o out/TopazAgent
+          cp deploy/agent/install.ps1 deploy/agent/uninstall.ps1 deploy/agent/README.md out/TopazAgent/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TopazAgent-${{ matrix.rid }}
+          path: out/TopazAgent
+
+  central-image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then V=${GITHUB_REF_NAME#v}; else V=1.0.0-ci.${GITHUB_RUN_NUMBER}; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/topaz-central" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/Topaz.Central/Dockerfile
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest

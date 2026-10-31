@@ -1,0 +1,33 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	# Internal endpoints are not published; Prometheus scrapes central:8080 directly.
+	@internal path /metrics /metrics/* /health/ready
+	respond @internal 404
+
+	# Optional: allow admin/export API only from the office network.
+	# @admin_outside {
+	# 	path /api/v1/admin/* /api/v1/export/*
+	# 	not remote_ip 203.0.113.0/24
+	# }
+	# respond @admin_outside 403
+
+	reverse_proxy central:8080 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

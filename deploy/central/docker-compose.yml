@@ -1,0 +1,106 @@
+# Central service: Caddy (HTTPS, Let's Encrypt) -> central API -> PostgreSQL.
+# Only Caddy publishes ports. Usage: see deploy/central/README.md
+name: topaz
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: topaz
+      POSTGRES_USER: topaz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U topaz -d topaz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+
+  central:
+    image: ${CENTRAL_IMAGE:-topaz-central:latest}
+    build:
+      context: ../..
+      dockerfile: src/Topaz.Central/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Database=topaz;Username=topaz;Password=${POSTGRES_PASSWORD};Maximum Pool Size=50"
+      Topaz__EnrollmentKey: ${TOPAZ_ENROLLMENT_KEY:?set TOPAZ_ENROLLMENT_KEY in .env}
+      Topaz__AdminToken: ${TOPAZ_ADMIN_TOKEN:?set TOPAZ_ADMIN_TOKEN in .env}
+      Topaz__RawRetentionDays: ${TOPAZ_RAW_RETENTION_DAYS:-90}
+      Topaz__StationSilentMinutes: ${TOPAZ_STATION_SILENT_MINUTES:-15}
+    networks: [backend, frontend]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "10" }
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on: [central]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (Let's Encrypt account)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [frontend]
+
+  # Daily logical backup, 14 days kept. Copy ./backups off the server (rsync/rclone) as well.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    networks: [backend]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/topaz-$$(date +%Y%m%d-%H%M).dump
+          pg_dump -h postgres -U topaz -d topaz -Fc -f "$$f.tmp" && mv "$$f.tmp" "$$f" && echo "backup $$f done"
+          find /backups -name 'topaz-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+
+  # Optional: docker compose --profile monitoring up -d
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus:/prometheus
+    networks: [frontend]
+    ports:
+      - "127.0.0.1:9090:9090"   # reach via SSH tunnel only
+
+networks:
+  backend:
+    internal: true   # PostgreSQL has no route to the outside world
+  frontend: {}
+
+volumes:
+  pgdata: {}
+  caddy_data: {}
+  caddy_config: {}
+  prometheus: {}

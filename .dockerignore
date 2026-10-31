@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/*.fdb
+**/*.FDB
+**/*.gdb
+**/*.fbk
+.git/
+deploy/
+docs/
+tests/

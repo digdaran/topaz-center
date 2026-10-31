@@ -1,0 +1,406 @@
+openapi: 3.0.3
+info:
+  title: Topaz Center API
+  version: "1.0"
+  description: |
+    Приём данных от агентов АСУ «Топаз АЗС» и выгрузка собранных данных.
+
+    * Транспорт — только HTTPS (TLS терминирует Caddy). Агент открывает исходящие соединения, входящих портов нет.
+    * Версия API — в пути (`/api/v1`), версия формата пакета — поле `schema_version`.
+    * JSON в snake_case; поля данных строк (`data`) — имена колонок Топаза как есть (`OrderID`, `DateTime`).
+    * Тело пакета можно (и агент так делает) сжимать: `Content-Encoding: gzip`.
+    * Ошибки — RFC 7807 (`application/problem+json`).
+
+    **Семантика повторов для клиента:** 2xx — подтверждено; 400/409/413/415/422 — пакет не будет принят никогда
+    (агент откладывает его в dead-letter и перечитывает строки); 401/403 — токен отозван (перерегистрация);
+    всё остальное (429, 5xx, сетевые ошибки) — повтор с экспоненциальной задержкой, `Retry-After` учитывается.
+servers:
+  - url: https://topaz.example.com
+tags:
+  - name: agent
+  - name: admin
+  - name: system
+
+paths:
+  /api/v1/enroll:
+    post:
+      tags: [agent]
+      summary: Регистрация агента (один раз при установке)
+      description: |
+        Агент передаёт название АЗС, указанное при установке, и общий ключ установки.
+        Сервер создаёт АЗС и выдаёт её персональный токен (хранится на сервере только SHA-256).
+        Если АЗС с таким названием (без учёта регистра и пробелов по краям) уже активна — 409:
+        перехватить чужую станцию нельзя, администратор сначала делает `reset`.
+        Лимит: 10 запросов/мин с одного IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrollRequest" }
+      responses:
+        "200":
+          description: Токен выдан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { description: Неверный ключ установки, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "409": { description: АЗС уже зарегистрирована или отозвана, content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "503": { description: Регистрация выключена (не задан ключ) }
+
+  /api/v1/batches:
+    post:
+      tags: [agent]
+      summary: Пакет изменений строк
+      description: |
+        Сервер сохраняет пакет как есть (`raw_batches`) и сразу подтверждает; нормализация идёт асинхронно,
+        строго в порядке поступления для каждой АЗС.
+
+        **Идемпотентность:** ключ — `batch_id` (дублируется в заголовке `Idempotency-Key`).
+        Повтор того же пакета → `200 duplicate`; тот же `batch_id` с другим содержимым → `409`.
+        Дополнительно каждая строка несёт `hash`: повторная запись строки с тем же содержимым не создаёт новой версии.
+
+        Лимиты: тело ≤ 64 МБ после распаковки, ≤ 5000 элементов, 600 запросов/мин на АЗС.
+      security: [{ stationToken: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, format: uuid }
+          description: Должен совпадать с `batch_id`.
+        - in: header
+          name: X-Batch-Seq
+          schema: { type: integer, format: int64 }
+          description: Порядковый номер пакета у агента (для диагностики).
+        - in: header
+          name: Content-Encoding
+          schema: { type: string, enum: [gzip] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BatchEnvelope" }
+            example:
+              schema_version: 1
+              batch_id: 3f0f3c9e-6c38-4a39-9a7d-7c6d58c1a001
+              seq: 122
+              created_at: "2026-10-31T19:26:56.1234567+00:00"
+              agent_version: "1.0.0"
+              items:
+                - dataset: flOrders
+                  op: upsert
+                  key: "1785"
+                  session_id: 82
+                  hash: 9d5ed678fe57bcca610140957afab571c1e1f2d8fdc9e5ba3d2c17b4c6e8b8f1
+                  data:
+                    OrderID: 1785
+                    SessionID: 82
+                    Volume: 23.03
+                    Price: 48.00
+                    Amount: 1082.41
+                    DateTime: "2026-10-31T21:59:52.9720+03:00"
+                    FuelID: 190
+                - dataset: flOrdersExtInfo
+                  op: delete
+                  key: "1412"
+                  session_id: 82
+      responses:
+        "202":
+          description: Новый пакет принят
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchAck" }
+        "200":
+          description: Пакет уже был принят ранее (повтор)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchAck" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: batch_id повторно использован с другим содержимым }
+        "413": { description: Тело больше лимита }
+        "415": { description: Content-Type не application/json }
+        "422":
+          description: Ошибки валидации
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/v1/heartbeat:
+    post:
+      tags: [agent]
+      summary: Состояние агента (раз в минуту)
+      security: [{ stationToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HeartbeatRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  server_time: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/admin/stations:
+    get:
+      tags: [admin]
+      summary: АЗС и их состояние (связь, очередь агента, ошибки)
+      security: [{ adminToken: [] }]
+      responses:
+        "200":
+          description: Список
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/StationStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/admin/stations/{id}/reset:
+    post:
+      tags: [admin]
+      summary: Разрешить перерегистрацию (переустановка агента); текущий токен перестаёт действовать
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/StationId" }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Нет такой АЗС }
+
+  /api/v1/admin/stations/{id}/revoke:
+    post:
+      tags: [admin]
+      summary: Заблокировать АЗС навсегда
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/StationId" }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Нет такой АЗС }
+
+  /api/v1/admin/batches:
+    get:
+      tags: [admin]
+      summary: Пакеты по статусу обработки (по умолчанию — failed)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: query, name: status, schema: { type: string, enum: [received, processed, failed], default: failed } }
+        - { in: query, name: limit, schema: { type: integer, default: 100, maximum: 1000 } }
+      responses:
+        "200": { description: Список пакетов }
+
+  /api/v1/admin/batches/{id}/reprocess:
+    post:
+      tags: [admin]
+      summary: Повторить обработку пакета в статусе failed
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Поставлен в обработку }
+        "404": { description: Нет такого пакета в статусе failed }
+
+  /api/v1/export/datasets:
+    get:
+      tags: [admin]
+      summary: Какие наборы данных есть (таблицы Топаза), строк, АЗС, последнее обновление
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Список }
+
+  /api/v1/export/{dataset}:
+    get:
+      tags: [admin]
+      summary: Выгрузка текущего состояния набора данных (NDJSON или CSV)
+      description: |
+        Потоковая выгрузка. Для инкрементального забора передавайте `updated_since` =
+        максимальный `updated_at` предыдущей выгрузки. CSV — разделитель `;`, UTF-8 (открывается в Excel).
+        Нормализованные таблицы (`fuel_sales`, `shifts`, …) удобнее читать напрямую из PostgreSQL
+        пользователем только для чтения (см. docs/database.md).
+      security: [{ adminToken: [] }]
+      parameters:
+        - { in: path, name: dataset, required: true, schema: { type: string, pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$" }, example: flOrders }
+        - { in: query, name: station_id, schema: { type: string, format: uuid } }
+        - { in: query, name: updated_since, schema: { type: string, format: date-time } }
+        - { in: query, name: include_deleted, schema: { type: boolean, default: false } }
+        - { in: query, name: format, schema: { type: string, enum: [ndjson, csv], default: ndjson } }
+        - { in: query, name: limit, schema: { type: integer, default: 100000, maximum: 1000000 } }
+      responses:
+        "200":
+          description: Поток строк
+          content:
+            application/x-ndjson:
+              example: '{"station":"АЗС-1","station_id":"c512...","key":"1785","session_id":82,"deleted":false,"version":1,"updated_at":"2026-10-31T19:25:03Z","data":{"OrderID":1785,"Volume":23.03}}'
+            text/csv: {}
+        "400": { description: Неверное имя набора или формат }
+
+  /health/live:
+    get:
+      tags: [system]
+      summary: Процесс жив (используется `TopazAgent.exe check`)
+      responses: { "200": { description: OK } }
+  /health/ready:
+    get:
+      tags: [system]
+      summary: Готов (есть связь с PostgreSQL). Снаружи закрыт прокси.
+      responses: { "200": { description: OK }, "503": { description: Нет связи с БД } }
+  /metrics:
+    get:
+      tags: [system]
+      summary: Метрики Prometheus. Снаружи закрыт прокси.
+      responses: { "200": { description: OK } }
+
+components:
+  securitySchemes:
+    stationToken:
+      type: http
+      scheme: bearer
+      description: Персональный токен АЗС из /enroll (`tpz_…`).
+    adminToken:
+      type: http
+      scheme: bearer
+      description: Токен администратора из переменной окружения `Topaz__AdminToken`.
+
+  parameters:
+    StationId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Problem:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Нет токена, токен неизвестен или отозван
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooMany:
+      description: Превышен лимит запросов
+      headers:
+        Retry-After: { schema: { type: integer }, description: Через сколько секунд повторить }
+    Unavailable:
+      description: Временная ошибка сервера (например, БД недоступна) — повторить позже
+      headers:
+        Retry-After: { schema: { type: integer } }
+
+  schemas:
+    EnrollRequest:
+      type: object
+      required: [station_name, enrollment_key]
+      properties:
+        station_name: { type: string, minLength: 1, maxLength: 100, example: "АЗС-5 Северная" }
+        enrollment_key: { type: string }
+        machine_name: { type: string }
+        agent_version: { type: string }
+
+    EnrollResponse:
+      type: object
+      properties:
+        station_id: { type: string, format: uuid }
+        station_name: { type: string }
+        token: { type: string, description: "Показывается один раз. Агент хранит его зашифрованным (DPAPI)." }
+
+    BatchEnvelope:
+      type: object
+      required: [schema_version, batch_id, seq, created_at, items]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        batch_id: { type: string, format: uuid, description: "Ключ идемпотентности; не меняется при повторах" }
+        seq: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        agent_version: { type: string }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 5000
+          items: { $ref: "#/components/schemas/RecordChange" }
+
+    RecordChange:
+      type: object
+      required: [dataset, op, key]
+      description: Полное текущее состояние строки (upsert) или её удаление (delete).
+      properties:
+        dataset: { type: string, pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$", description: "Имя таблицы Топаза", example: flOrders }
+        op: { type: string, enum: [upsert, delete] }
+        key: { type: string, maxLength: 200, description: "Первичный ключ строки; составной — через '|', например `82|233`" }
+        session_id: { type: integer, format: int64, nullable: true, description: "SessionID смены Топаза" }
+        hash: { type: string, pattern: "^[0-9a-f]{64}$", description: "SHA-256 канонического JSON строки; обязателен для upsert" }
+        data:
+          type: object
+          additionalProperties: true
+          description: |
+            Колонки строки как в Топазе. TIMESTAMP — ISO 8601 со смещением часового пояса АЗС
+            (`2026-10-31T21:59:52.9720+03:00`), DATE — `yyyy-MM-dd`, NUMERIC — число, BLOB TEXT — строка,
+            бинарные BLOB — base64. Обязателен для upsert.
+
+    BatchAck:
+      type: object
+      properties:
+        status: { type: string, enum: [accepted, duplicate] }
+        batch_id: { type: string, format: uuid }
+        received_at: { type: string, format: date-time }
+
+    HeartbeatRequest:
+      type: object
+      properties:
+        agent_version: { type: string }
+        machine_name: { type: string }
+        started_at: { type: string, format: date-time }
+        queue_pending: { type: integer }
+        queue_dead: { type: integer }
+        queue_bytes: { type: integer, format: int64 }
+        oldest_pending_at: { type: string, format: date-time, nullable: true }
+        last_collect_at: { type: string, format: date-time, nullable: true }
+        last_collect_error: { type: string, nullable: true }
+        last_send_at: { type: string, format: date-time, nullable: true }
+        last_send_error: { type: string, nullable: true }
+        topaz_db_ok: { type: boolean }
+        topaz_db_version: { type: string, nullable: true }
+        last_session_id: { type: integer, format: int64, nullable: true }
+        last_session_open: { type: boolean, nullable: true }
+
+    StationStatus:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [active, reenroll, revoked] }
+        agent_version: { type: string, nullable: true }
+        machine_name: { type: string, nullable: true }
+        last_seen_at: { type: string, format: date-time, nullable: true }
+        silent_seconds: { type: integer, nullable: true }
+        agent_queue_pending: { type: integer, nullable: true }
+        agent_queue_dead: { type: integer, nullable: true }
+        topaz_db_ok: { type: boolean, nullable: true }
+        last_collect_error: { type: string, nullable: true }
+        server_backlog: { type: integer }
+        server_failed: { type: integer }
+
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+
+    ValidationProblem:
+      allOf:
+        - $ref: "#/components/schemas/Problem"
+        - type: object
+          properties:
+            errors:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
+              example: { "items[0].hash": ["hash must be 64 lowercase hex chars for upsert."] }
