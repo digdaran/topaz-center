@@ -56,6 +56,15 @@ Auth: station enrolls with name + shared `Topaz__EnrollmentKey` → per-station 
 - Timestamps are local wall-clock without zone; the agent attaches the station offset (`Station:TimeZone`), central stores `timestamptz`.
 - Topaz triggers call UDFs (`MD5`) that do not exist outside a Topaz install, so writing to a Topaz DB copy in a plain Firebird container fails — irrelevant for the agent (read-only), but matters when simulating changes in tests: use tables without such triggers (e.g. `flSesTanks`) or synthetic schemas.
 
+## Web UI (web/ + src/Topaz.Central/Ui)
+
+- `web/`: Vite + React 18 + TypeScript + Ant Design (ru_RU) + TanStack Query + tree-shaken ECharts (`components/echarts.ts`). `npm run lint` (tsc + eslint), `npm test` (vitest, `src/**/*.test.ts`), `npm run e2e` (Playwright against a running stack; in this sandbox run it in `mcr.microsoft.com/playwright:v1.49.1-jammy`). The Dockerfile builds it into `wwwroot`.
+- API under `/api/v1/ui`: cookie auth (`Ui/UiAuth.cs`), every mutation needs header `X-Topaz-Ui: 1`, roles owner/manager/viewer. **Every query must be restricted by `StationScope`** (via `UiFilter.ParseAsync` or `CanSeeAsync`); viewers must never receive costs/margins (403 or `Kpi.Redact()`). `UiTests.Managers_see_only_their_stations_everywhere` loops over endpoints — add new ones there.
+- Long-period figures read the daily rollups `agg_fuel_daily` / `agg_shop_daily` / `agg_shop_receipts_daily` (rebuilt by `Processing/RollupRefresher` from `rollup_dirty`, marked by the batch processor; costs are applied during the rebuild, so cost edits mark stations `all`). Hour/hose/order-level views read raw tables for the period. Keep both consistent: `AnalyticsTests` asserts rollup = raw.
+- The SPA fallback answers only GET outside `/api` (a 200 for an unknown API path would make an agent drop batches).
+- Metric definitions live in `docs/web.md`; keep them in sync with the SQL.
+- Demo data: `tools/DemoData` (synthetic stations through the real agent protocol, with planted anomalies).
+
 ## Reconciliation with Topaz reports
 
 `tools/reconcile/` compares central data with Topaz's own XML exports (period `DataPacket`, aggregated shift export); usage in its README. Put exports in `samples/` (git-ignored, real data). Rules learned from it, encoded in `003_shift_report.sql` views (`v_shift_*`, `item_rests_at`) and covered by `Shift_report_views_follow_topaz_rules`:

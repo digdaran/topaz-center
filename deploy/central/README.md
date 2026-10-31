@@ -17,6 +17,14 @@ curl https://$DOMAIN/health/live      # 200
 
 При первом запуске Caddy сам получит сертификат Let's Encrypt, а сервис создаст схему БД.
 
+**Веб-интерфейс** открывается по `https://$DOMAIN/`. Первый владелец создаётся из `TOPAZ_BOOTSTRAP_OWNER_LOGIN/PASSWORD` в `.env` (только пока пользователей нет; после первого входа удалите пароль из `.env`) или командой:
+
+```bash
+docker compose exec -it central dotnet Topaz.Central.dll create-user --login admin --role owner
+```
+
+Для уведомлений в Telegram впишите токен бота в `TOPAZ_TELEGRAM_BOT_TOKEN` и выполните `docker compose up -d`, затем добавьте чаты в разделе «Контроль → Уведомления». Подробности — в [docs/web.md](../../docs/web.md).
+
 ## Работа
 
 ```bash

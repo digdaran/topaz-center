@@ -1,8 +1,10 @@
 import {
-  AimOutlined, AppstoreOutlined, BarChartOutlined, CalculatorOutlined, WalletOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
+  AimOutlined, AlertOutlined, AppstoreOutlined, ExperimentOutlined, BarChartOutlined, CalculatorOutlined, WalletOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
   ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
 } from '@ant-design/icons';
-import { Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
+import { api } from './api/client';
 import { lazy, ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
@@ -20,6 +22,8 @@ const ItemsPage = lazy(() => import('./pages/ItemsPage'));
 const FinancePage = lazy(() => import('./pages/FinancePage'));
 const PlansPage = lazy(() => import('./pages/PlansPage'));
 const CostsPage = lazy(() => import('./pages/CostsPage'));
+const TanksPage = lazy(() => import('./pages/TanksPage'));
+const ControlPage = lazy(() => import('./pages/ControlPage'));
 const StationsPage = lazy(() => import('./pages/StationsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 
@@ -37,6 +41,8 @@ export const NAV: NavItem[] = [
   { key: '/items', label: 'Товары', icon: <ShoppingOutlined /> },
   { key: '/finance', label: 'Финансы', icon: <WalletOutlined />, roles: ['owner', 'manager'] },
   { key: '/plans', label: 'План-факт', icon: <AimOutlined /> },
+  { key: '/tanks', label: 'Запасы топлива', icon: <ExperimentOutlined /> },
+  { key: '/control', label: 'Контроль', icon: <AlertOutlined /> },
   { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
   { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
   { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
@@ -53,7 +59,13 @@ function Shell({ children }: { children: ReactNode }) {
   const [drawer, setDrawer] = useState(false);
   const { mode, setMode } = useThemeMode();
   const selected = NAV.filter((n) => n.key !== '/' && location.pathname.startsWith(n.key)).map((n) => n.key)[0] ?? '/';
-  const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({ key: n.key, icon: n.icon, label: n.label }));
+  const alerts = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: { new: number; critical: number } }>('/alerts/summary'), refetchInterval: 60_000 });
+  const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
+    key: n.key, icon: n.icon,
+    label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
+      ? <Flex justify="space-between" align="center">{n.label}<Badge count={alerts.data!.counts.new} color={alerts.data!.counts.critical > 0 ? 'red' : 'orange'} overflowCount={99} /></Flex>
+      : n.label,
+  }));
   const menu = (
     <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key + (e.key === '/settings' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
   );
@@ -123,6 +135,8 @@ export default function App() {
                     <Route path="/finance" element={<FinancePage />} />
                     <Route path="/plans" element={<PlansPage />} />
                     <Route path="/costs" element={<CostsPage />} />
+                    <Route path="/tanks" element={<TanksPage />} />
+                    <Route path="/control" element={<ControlPage />} />
                     <Route path="/shifts" element={<ShiftsPage />} />
                     <Route path="/shifts/:station/:session" element={<ShiftCardPage />} />
                     <Route path="/stations" element={<StationsPage />} />

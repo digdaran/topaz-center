@@ -5,6 +5,7 @@ import { useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
 import { bucketLabel, compact, dateTime, int, liters, money, pct } from '../lib/format';
+import { LatestAlerts } from './ControlPage';
 
 export interface Kpi {
   fuel_revenue: number; liters: number; orders: number; aborted: number; service_liters: number; cashless: number; mixed: number;
@@ -85,6 +86,7 @@ export default function OverviewPage() {
                 </Col>
               ))}
             </Row>
+            <LatestAlerts />
             <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
               <Col xs={24} xl={16}>
                 <ChartCard

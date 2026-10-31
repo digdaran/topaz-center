@@ -20,4 +20,7 @@ public sealed class CentralOptions
     /// <summary>First start only: creates this owner if there are no users yet.</summary>
     public string? BootstrapOwnerLogin { get; set; }
     public string? BootstrapOwnerPassword { get; set; }
+    /// <summary>Telegram bot token (from @BotFather) for alert notifications; empty = notifications off.</summary>
+    public string? TelegramBotToken { get; set; }
+    public string TelegramApiBase { get; set; } = "https://api.telegram.org";
 }

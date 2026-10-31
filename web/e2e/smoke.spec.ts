@@ -21,6 +21,8 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/finance', title: 'Финансы', wait: 'Выручка и маржа' },
   { path: '/plans', title: 'План-факт', wait: 'Нарастающим итогом' },
   { path: '/costs', title: 'Себестоимость', wait: 'Текущие цены' },
+  { path: '/tanks', title: 'Запасы топлива', wait: 'Приём топлива' },
+  { path: '/control', title: 'Контроль' },
   { path: '/shifts', title: 'Смены' },
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },

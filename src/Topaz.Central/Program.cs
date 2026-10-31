@@ -39,6 +39,9 @@ builder.Services.AddSingleton<Migrator>();
 builder.Services.AddSingleton<RollupRefresher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RollupRefresher>());
 builder.Services.AddHostedService<BatchProcessor>();
+builder.Services.AddHttpClient("telegram", c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton<AnomalyDetector>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AnomalyDetector>());
 builder.Services.AddHostedService<StationMonitor>();
 builder.Services.AddUiAuth();
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("topaz-center");
@@ -141,6 +144,7 @@ ui.MapUiData();
 ui.MapUiAdmin();
 ui.MapUiSalesAnalytics();
 ui.MapUiMoney();
+ui.MapUiControl();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>
