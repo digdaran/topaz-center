@@ -49,7 +49,7 @@ export default function DemandPage() {
       <PageTitle title="Спрос" extra={
         <Segmented<Metric> value={metric} onChange={setMetric} options={(Object.keys(METRIC) as Metric[]).map((k) => ({ value: k, label: METRIC[k].label }))} />
       } />
-      <FilterBar granularity={false} compare={false} fuel />
+      <FilterBar granularity={false} compare={false} fuel pay />
       <QueryState error={error} loading={isLoading}>
         {data && (
           <Row gutter={[12, 12]}>

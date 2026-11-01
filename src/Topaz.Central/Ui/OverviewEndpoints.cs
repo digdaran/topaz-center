@@ -11,7 +11,11 @@ public sealed class Kpi
     public long Orders { get; set; }
     public long Aborted { get; set; }
     public decimal ServiceLiters { get; set; }
-    public decimal Cashless { get; set; }
+    public decimal Cashless { get; set; }   // card + contract + fuel cards
+    public decimal Cash { get; set; }
+    public decimal Card { get; set; }
+    public decimal Contract { get; set; }
+    public decimal FuelCard { get; set; }
     public decimal Mixed { get; set; }
     public decimal Discounts { get; set; }
     public decimal ShopRevenue { get; set; }
@@ -40,23 +44,35 @@ public sealed class Kpi
     public decimal? AvgFuelCheck => Orders > 0 ? Math.Round(FuelRevenue / Orders, 2) : null;
     public decimal? AvgShopCheck => ShopReceipts > 0 ? Math.Round(ShopRevenue / ShopReceipts, 2) : null;
     public decimal? CashlessShare => FuelRevenue > 0 ? Math.Round(Cashless / FuelRevenue, 4) : null;
+    public decimal? CardShare => FuelRevenue > 0 ? Math.Round(Card / FuelRevenue, 4) : null;
+    public decimal? ContractShare => FuelRevenue > 0 ? Math.Round(Contract / FuelRevenue, 4) : null;
+    public decimal? FuelCardShare => FuelRevenue > 0 ? Math.Round(FuelCard / FuelRevenue, 4) : null;
     public decimal? AbortedShare => Orders + Aborted > 0 ? Math.Round((decimal)Aborted / (Orders + Aborted), 4) : null;
 }
 
 public static class AnalyticsSql
 {
+    /// <summary>Payment category filter (pay_category of v_fuel_sales_local, v_shop_lines_local, v_agg_fuel, v_agg_shop).</summary>
+    public const string PayCond = "(@pay::text IS NULL OR pay_category = @pay)";
+
     public const string FuelWhere = """
         station_id = ANY(@st) AND sold_at >= @utcFrom AND sold_at < @utcTo
         AND local_date BETWEEN @from::date AND @to::date AND (@fuel::text IS NULL OR fuel_type = @fuel)
+        AND (@pay::text IS NULL OR pay_category = @pay)
         """;
 
     public const string ShopWhere = """
         station_id = ANY(@st) AND doc_at >= @utcFrom AND doc_at < @utcTo AND local_date BETWEEN @from::date AND @to::date
+        AND (@pay::text IS NULL OR pay_category = @pay)
         """;
 
     /// <summary>Day-level filter on the rollups (agg_*): exact local days, no time-of-day.</summary>
     public const string AggWhere = "station_id = ANY(@st) AND local_date BETWEEN @from::date AND @to::date";
-    public const string AggFuelWhere = AggWhere + " AND (@fuel::text IS NULL OR fuel_type = @fuel)";
+    public const string AggFuelWhere = AggWhere + " AND (@fuel::text IS NULL OR fuel_type = @fuel) AND " + PayCond;
+    /// <summary>Shop rollup by item and payment mode (v_agg_shop).</summary>
+    public const string AggShopWhere = AggWhere + " AND " + PayCond;
+    /// <summary>Shop figures without a payment mode (receipt counts): only without a fuel or payment filter.</summary>
+    public const string ShopUnfiltered = " AND @fuel::text IS NULL AND @pay::text IS NULL";
 
     public const string AggFuelKpiColumns = """
         COALESCE(sum(revenue), 0) AS fuel_revenue,
@@ -64,7 +80,11 @@ public static class AnalyticsSql
         COALESCE(sum(orders), 0) AS orders,
         COALESCE(sum(aborted), 0) AS aborted,
         COALESCE(sum(service_liters), 0) AS service_liters,
-        COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'cashless'), 0) AS cashless,
+        COALESCE(sum(revenue) FILTER (WHERE pay_category IN ('card', 'contract', 'fuel_card')), 0) AS cashless,
+        COALESCE(sum(revenue) FILTER (WHERE pay_category = 'cash'), 0) AS cash,
+        COALESCE(sum(revenue) FILTER (WHERE pay_category = 'card'), 0) AS card,
+        COALESCE(sum(revenue) FILTER (WHERE pay_category = 'contract'), 0) AS contract,
+        COALESCE(sum(revenue) FILTER (WHERE pay_category = 'fuel_card'), 0) AS fuel_card,
         COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'mixed'), 0) AS mixed,
         COALESCE(sum(discounts), 0) AS discounts,
         sum(cost_amount) AS fuel_cost, COALESCE(sum(costed_revenue - costed_vat), 0) AS fuel_costed_revenue, COALESCE(sum(costed_liters), 0) AS costed_liters
@@ -81,7 +101,7 @@ public static class AnalyticsSql
     public static async Task<Kpi> KpiAsync(NpgsqlConnection c, UiFilter f)
     {
         var kpi = await c.QuerySingleAsync<Kpi>($"SELECT {AggFuelKpiColumns} FROM v_agg_fuel WHERE {AggFuelWhere}", f.Args);
-        if (f.Fuel is null)
+        if (f.Fuel is null && f.Pay is null)
         {
             var shop = await c.QuerySingleAsync<Kpi>($"""
                 SELECT COALESCE(sum(amount), 0) AS shop_revenue, COALESCE(sum(receipts), 0) AS shop_receipts,
@@ -130,7 +150,7 @@ public static class OverviewEndpoints
                 FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1),
             shop AS (
                 SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(amount) AS shop_revenue, sum(receipts) AS shop_receipts
-                FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere} AND @fuel::text IS NULL GROUP BY 1)
+                FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere}{AnalyticsSql.ShopUnfiltered} GROUP BY 1)
             SELECT to_char(COALESCE(fuel.bucket, shop.bucket), 'YYYY-MM-DD"T"HH24:MI') AS bucket,
                    COALESCE(fuel_revenue, 0) AS fuel_revenue, COALESCE(liters, 0) AS liters, COALESCE(orders, 0) AS orders,
                    COALESCE(shop_revenue, 0) AS shop_revenue, COALESCE(shop_receipts, 0) AS shop_receipts
@@ -187,10 +207,11 @@ public static class OverviewEndpoints
         WITH fuel AS (SELECT station_id, {AnalyticsSql.AggFuelKpiColumns}, count(DISTINCT local_date) AS active_days
                       FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY station_id),
              shop AS (SELECT station_id, sum(amount) AS shop_revenue, sum(receipts) AS shop_receipts
-                      FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere} AND @fuel::text IS NULL GROUP BY station_id)
+                      FROM agg_shop_receipts_daily WHERE {AnalyticsSql.AggWhere}{AnalyticsSql.ShopUnfiltered} GROUP BY station_id)
         SELECT sn.station_id, sn.station, sn.region, sn.group_name,
                COALESCE(fuel.fuel_revenue, 0) AS fuel_revenue, COALESCE(fuel.liters, 0) AS liters, COALESCE(fuel.orders, 0) AS orders,
                COALESCE(fuel.aborted, 0) AS aborted, COALESCE(fuel.cashless, 0) AS cashless, COALESCE(fuel.discounts, 0) AS discounts,
+               COALESCE(fuel.cash, 0) AS cash, COALESCE(fuel.card, 0) AS card, COALESCE(fuel.contract, 0) AS contract, COALESCE(fuel.fuel_card, 0) AS fuel_card,
                COALESCE(shop.shop_revenue, 0) AS shop_revenue, COALESCE(shop.shop_receipts, 0) AS shop_receipts,
                COALESCE(fuel.fuel_revenue, 0) + COALESCE(shop.shop_revenue, 0) AS revenue,
                round(COALESCE(fuel.liters, 0) / @days, 2) AS liters_per_day,
@@ -198,13 +219,16 @@ public static class OverviewEndpoints
                round(fuel.fuel_revenue / NULLIF(fuel.orders, 0), 2) AS avg_fuel_check,
                round(shop.shop_revenue / NULLIF(shop.shop_receipts, 0), 2) AS avg_shop_check,
                round(fuel.cashless / NULLIF(fuel.fuel_revenue, 0), 4) AS cashless_share,
+               round(fuel.card / NULLIF(fuel.fuel_revenue, 0), 4) AS card_share,
+               round(fuel.contract / NULLIF(fuel.fuel_revenue, 0), 4) AS contract_share,
+               round(fuel.fuel_card / NULLIF(fuel.fuel_revenue, 0), 4) AS fuel_card_share,
                round(shop.shop_revenue / NULLIF(fuel.fuel_revenue, 0), 4) AS shop_to_fuel
         FROM v_station_names sn
         LEFT JOIN fuel ON fuel.station_id = sn.station_id
         LEFT JOIN shop ON shop.station_id = sn.station_id
         WHERE sn.station_id = ANY(@st)
         ORDER BY revenue DESC
-        """, new { st = f.Stations, from = f.From, to = f.To, utcFrom = f.UtcFrom, utcTo = f.UtcTo, fuel = f.Fuel, days = (decimal)f.Days });
+        """, new { st = f.Stations, from = f.From, to = f.To, utcFrom = f.UtcFrom, utcTo = f.UtcTo, fuel = f.Fuel, pay = f.Pay, days = (decimal)f.Days });
 
     internal static object Describe(UiFilter f) => new
     {
@@ -216,6 +240,7 @@ public static class OverviewEndpoints
         compare_from = f.ComparePeriod()?.From.ToString("yyyy-MM-dd"),
         compare_to = f.ComparePeriod()?.To.ToString("yyyy-MM-dd"),
         fuel = f.Fuel,
+        pay = f.Pay,
         days = f.Days,
     };
 }

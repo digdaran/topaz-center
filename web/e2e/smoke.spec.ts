@@ -188,3 +188,15 @@ test('an owner of another organization sees none of the stations; the superadmin
 
   expect((await page.request.post('/api/v1/ui/session/organization', { headers, data: { id: home.id } })).ok()).toBeTruthy();
 });
+
+test('payment filter and contract sales', async ({ page }, info) => {
+  await signIn(page);
+  await page.goto('/finance' + (period || '') + (period ? '&' : '?') + 'pay=card');
+  await expect(page.getByText('Банковская карта').first()).toBeVisible();
+  await page.getByRole('tab', { name: 'Продажи по договорам' }).click();
+  await expect(page.getByRole('link', { name: /Скачать CSV/ })).toBeVisible();
+  await page.goto('/settings/payment-modes');
+  await expect(page.getByRole('columnheader', { name: 'Способ оплаты' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Терминал Сбербанк' }).first()).toBeVisible({ timeout: 15_000 });
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_payment_modes.png`, fullPage: true });
+});

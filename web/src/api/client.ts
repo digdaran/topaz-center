@@ -40,7 +40,7 @@ export function useFilter(): [Filter, (patch: Partial<Filter>) => void] {
   const set = (patch: Partial<Filter>) => {
     const next = { ...filter, ...patch };
     const p = new URLSearchParams(filterQuery(next));
-    for (const [k, v] of params) if (!['stations', 'from', 'to', 'g', 'compare', 'fuel'].includes(k)) p.set(k, v);
+    for (const [k, v] of params) if (!['stations', 'from', 'to', 'g', 'compare', 'fuel', 'pay'].includes(k)) p.set(k, v);
     setParams(p, { replace: true });
   };
   return [filter, set];

@@ -8,6 +8,7 @@ import { dateTime, dec, duration, int, liters, money, pct } from '../lib/format'
 interface ShiftRow {
   station_id: string; station: string; session_id: number; session_num: number; user_name: string; started_at: string; ended_at: string | null;
   hours: number; fuel_volume: number | null; fuel_amount: number | null; fuel_cash: number | null; fuel_cashless: number | null;
+  pay_cash: number | null; pay_card: number | null; pay_contract: number | null; pay_fuel_card: number | null;
   shop_amount: number | null; hose_counters_delta: number | null; aborted: number; orders: number;
 }
 
@@ -44,8 +45,9 @@ function ShiftList() {
           { title: 'Оператор', dataIndex: 'user_name', key: 'user' },
           numCol<ShiftRow>('Литры', 'fuel_volume', liters),
           numCol<ShiftRow>('Топливо', 'fuel_amount', money),
-          numCol<ShiftRow>('Наличные', 'fuel_cash', money),
-          numCol<ShiftRow>('Безнал', 'fuel_cashless', money),
+          numCol<ShiftRow>('Наличные', 'pay_cash', money),
+          numCol<ShiftRow>('Карты', 'pay_card', money),
+          numCol<ShiftRow>('Договоры', 'pay_contract', money),
           numCol<ShiftRow>('Магазин', 'shop_amount', money),
           numCol<ShiftRow>('Заказы', 'orders', int),
           { ...numCol<ShiftRow>('Прерв.', 'aborted', int), render: (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : '0') },

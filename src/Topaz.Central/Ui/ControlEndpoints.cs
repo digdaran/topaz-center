@@ -47,6 +47,7 @@ public static class ControlEndpoints
             station_id = t.StationId, station = t.Station, tank_id = t.TankId, tank_num = t.TankNum, fuel_name = t.FuelName, book_volume = t.BookVolume,
             capacity = t.Capacity, fill_share = t.FillShare, dead_rest = t.DeadRest, min_liters = t.MinLiters, lead_time_days = t.LeadTimeDays, safety_days = t.SafetyDays,
             per_day = t.PerDay, days_to_min = t.DaysToMin, order_by = t.OrderBy?.ToString("yyyy-MM-dd"), recommended_order = t.RecommendedOrder, status = t.Status,
+            has_gauge = t.HasGauge, last_fact_volume = t.LastFactVolume, last_fact_at = t.LastFactAt, last_fact_session = t.LastFactSession, last_fact_diff = t.LastFactDiff,
         });
         // Book stock at the end of each shift in the period (start + receipts − dispensing).
         var history = await c.QueryAsync("""
@@ -71,7 +72,37 @@ public static class ControlEndpoints
             WHERE r.station_id = ANY(@st) AND r.received_at >= @utcFrom AND r.received_at < @utcTo
             ORDER BY r.received_at DESC
             """, f.Args);
-        return Results.Ok(new { tanks = rows, history, receipts });
+        // Book against measurement at each shift close of the period (tanks with a gauge, or measured by hand).
+        var measures = await c.QueryAsync("""
+            SELECT m.station_id, sn.station, m.tank_id, m.tank_num, m.fuel_name, m.session_id, m.session_num, m.ended_at,
+                   m.book_volume, m.fact_volume, m.diff, m.pump_volume, m.receipt_volume, m.density, m.temperature, m.height,
+                   round(100 * m.diff / NULLIF(m.pump_volume, 0), 2) AS diff_pct, m.diff > COALESCE(r.threshold, 200) AS big_surplus
+            FROM v_tank_measurements m JOIN v_station_names sn ON sn.station_id = m.station_id
+            LEFT JOIN v_station_rules r ON r.station_id = m.station_id AND r.code = 'tank_surplus'
+            WHERE m.station_id = ANY(@st) AND m.started_at >= @utcFrom AND m.started_at < @utcTo
+              AND (m.started_at AT TIME ZONE sn.time_zone)::date BETWEEN @from::date AND @to::date
+            ORDER BY m.ended_at
+            """, f.Args);
+        // Losses per tank over the period: shortages and surpluses at the shift closes, against what was dispensed.
+        // Surpluses above the tank_surplus threshold (usually a delivery not entered in Topaz) are shown apart and left out
+        // of the loss figures, so one unrecorded truck does not hide the everyday losses.
+        var losses = await c.QueryAsync("""
+            SELECT m.station_id, sn.station, m.tank_id, m.tank_num, max(m.fuel_name) AS fuel_name, count(*) AS measurements,
+                   sum(m.pump_volume) AS pumped,
+                   COALESCE(-sum(m.diff) FILTER (WHERE m.diff < 0), 0) AS shortage,
+                   COALESCE(sum(m.diff) FILTER (WHERE m.diff > 0 AND m.diff <= COALESCE(r.threshold, 200)), 0) AS surplus,
+                   COALESCE(sum(m.diff) FILTER (WHERE m.diff <= COALESCE(r.threshold, 200)), 0) AS net,
+                   round(100 * COALESCE(sum(m.diff) FILTER (WHERE m.diff <= COALESCE(r.threshold, 200)), 0) / NULLIF(sum(m.pump_volume), 0), 3) AS net_pct,
+                   count(*) FILTER (WHERE m.diff > COALESCE(r.threshold, 200)) AS big_surplus_count,
+                   COALESCE(sum(m.diff) FILTER (WHERE m.diff > COALESCE(r.threshold, 200)), 0) AS big_surplus
+            FROM v_tank_measurements m JOIN v_station_names sn ON sn.station_id = m.station_id
+            LEFT JOIN v_station_rules r ON r.station_id = m.station_id AND r.code = 'tank_surplus'
+            WHERE m.station_id = ANY(@st) AND m.started_at >= @utcFrom AND m.started_at < @utcTo
+              AND (m.started_at AT TIME ZONE sn.time_zone)::date BETWEEN @from::date AND @to::date
+            GROUP BY m.station_id, sn.station, m.tank_id, m.tank_num
+            ORDER BY sn.station, m.tank_num
+            """, f.Args);
+        return Results.Ok(new { tanks = rows, history, receipts, measures, losses });
     }
 
     private static async Task<IResult> SetTank(Guid station, long tank, TankSettingsBody body, ClaimsPrincipal user, StationScope scope, UiDb db)

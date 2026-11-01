@@ -51,7 +51,7 @@ public static class SalesAnalyticsEndpoints
             SELECT ft.code AS fuel_type, ft.name AS fuel_name, sum(a.liters) AS liters, sum(a.revenue) AS revenue, sum(a.orders) AS orders,
                    round(sum(a.revenue) / NULLIF(sum(a.liters), 0), 2) AS avg_price,
                    round(sum(a.liters) / NULLIF(sum(a.orders), 0), 2) AS avg_fill,
-                   round(sum(a.revenue) FILTER (WHERE a.payment_kind = 'cashless') / NULLIF(sum(a.revenue), 0), 4) AS cashless_share
+                   round(sum(a.revenue) FILTER (WHERE a.pay_category IN ('card', 'contract', 'fuel_card')) / NULLIF(sum(a.revenue), 0), 4) AS cashless_share
             FROM v_agg_fuel a JOIN fuel_types ft ON ft.code = a.fuel_type
             WHERE {AnalyticsSql.AggFuelWhere} GROUP BY ft.code, ft.name, ft.sort ORDER BY ft.sort
             """, f.Args);
@@ -66,7 +66,7 @@ public static class SalesAnalyticsEndpoints
             """, f.Args);
 
         var paymentsT = par.Q($"""
-            SELECT payment_kind, COALESCE(payment_mode, '?') AS payment_mode, sum(orders) AS orders,
+            SELECT pay_category, COALESCE(payment_mode, '?') AS payment_mode, sum(orders) AS orders,
                    sum(liters + service_liters) AS liters, sum(revenue) AS revenue, sum(discounts) AS discounts
             FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1, 2
             HAVING sum(liters + service_liters) > 0 OR sum(revenue) <> 0
@@ -250,19 +250,19 @@ public static class SalesAnalyticsEndpoints
         var groupsT = par.Q($"""
             SELECT COALESCE(group_name, 'Без группы') AS group_name, sum(amount) AS revenue, sum(quantity) AS quantity, sum(lines) AS lines,
                    count(DISTINCT item_key) AS items
-            FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1 ORDER BY 2 DESC
+            FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1 ORDER BY 2 DESC
             """, f.Args);
 
         var itemsT = (par.Q<ItemRow>($"""
             SELECT COALESCE(item_key, 'id:' || item_id) AS ItemKey, max(item_name) AS Name, max(group_name) AS GroupName,
                    sum(quantity) AS Quantity, sum(amount) AS Revenue, sum(receipts)::bigint AS Receipts, max(local_date)::timestamp AS LastSale
-            FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1
+            FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1
             """, f.Args));
 
         // XYZ on weekly quantities over the period (needs at least 4 weeks).
         var weeklyT = (par.Q<(string ItemKey, DateTime Week, decimal Qty)>($"""
             SELECT COALESCE(item_key, 'id:' || item_id), date_trunc('week', local_date::timestamp), sum(quantity)
-            FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1, 2
+            FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1, 2
             """, f.Args));
         var stockT = (par.Q<StockRow>("""
             WITH moves AS (

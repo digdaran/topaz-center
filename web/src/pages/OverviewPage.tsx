@@ -15,12 +15,16 @@ export interface Kpi {
   discounts: number; shop_revenue: number; shop_receipts: number; shop_items: number; revenue: number; avg_fill: number | null;
   avg_fuel_check: number | null; avg_shop_check: number | null; cashless_share: number | null; aborted_share: number | null;
   margin: number | null; fuel_coverage: number | null;
+  cash: number; card: number; contract: number; fuel_card: number;
+  card_share: number | null; contract_share: number | null; fuel_card_share: number | null;
 }
 
 export interface StationRow {
   station_id: string; station: string; region: string | null; fuel_revenue: number; liters: number; orders: number; aborted: number;
   cashless: number; discounts: number; shop_revenue: number; shop_receipts: number; revenue: number; liters_per_day: number;
   avg_fill: number | null; avg_fuel_check: number | null; avg_shop_check: number | null; cashless_share: number | null; shop_to_fuel: number | null;
+  cash: number; card: number; contract: number; fuel_card: number;
+  card_share: number | null; contract_share: number | null; fuel_card_share: number | null;
 }
 
 interface Overview {
@@ -50,7 +54,11 @@ export default function OverviewPage() {
     { title: 'Средний налив', value: c.avg_fill, previous: p?.avg_fill, format: liters },
     { title: 'Средний чек топливо', value: c.avg_fuel_check, previous: p?.avg_fuel_check, format: money },
     { title: 'Средний чек магазин', value: c.avg_shop_check, previous: p?.avg_shop_check, format: money },
-    { title: 'Доля безнала', value: c.cashless_share, previous: p?.cashless_share, format: pct, hint: 'Доля выручки топлива, оплаченной безналом (пометка «Б»)' },
+    { title: 'Доля безнала', value: c.cashless_share, previous: p?.cashless_share, format: pct,
+      hint: `Карты ${pct(c.card_share)}, по договорам ${pct(c.contract_share)}, топливные карты ${pct(c.fuel_card_share)}. Способ оплаты определяется по виду оплаты (Настройки → Виды оплаты)` },
+    ...(Number(c.contract) > 0 || Number(p?.contract ?? 0) > 0
+      ? [{ title: 'Продажи по договорам', value: c.contract, previous: p?.contract, format: money, hint: `${pct(c.contract_share)} выручки топлива — ведомости, оплата на счёт` }]
+      : []),
     { title: 'Скидки', value: c.discounts, previous: p?.discounts, format: money, inverse: true },
     { title: 'Прерванные наливы', value: c.aborted, previous: p?.aborted, format: int, inverse: true, hint: 'Заказы с нулевым объёмом' },
     { title: 'Тех. прокачки', value: c.service_liters, previous: p?.service_liters, format: liters, inverse: true, hint: 'Отпуск без оплаты: тех. прокачки, переливы' },
@@ -60,7 +68,7 @@ export default function OverviewPage() {
   return (
     <>
       <PageTitle title="Обзор" />
-      <FilterBar fuel />
+      <FilterBar fuel pay />
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
@@ -156,6 +164,7 @@ export default function OverviewPage() {
                   numCol<StationRow>('Ср. чек топливо', 'avg_fuel_check', money),
                   numCol<StationRow>('Ср. чек магазин', 'avg_shop_check', money),
                   numCol<StationRow>('Безнал', 'cashless_share', pct),
+                  numCol<StationRow>('Договоры', 'contract_share', pct),
                   { ...numCol<StationRow>('Прерв. наливы', 'aborted', int), render: (v: number) => (v > 0 ? <Tag color="orange">{int(v)}</Tag> : '0') },
                 ]}
               />

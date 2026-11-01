@@ -2,7 +2,8 @@ import { Card, Col, Row, Table, Tag, Tooltip, Typography } from 'antd';
 import { useFiltered, useFuelTypeName } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
-import { bucketLabel, compact, dec, int, liters, money, PAYMENT_KIND, pct } from '../lib/format';
+import { bucketLabel, compact, dec, int, liters, money, pct } from '../lib/format';
+import { PAY, PayCategory } from '../lib/payments';
 
 type R = Record<string, any>;
 interface Fuel {
@@ -24,7 +25,7 @@ export default function FuelPage() {
   return (
     <>
       <PageTitle title="Топливо" />
-      <FilterBar compare={false} />
+      <FilterBar compare={false} pay />
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
@@ -79,10 +80,10 @@ export default function FuelPage() {
               </Col>
               <Col xs={24} lg={12}>
                 <Card size="small" title="Оплата" style={{ height: '100%' }}>
-                  <Table size="small" rowKey={(r) => `${r.payment_kind}/${r.payment_mode}`} pagination={false} dataSource={data.payments} scroll={{ x: 500 }}
+                  <Table size="small" rowKey={(r) => `${r.pay_category}/${r.payment_mode}`} pagination={false} dataSource={data.payments} scroll={{ x: 500 }}
                     columns={[
                       { title: 'Вид оплаты', dataIndex: 'payment_mode' },
-                      { title: 'Способ', dataIndex: 'payment_kind', render: (v: string) => <Tag color={v === 'cashless' ? 'blue' : v === 'cash' ? 'green' : 'default'}>{PAYMENT_KIND[v] ?? v}</Tag> },
+                      { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
                       numCol<R>('Литры', 'liters', liters),
                       numCol<R>('Выручка', 'revenue', money),
                       numCol<R>('Заказы', 'orders', int),

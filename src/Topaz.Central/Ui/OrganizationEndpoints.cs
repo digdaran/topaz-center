@@ -7,7 +7,6 @@ namespace Topaz.Central.Ui;
 public sealed record OrganizationBody(string? Name, bool? IsActive);
 public sealed record MoveStationBody(Guid OrganizationId);
 public sealed record OrganizationSettingsBody(string? MarginVat, decimal? VatRate);
-public sealed record PaymentModeBody(bool? IsDiscount);
 
 /// <summary>Organizations (station owners sharing the server), superadmin only.</summary>
 public static class OrganizationEndpoints
@@ -57,29 +56,63 @@ public static class OrganizationEndpoints
     {
         var st = await scope.AllowedAsync(user);
         await using var c = await db.OpenConnectionAsync();
+        // Hint for the owner: paid sales of the last 90 days and how many of them Topaz booked into the cash drawer
+        // (rgCashes, fuel dispensing): cash goes there, cards and contracts never do.
         return Results.Ok(await c.QueryAsync("""
-            SELECT m.station_id, sn.station, m.payment_mode_id, m.name, m.is_discount, m.manual,
+            WITH s AS (SELECT f.station_id, f.payment_mode_id, f.order_id FROM fuel_sales f
+                       WHERE f.station_id = ANY(@st) AND f.sold_at > now() - interval '90 days' AND f.volume > 0 AND f.payment_kind <> 'none'),
+                 reg AS (SELECT DISTINCT r.station_id, r.data->>'DocID' AS doc FROM records r
+                         WHERE r.station_id = ANY(@st) AND r.dataset = 'rgCashes' AND r.data->>'DocTypeID' = '6' AND NOT r.deleted
+                           AND r.updated_at > now() - interval '92 days' -- written at or after the sale: uses the (dataset, updated_at) index
+                           AND r.data->>'Date' >= to_char(now() - interval '92 days', 'YYYY-MM-DD')),
+                 k AS (SELECT s.station_id, s.payment_mode_id, count(*) AS paid_90d, count(reg.doc) AS in_cash_register
+                       FROM s LEFT JOIN reg ON reg.station_id = s.station_id AND reg.doc = s.order_id::text GROUP BY 1, 2)
+            SELECT m.station_id, sn.station, m.payment_mode_id, m.name, m.is_discount, m.manual, m.category, m.category_manual,
+                   payment_category_guess(m.name) AS category_guess,
                    (SELECT count(*) FROM fuel_sales f WHERE f.station_id = m.station_id AND f.payment_mode_id = m.payment_mode_id
-                      AND f.sold_at > now() - interval '30 days' AND f.volume > 0) AS sales_30d
+                      AND f.sold_at > now() - interval '30 days' AND f.volume > 0) AS sales_30d,
+                   COALESCE(k.paid_90d, 0) AS paid_90d, COALESCE(k.in_cash_register, 0) AS in_cash_register
             FROM v_payment_mode_flags m JOIN v_station_names sn ON sn.station_id = m.station_id
+            LEFT JOIN k ON k.station_id = m.station_id AND k.payment_mode_id = m.payment_mode_id
             WHERE m.station_id = ANY(@st) AND m.payment_mode_id > 0
             ORDER BY sn.station, m.name
             """, new { st }));
     }
 
-    /// <summary>is_discount true/false marks the mode; null returns it to the guess by name.</summary>
-    private static async Task<IResult> SetPaymentMode(Guid station, long mode, PaymentModeBody body, ClaimsPrincipal user, StationScope scope, UiDb db)
+    private static readonly string[] Categories = ["cash", "card", "contract", "fuel_card", "none"];
+
+    /// <summary>
+    /// Owner's marks of a payment mode. Body fields are optional: "is_discount" true/false/null and
+    /// "category" cash|card|contract|fuel_card|none|null — null returns the field to the guess by name.
+    /// </summary>
+    private static async Task<IResult> SetPaymentMode(Guid station, long mode, System.Text.Json.Nodes.JsonObject body, ClaimsPrincipal user,
+                                                      StationScope scope, UiDb db, Processing.RollupRefresher rollups)
     {
         if (!await scope.CanSeeAsync(user, station)) return Results.NotFound();
+        var setDiscount = body.TryGetPropertyValue("is_discount", out var d);
+        var setCategory = body.TryGetPropertyValue("category", out var cat);
+        bool? discount = d?.GetValue<bool>();
+        var category = cat?.GetValue<string>();
+        if (category is not null && !Categories.Contains(category)) return Results.Problem(statusCode: 400, title: "category: cash | card | contract | fuel_card | none");
+        if (!setDiscount && !setCategory) return Results.Problem(statusCode: 400, title: "is_discount или category");
+
         await using var c = await db.OpenConnectionAsync();
-        if (body.IsDiscount is { } flag)
-            await c.ExecuteAsync("""
-                INSERT INTO payment_mode_settings (station_id, payment_mode_id, is_discount, updated_by) VALUES (@station, @mode, @flag, @by)
-                ON CONFLICT (station_id, payment_mode_id) DO UPDATE SET is_discount = EXCLUDED.is_discount, updated_by = EXCLUDED.updated_by, updated_at = now()
-                """, new { station, mode, flag, by = user.Identity?.Name });
-        else
-            await c.ExecuteAsync("DELETE FROM payment_mode_settings WHERE station_id = @station AND payment_mode_id = @mode", new { station, mode });
-        await Audit.WriteAsync(db, user, "payment_mode_updated", $"station:{station}/payment_mode:{mode}", body);
+        await using var tx = await c.BeginTransactionAsync();
+        await c.ExecuteAsync("""
+            INSERT INTO payment_mode_settings (station_id, payment_mode_id, is_discount, category, updated_by)
+            VALUES (@station, @mode, @discount, @category, @by)
+            ON CONFLICT (station_id, payment_mode_id) DO UPDATE SET
+                is_discount = CASE WHEN @setDiscount THEN EXCLUDED.is_discount ELSE payment_mode_settings.is_discount END,
+                category = CASE WHEN @setCategory THEN EXCLUDED.category ELSE payment_mode_settings.category END,
+                updated_by = EXCLUDED.updated_by, updated_at = now()
+            """, new { station, mode, discount, category, setDiscount, setCategory, by = user.Identity?.Name }, tx);
+        await c.ExecuteAsync("DELETE FROM payment_mode_settings WHERE station_id = @station AND payment_mode_id = @mode AND is_discount IS NULL AND category IS NULL",
+            new { station, mode }, tx);
+        // The category decides which sales lose VAT in 'net' organizations: recompute that station's margins.
+        if (setCategory) await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) VALUES (@station, 'all')", new { station }, tx);
+        await tx.CommitAsync();
+        if (setCategory) rollups.Notify();
+        await Audit.WriteAsync(db, user, "payment_mode_updated", $"station:{station}/payment_mode:{mode}", new { is_discount = discount, category, setDiscount, setCategory });
         return Results.NoContent();
     }
 

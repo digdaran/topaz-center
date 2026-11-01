@@ -4,7 +4,8 @@ import { Button, Card, Col, Descriptions, Row, Table, Tabs, Tag, Typography } fr
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { KpiCard, numCol, QueryState } from '../components/ui';
-import { dateTime, dec, duration, int, liters, money, PAYMENT_KIND } from '../lib/format';
+import { dateTime, dec, duration, int, liters, money } from '../lib/format';
+import { PAY, PayCategory } from '../lib/payments';
 
 type Row = Record<string, any>;
 
@@ -41,8 +42,10 @@ export default function ShiftCardPage() {
             {[
               { title: 'Отпущено топлива', value: h.fuel_volume, format: liters },
               { title: 'Выручка топливо', value: h.fuel_amount, format: money },
-              { title: 'Наличные', value: h.fuel_cash, format: money },
-              { title: 'Безнал', value: h.fuel_cashless, format: money },
+              { title: 'Наличные', value: h.pay_cash, format: money },
+              { title: 'Банковские карты', value: h.pay_card, format: money },
+              ...(Number(h.pay_contract ?? 0) > 0 ? [{ title: 'По договорам', value: h.pay_contract, format: money }] : []),
+              ...(Number(h.pay_fuel_card ?? 0) > 0 ? [{ title: 'Топливные карты', value: h.pay_fuel_card, format: money }] : []),
               { title: 'Магазин', value: h.shop_amount, format: money },
               { title: 'Счётчики ТРК', value: h.hose_counters_delta, format: liters },
             ].map((k) => <Col key={k.title} xs={12} md={8} xl={4}><KpiCard {...k} /></Col>)}
@@ -83,7 +86,7 @@ export default function ShiftCardPage() {
                     { title: 'Топливо', dataIndex: 'fuel_name' },
                     { title: 'Рукав', dataIndex: 'hose_num' },
                     { title: 'Оплата', dataIndex: 'payment_mode', render: (v: string, r) => <>{v} {r.remark && <Tag>{r.remark}</Tag>}</> },
-                    { title: 'Способ', dataIndex: 'payment_kind', render: (v: string) => <Tag color={v === 'cashless' ? 'blue' : v === 'none' ? 'default' : 'green'}>{PAYMENT_KIND[v] ?? v}</Tag> },
+                    { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
                     numCol<Row>('Литры', 'volume', liters),
                     numCol<Row>('Заказано, л', 'volume_ordered', liters),
                     numCol<Row>('Цена', 'price', (v) => money(v, true)),

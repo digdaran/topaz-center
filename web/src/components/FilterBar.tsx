@@ -2,6 +2,7 @@ import { DatePicker, Flex, Segmented, Select } from 'antd';
 import dayjs from 'dayjs';
 import { useFilter, useMeta } from '../api/client';
 import { Compare, Granularity, presets } from '../lib/filter';
+import { PAY, PAY_FILTER } from '../lib/payments';
 
 const { RangePicker } = DatePicker;
 
@@ -9,10 +10,12 @@ interface Props {
   granularity?: boolean;
   compare?: boolean;
   fuel?: boolean;
+  /** the payment category filter (pages whose figures can be split by it) */
+  pay?: boolean;
 }
 
 /** Stations, period, granularity, comparison and fuel — the common filter of analytics pages. */
-export function FilterBar({ granularity = true, compare = true, fuel = false }: Props) {
+export function FilterBar({ granularity = true, compare = true, fuel = false, pay = false }: Props) {
   const [filter, setFilter] = useFilter();
   const meta = useMeta();
   const stations = meta.data?.stations ?? [];
@@ -74,6 +77,16 @@ export function FilterBar({ granularity = true, compare = true, fuel = false }: 
           value={filter.fuel}
           onChange={(v) => setFilter({ fuel: v })}
           options={fuelTypes.map((t) => ({ value: t.code, label: t.name }))}
+        />
+      )}
+      {pay && (
+        <Select
+          allowClear
+          placeholder="Все способы оплаты"
+          style={{ width: 210 }}
+          value={filter.pay}
+          onChange={(v) => setFilter({ pay: v })}
+          options={PAY_FILTER.map((k) => ({ value: k, label: PAY[k].label }))}
         />
       )}
     </Flex>

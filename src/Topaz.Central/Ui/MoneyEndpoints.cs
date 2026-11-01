@@ -22,6 +22,7 @@ public static partial class MoneyEndpoints
         money.MapGet("/costs/fuel", FuelCosts);
         money.MapPost("/costs/fuel", AddFuelCost);
         money.MapDelete("/costs/fuel/{id:long}", DeleteFuelCost);
+        money.MapGet("/analytics/contracts", ContractSales);
         money.MapGet("/costs/items", ItemCosts);
         money.MapPost("/costs/items", AddItemCost);
         money.MapPost("/costs/items/import", ImportItemCosts);
@@ -57,10 +58,10 @@ public static partial class MoneyEndpoints
             COALESCE(sum(fiscal_amount), 0) AS fiscal_revenue, COALESCE(sum(costed_vat), 0) AS vat
             """;
         var fuelTotalT = par.Q($"SELECT {fuelMoney} FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere}", f.Args);
-        var shopTotalT = par.Q($"SELECT {shopMoney} FROM v_agg_shop WHERE {AnalyticsSql.AggWhere}", f.Args);
+        var shopTotalT = par.Q($"SELECT {shopMoney} FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere}", f.Args);
         var byStationT = par.Q($"""
             WITH fu AS (SELECT station_id, {fuelMoney} FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1),
-                 sh AS (SELECT station_id, {shopMoney} FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1)
+                 sh AS (SELECT station_id, {shopMoney} FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1)
             SELECT sn.station_id, sn.station, fu.revenue AS fuel_revenue, fu.cost AS fuel_cost, fu.margin AS fuel_margin, fu.coverage AS fuel_coverage,
                    fu.margin_per_liter, fu.liters, sh.revenue AS shop_revenue, sh.cost AS shop_cost, sh.margin AS shop_margin, sh.coverage AS shop_coverage,
                    COALESCE(fu.margin, 0) + COALESCE(sh.margin, 0) AS margin, COALESCE(fu.revenue, 0) + COALESCE(sh.revenue, 0) AS revenue
@@ -73,7 +74,7 @@ public static partial class MoneyEndpoints
             """, f.Args);
         var byGroupT = par.Q($"""
             SELECT COALESCE(group_name, 'Без группы') AS group_name, {shopMoney} FROM v_agg_shop
-            WHERE {AnalyticsSql.AggWhere} GROUP BY 1 ORDER BY 2 DESC
+            WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1 ORDER BY 2 DESC
             """, f.Args);
         var seriesT = par.Q($"""
             WITH fu AS (SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(revenue) AS fuel_revenue,
@@ -81,27 +82,30 @@ public static partial class MoneyEndpoints
                         FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1),
                  sh AS (SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(amount) AS shop_revenue,
                                COALESCE(sum(costed_amount - costed_vat), 0) - COALESCE(sum(cost_amount), 0) AS shop_margin
-                        FROM agg_shop_daily WHERE {AnalyticsSql.AggWhere} GROUP BY 1)
+                        FROM v_agg_shop WHERE {AnalyticsSql.AggShopWhere} GROUP BY 1)
             SELECT to_char(COALESCE(fu.bucket, sh.bucket), 'YYYY-MM-DD"T"HH24:MI') AS bucket, COALESCE(fuel_revenue, 0) AS fuel_revenue,
                    COALESCE(fuel_margin, 0) AS fuel_margin, COALESCE(shop_revenue, 0) AS shop_revenue, COALESCE(shop_margin, 0) AS shop_margin
             FROM fu FULL JOIN sh ON sh.bucket = fu.bucket ORDER BY 1
-            """, new { st = f.Stations, from = f.From, to = f.To, fuel = f.Fuel, utcFrom = f.UtcFrom, utcTo = f.UtcTo });
-        // Money flow by day: fuel and shop by payment kind, cash in/out from the money register.
+            """, new { st = f.Stations, from = f.From, to = f.To, fuel = f.Fuel, pay = f.Pay, utcFrom = f.UtcFrom, utcTo = f.UtcTo });
+        // Money flow by day: fuel and shop by payment category (v_payment_mode_flags), cash in/out from the money register.
         var cashT = par.Q($"""
-            WITH fu AS (SELECT local_date, sum(revenue) FILTER (WHERE payment_kind = 'cash') AS fuel_cash,
-                               sum(revenue) FILTER (WHERE payment_kind IN ('cashless', 'mixed')) AS fuel_cashless
+            WITH fu AS (SELECT local_date, sum(revenue) FILTER (WHERE pay_category = 'cash') AS fuel_cash,
+                               sum(revenue) FILTER (WHERE pay_category = 'card') AS fuel_card,
+                               sum(revenue) FILTER (WHERE pay_category = 'contract') AS fuel_contract,
+                               sum(revenue) FILTER (WHERE pay_category = 'fuel_card') AS fuel_fuel_card
                         FROM v_agg_fuel WHERE {AnalyticsSql.AggWhere} GROUP BY 1),
-                 sh AS (SELECT (r.doc_at AT TIME ZONE sn.time_zone)::date AS local_date,
-                               sum(CASE WHEN r.is_return THEN -r.amount_cash ELSE r.amount_cash END) AS shop_cash,
-                               sum(CASE WHEN r.is_return THEN -r.amount_cashless ELSE r.amount_cashless END) AS shop_cashless
-                        FROM shop_receipts r JOIN v_station_names sn ON sn.station_id = r.station_id
-                        WHERE r.station_id = ANY(@st) AND r.doc_at >= @utcFrom AND r.doc_at < @utcTo GROUP BY 1),
+                 sh AS (SELECT local_date, sum(amount) FILTER (WHERE pay_category = 'cash') AS shop_cash,
+                               sum(amount) FILTER (WHERE pay_category = 'card') AS shop_card,
+                               sum(amount) FILTER (WHERE pay_category IN ('contract', 'fuel_card')) AS shop_contract
+                        FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1),
                  rg AS (SELECT (m.moved_at AT TIME ZONE sn.time_zone)::date AS local_date,
                                sum(m.amount) FILTER (WHERE m.doc_type_id = 14) AS cash_in, -sum(m.amount) FILTER (WHERE m.doc_type_id = 15) AS cash_out
                         FROM cash_moves m JOIN v_station_names sn ON sn.station_id = m.station_id
                         WHERE m.station_id = ANY(@st) AND m.moved_at >= @utcFrom AND m.moved_at < @utcTo AND m.doc_type_id IN (14, 15) GROUP BY 1)
-            SELECT d::date::text AS day, COALESCE(fu.fuel_cash, 0) AS fuel_cash, COALESCE(fu.fuel_cashless, 0) AS fuel_cashless,
-                   COALESCE(sh.shop_cash, 0) AS shop_cash, COALESCE(sh.shop_cashless, 0) AS shop_cashless,
+            SELECT d::date::text AS day,
+                   COALESCE(fu.fuel_cash, 0) AS fuel_cash, COALESCE(fu.fuel_card, 0) AS fuel_card,
+                   COALESCE(fu.fuel_contract, 0) AS fuel_contract, COALESCE(fu.fuel_fuel_card, 0) AS fuel_fuel_card,
+                   COALESCE(sh.shop_cash, 0) AS shop_cash, COALESCE(sh.shop_card, 0) AS shop_card, COALESCE(sh.shop_contract, 0) AS shop_contract,
                    COALESCE(rg.cash_in, 0) AS cash_in, COALESCE(rg.cash_out, 0) AS cash_out
             FROM generate_series(@from::date, @to::date, interval '1 day') d
             LEFT JOIN fu ON fu.local_date = d::date LEFT JOIN sh ON sh.local_date = d::date LEFT JOIN rg ON rg.local_date = d::date
@@ -117,6 +121,49 @@ public static partial class MoneyEndpoints
             by_station = await byStationT, by_fuel = await byFuelT, by_group = await byGroupT, series = await seriesT, cash = await cashT,
         });
     }
+
+    // ---------------------------------------------------------------- contract sales
+
+    /// <summary>
+    /// Fuel sold on contract (ведомости) and by fuel cards: station × month × fuel type × Topaz payment mode —
+    /// what the clients and card issuers owe for the period. CSV with ?format=csv.
+    /// </summary>
+    private static async Task<IResult> ContractSales(HttpContext ctx, StationScope scope, UiDb db)
+    {
+        var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
+        if (error is not null) return error;
+        var f = fp!;
+        await using var c = await db.OpenConnectionAsync();
+        var rows = (await c.QueryAsync<ContractRow>("""
+            SELECT a.station, to_char(date_trunc('month', a.local_date), 'YYYY-MM') AS month,
+                   CASE a.pay_category WHEN 'contract' THEN 'По договору' ELSE 'Топливные карты' END AS category,
+                   COALESCE(a.payment_mode, a.payment_mode_id::text) AS payment_mode, COALESCE(ft.name, 'Прочее') AS fuel,
+                   sum(a.liters) AS liters, sum(a.revenue) AS amount, sum(a.orders)::bigint AS orders
+            FROM v_agg_fuel a LEFT JOIN fuel_types ft ON ft.code = a.fuel_type
+            WHERE a.station_id = ANY(@st) AND a.local_date BETWEEN @from::date AND @to::date
+              AND (@fuel::text IS NULL OR a.fuel_type = @fuel) AND a.pay_category IN ('contract', 'fuel_card')
+              AND (@pay::text IS NULL OR a.pay_category = @pay)
+            GROUP BY 1, 2, 3, 4, 5, ft.sort
+            ORDER BY 1, 2, 3, 4, ft.sort
+            """, f.Args)).ToList();
+        if (ctx.Request.Query["format"] == "csv")
+        {
+            var sb = new System.Text.StringBuilder("АЗС;Месяц;Способ оплаты;Вид оплаты в Топазе;Топливо;Литры;Сумма;Отпусков\r\n");
+            static string Q(string v) => "\"" + v.Replace("\"", "\"\"") + "\"";
+            foreach (var r in rows)
+                sb.Append(string.Join(';', Q(r.Station), r.Month, Q(r.Category), Q(r.PaymentMode), Q(r.Fuel),
+                    r.Liters.ToString("0.##", CultureInfo.GetCultureInfo("ru-RU")), r.Amount.ToString("0.00", CultureInfo.GetCultureInfo("ru-RU")), r.Orders)).Append("\r\n");
+            var bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+            return Results.File(bytes, "text/csv; charset=utf-8", $"prodazhi-po-dogovoram-{f.From:yyyy-MM-dd}-{f.To:yyyy-MM-dd}.csv");
+        }
+        return Results.Ok(new
+        {
+            filter = OverviewEndpoints.Describe(f), rows,
+            totals = rows.GroupBy(r => r.Category).Select(g => new { category = g.Key, liters = g.Sum(r => r.Liters), amount = g.Sum(r => r.Amount), orders = g.Sum(r => r.Orders) }),
+        });
+    }
+
+    private sealed record ContractRow(string Station, string Month, string Category, string PaymentMode, string Fuel, decimal Liters, decimal Amount, long Orders);
 
     // ---------------------------------------------------------------- fuel costs
 

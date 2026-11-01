@@ -231,6 +231,30 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
           AND (f.doc_volume < 0 OR (f.doc_volume > 0 AND 100 * (f.doc_volume - COALESCE(f.measured_volume, f.doc_volume + f.discrepancy)) / f.doc_volume > r.threshold))
         ON CONFLICT DO NOTHING
         """,
+        // Measured stock (level gauge, or entered by hand) at a shift close below the book by more than the threshold.
+        Insert + $"""
+        SELECT m.station_id, 'tank_shortage', m.tank_id || '/' || m.session_id, r.severity,
+               'Недостача по замеру: резервуар ' || COALESCE(m.tank_num::text, m.tank_id::text) || ', ' || fmt_num(-m.diff) || ' л',
+               format('Смена №%s, %s: по учёту Топаза %s л, по замеру %s л; отпущено за смену %s л.',
+                      m.session_num, COALESCE(m.fuel_name, 'топливо'), fmt_num(m.book_volume), fmt_num(m.fact_volume), fmt_num(m.pump_volume)),
+               round(-m.diff, 2), m.session_id, m.ended_at
+        FROM v_tank_measurements m
+        {string.Format(Rule, "tank_shortage", "m")}
+        WHERE -m.diff > r.threshold AND m.started_at > now() - interval '30 days'
+        ON CONFLICT DO NOTHING
+        """,
+        // Measured stock above the book by more than the threshold: usually a delivery not entered in Topaz as a receipt.
+        Insert + $"""
+        SELECT m.station_id, 'tank_surplus', m.tank_id || '/' || m.session_id, r.severity,
+               'Излишек по замеру: резервуар ' || COALESCE(m.tank_num::text, m.tank_id::text) || ', ' || fmt_num(m.diff) || ' л',
+               format('Смена №%s, %s: по учёту Топаза %s л, по замеру %s л. Проверьте, оформлен ли в Топазе слив.',
+                      m.session_num, COALESCE(m.fuel_name, 'топливо'), fmt_num(m.book_volume), fmt_num(m.fact_volume)),
+               round(m.diff, 2), m.session_id, m.ended_at
+        FROM v_tank_measurements m
+        {string.Format(Rule, "tank_surplus", "m")}
+        WHERE m.diff > r.threshold AND m.started_at > now() - interval '30 days'
+        ON CONFLICT DO NOTHING
+        """,
         // A shift still open after the threshold (hours).
         Insert + """
         SELECT s.station_id, 'shift_too_long', s.session_id::text, r.severity,

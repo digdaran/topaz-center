@@ -17,11 +17,13 @@ public static class DataEndpoints
     {
         ["fuel-sales"] = new("""
             SELECT station_id, sold_at AS utc_ts, local_date, station, to_char(local_ts, 'YYYY-MM-DD HH24:MI:SS') AS local_time, session_id,
-                   order_num, fuel_name, tank_num, hose_num, payment_mode, remark, payment_kind, volume, price, amount,
+                   order_num, fuel_name, tank_num, hose_num, payment_mode,
+                   CASE pay_category WHEN 'cash' THEN 'Наличные' WHEN 'card' THEN 'Банковская карта' WHEN 'contract' THEN 'По договору'
+                        WHEN 'fuel_card' THEN 'Топливная карта' ELSE 'Без оплаты' END AS pay_category, remark, payment_kind, volume, price, amount,
                    amount_cash, amount_cashless, amount_discount, card_code
             FROM v_fuel_sales_local
             """,
-            ["station", "local_time", "session_id", "order_num", "fuel_name", "tank_num", "hose_num", "payment_mode", "remark", "payment_kind",
+            ["station", "local_time", "session_id", "order_num", "fuel_name", "tank_num", "hose_num", "payment_mode", "pay_category", "remark", "payment_kind",
              "volume", "price", "amount", "amount_cash", "amount_cashless", "amount_discount", "card_code"],
             "local_time", ["fuel_name", "payment_mode", "card_code"]),
 

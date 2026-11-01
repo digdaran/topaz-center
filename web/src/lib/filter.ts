@@ -10,6 +10,8 @@ export interface Filter {
   g?: Granularity;
   compare: Compare;
   fuel?: string;
+  /** payment category: cash | card | contract | fuel_card */
+  pay?: string;
 }
 
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -39,6 +41,7 @@ export function parseFilter(params: URLSearchParams, now = new Date()): Filter {
     g: g && GRANULARITIES.includes(g) ? g : undefined,
     compare: compare === 'yoy' || compare === 'none' ? compare : 'prev',
     fuel: params.get('fuel') || undefined,
+    pay: ['cash', 'card', 'contract', 'fuel_card'].includes(params.get('pay') ?? '') ? params.get('pay')! : undefined,
   };
   if (f.to < f.from) [f.from, f.to] = [f.to, f.from];
   return f;
@@ -53,6 +56,7 @@ export function filterQuery(f: Filter, extra: Record<string, string | number | u
   if (f.g) p.set('g', f.g);
   if (f.compare !== 'prev') p.set('compare', f.compare);
   if (f.fuel) p.set('fuel', f.fuel);
+  if (f.pay) p.set('pay', f.pay);
   for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== '') p.set(k, String(v));
   return p.toString();
 }

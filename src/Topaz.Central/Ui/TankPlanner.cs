@@ -25,6 +25,12 @@ public static class TankPlanner
         public decimal SafetyDays { get; set; }
         public decimal Out28 { get; set; }
         public string TimeZone { get; set; } = "Europe/Moscow";
+        /// <summary>An electronic level gauge is linked to the tank in Topaz (else: a virtual tank, book stock only).</summary>
+        public bool HasGauge { get; set; }
+        public decimal? LastFactVolume { get; set; }
+        public DateTime? LastFactAt { get; set; }
+        public int? LastFactSession { get; set; }
+        public decimal? LastFactDiff { get; set; }
 
         public decimal PerDay => Math.Round(Out28 / 28m, 1);
         public decimal Threshold => Math.Max(MinLiters, DeadRest);
@@ -57,12 +63,16 @@ public static class TankPlanner
                b.session_id AS SessionId, b.book_volume AS BookVolume,
                NULLIF((rt.data->>'MaxVolume')::numeric, 0) AS Capacity, COALESCE((rt.data->>'DeadRestLiter')::numeric, 0) AS DeadRest,
                COALESCE(ts.min_liters, 0) AS MinLiters, COALESCE(ts.lead_time_days, 2) AS LeadTimeDays, COALESCE(ts.safety_days, 1) AS SafetyDays,
-               COALESCE(u.out28, 0) AS Out28
+               COALESCE(u.out28, 0) AS Out28, COALESCE(g.has_gauge, false) AS HasGauge,
+               m.fact_volume AS LastFactVolume, m.ended_at AS LastFactAt, m.session_num AS LastFactSession, m.diff AS LastFactDiff
         FROM v_tank_book_stock b
         JOIN v_station_names sn ON sn.station_id = b.station_id
         LEFT JOIN records rt ON rt.station_id = b.station_id AND rt.dataset = 'dcTanks' AND rt.key = b.tank_id::text
         LEFT JOIN tank_settings ts ON ts.station_id = b.station_id AND ts.tank_id = b.tank_id
         LEFT JOIN use28 u ON u.station_id = b.station_id AND u.tank_id = b.tank_id
+        LEFT JOIN v_tank_gauges g ON g.station_id = b.station_id AND g.tank_id = b.tank_id
+        LEFT JOIN LATERAL (SELECT x.fact_volume, x.ended_at, x.session_num, x.diff FROM v_tank_measurements x
+                           WHERE x.station_id = b.station_id AND x.tank_id = b.tank_id ORDER BY x.ended_at DESC LIMIT 1) m ON true
         WHERE b.station_id = ANY(@stations) AND COALESCE((rt.data->>'Deleted')::int, 0) = 0
         ORDER BY sn.station, b.tank_num
         """, new { stations })).ToList();

@@ -17,6 +17,14 @@ public static class ShiftEndpoints
         AND (t.started_at AT TIME ZONE sn.time_zone)::date BETWEEN @from::date AND @to::date
         """;
 
+    /// <summary>Fuel revenue of a shift by payment category (the Topaz-like totals keep Topaz's own cash/cashless rules).</summary>
+    private const string PayByShift = """
+        LEFT JOIN LATERAL (
+            SELECT sum(v.amount) FILTER (WHERE v.pay_category = 'cash') AS pay_cash, sum(v.amount) FILTER (WHERE v.pay_category = 'card') AS pay_card,
+                   sum(v.amount) FILTER (WHERE v.pay_category = 'contract') AS pay_contract, sum(v.amount) FILTER (WHERE v.pay_category = 'fuel_card') AS pay_fuel_card
+            FROM v_fuel_sales_local v WHERE v.station_id = t.station_id AND v.session_id = t.session_id) p ON true
+        """;
+
     private static async Task<IResult> List(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);
@@ -26,9 +34,11 @@ public static class ShiftEndpoints
             SELECT t.station_id, sn.station, t.session_id, t.session_num, t.user_name, t.started_at, t.ended_at,
                    round(extract(epoch FROM COALESCE(t.ended_at, now()) - t.started_at) / 3600.0, 1) AS hours,
                    t.fuel_volume, t.fuel_amount, t.fuel_cash, t.fuel_cashless, t.fuel_mixed, t.shop_amount, t.hose_counters_delta,
+                   p.pay_cash, p.pay_card, p.pay_contract, p.pay_fuel_card,
                    (SELECT count(*) FROM fuel_sales fs WHERE fs.station_id = t.station_id AND fs.session_id = t.session_id AND fs.volume = 0) AS aborted,
                    (SELECT count(*) FROM fuel_sales fs WHERE fs.station_id = t.station_id AND fs.session_id = t.session_id AND fs.volume > 0) AS orders
             FROM v_shift_totals t JOIN v_station_names sn ON sn.station_id = t.station_id
+            {PayByShift}
             WHERE {ShiftWhere}
             ORDER BY t.started_at DESC
             LIMIT 1000
@@ -70,10 +80,11 @@ public static class ShiftEndpoints
         if (!await scope.CanSeeAsync(ctx.User, station)) return Results.Forbid();
         await using var c = await db.OpenConnectionAsync(ctx.RequestAborted);
         var args = new { station, session };
-        var header = await c.QuerySingleOrDefaultAsync("""
-            SELECT t.*, sn.station, sn.time_zone,
+        var header = await c.QuerySingleOrDefaultAsync($"""
+            SELECT t.*, sn.station, sn.time_zone, p.*,
                    round(extract(epoch FROM COALESCE(t.ended_at, now()) - t.started_at) / 3600.0, 1) AS hours
             FROM v_shift_totals t JOIN v_station_names sn ON sn.station_id = t.station_id
+            {PayByShift}
             WHERE t.station_id = @station AND t.session_id = @session
             """, args);
         if (header is null) return Results.NotFound();
@@ -108,7 +119,7 @@ public static class ShiftEndpoints
             WHERE s.station_id = @station AND s.session_id = @session ORDER BY r.item_name
             """, args);
         var orders = await c.QueryAsync("""
-            SELECT order_id, order_num, local_ts, fuel_name, tank_num, hose_num, payment_mode, remark, payment_kind, volume, volume_ordered,
+            SELECT order_id, order_num, local_ts, fuel_name, tank_num, hose_num, payment_mode, remark, payment_kind, pay_category, volume, volume_ordered,
                    price, price_pump, amount, amount_cash, amount_cashless, amount_discount, card_code
             FROM v_fuel_sales_local WHERE station_id = @station AND session_id = @session ORDER BY order_num
             """, args);

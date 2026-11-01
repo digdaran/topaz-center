@@ -12,6 +12,8 @@ const METRICS: { key: keyof StationRow; label: string; fmt: (v: Num) => string }
   { key: 'avg_fuel_check', label: 'Ср. чек топливо', fmt: money },
   { key: 'avg_fill', label: 'Средний налив', fmt: liters },
   { key: 'cashless_share', label: 'Доля безнала', fmt: pct },
+  { key: 'card_share', label: 'Доля карт', fmt: pct },
+  { key: 'contract_share', label: 'Доля договоров', fmt: pct },
   { key: 'shop_to_fuel', label: 'Магазин / топливо', fmt: pct },
   { key: 'avg_shop_check', label: 'Ср. чек магазин', fmt: money },
 ];
@@ -24,7 +26,7 @@ export default function StationCompare() {
   const rows = [...(data?.stations ?? [])].sort((a, b) => Number(b[metric] ?? 0) - Number(a[metric] ?? 0));
   return (
     <>
-      <FilterBar granularity={false} compare={false} fuel />
+      <FilterBar granularity={false} compare={false} fuel pay />
       <QueryState error={error} loading={isLoading}>
         <ChartCard
           title={<Segmented size="small" value={metric} onChange={(v) => setMetric(v as keyof StationRow)} options={METRICS.map((x) => ({ value: x.key, label: x.label }))} />}

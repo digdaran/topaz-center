@@ -11,16 +11,18 @@ namespace Topaz.Central.Ui;
 ///   fuel=code                      reference fuel type (fuel_types.code), optional
 /// Dates are local to each station; UtcFrom/UtcTo only bound the scan (index use) with a ±14 h margin.
 /// </summary>
-public sealed record UiFilter(Guid[] Stations, DateTime From, DateTime To, string Granularity, string Compare, string? Fuel)
+public sealed record UiFilter(Guid[] Stations, DateTime From, DateTime To, string Granularity, string Compare, string? Fuel, string? Pay = null)
 {
     public static readonly string[] Granularities = ["hour", "day", "week", "month"];
+    /// <summary>Payment categories of the filter ("none" — unpaid dispensing — is not a filter value).</summary>
+    public static readonly string[] PayCategories = ["cash", "card", "contract", "fuel_card"];
 
     public DateTime UtcFrom => DateTime.SpecifyKind(From.AddHours(-14), DateTimeKind.Utc);
     public DateTime UtcTo => DateTime.SpecifyKind(To.AddDays(1).AddHours(14), DateTimeKind.Utc);
     public int Days => (int)(To - From).TotalDays + 1;
 
     /// <summary>Parameters for Dapper: @st, @from, @to, @utcFrom, @utcTo, @fuel.</summary>
-    public object Args => new { st = Stations, from = From, to = To, utcFrom = UtcFrom, utcTo = UtcTo, fuel = Fuel };
+    public object Args => new { st = Stations, from = From, to = To, utcFrom = UtcFrom, utcTo = UtcTo, fuel = Fuel, pay = Pay };
 
     public UiFilter? ComparePeriod() => Compare switch
     {
@@ -69,7 +71,9 @@ public sealed record UiFilter(Guid[] Stations, DateTime From, DateTime To, strin
         if (compare is not ("prev" or "yoy" or "none")) return (null, Results.Problem(statusCode: 400, title: "compare must be prev|yoy|none"));
 
         var fuel = q["fuel"].ToString();
-        return (new UiFilter(stations, from, to, g, compare, string.IsNullOrWhiteSpace(fuel) ? null : fuel), null);
+        var pay = q["pay"].ToString();
+        if (!string.IsNullOrEmpty(pay) && !PayCategories.Contains(pay)) return (null, Results.Problem(statusCode: 400, title: "pay must be cash|card|contract|fuel_card"));
+        return (new UiFilter(stations, from, to, g, compare, string.IsNullOrWhiteSpace(fuel) ? null : fuel, string.IsNullOrEmpty(pay) ? null : pay), null);
     }
 
     private static bool TryDate(string? s, DateTime fallback, out DateTime value)

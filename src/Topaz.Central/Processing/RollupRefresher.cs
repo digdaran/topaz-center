@@ -103,8 +103,8 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
                    COALESCE(sum(s.volume) FILTER (WHERE s.is_sale AND c.price IS NOT NULL), 0),
                    COALESCE(sum(s.amount) FILTER (WHERE s.is_sale AND c.price IS NOT NULL), 0),
                    sum(s.volume * c.price) FILTER (WHERE s.payment_kind = 'none' AND s.volume > 0 AND c.price IS NOT NULL),
-                   COALESCE(sum(s.amount) FILTER (WHERE s.is_sale AND COALESCE(s.fiscal_number, 0) <> 0), 0),
-                   COALESCE(round(sum(s.amount) FILTER (WHERE s.is_sale AND c.price IS NOT NULL AND COALESCE(s.fiscal_number, 0) <> 0) * @vat / (100 + @vat), 2), 0)
+                   COALESCE(sum(s.amount) FILTER (WHERE s.is_sale AND (COALESCE(s.fiscal_number, 0) <> 0 OR s.pay_category IN ('contract', 'fuel_card'))), 0),
+                   COALESCE(round(sum(s.amount) FILTER (WHERE s.is_sale AND c.price IS NOT NULL AND (COALESCE(s.fiscal_number, 0) <> 0 OR s.pay_category IN ('contract', 'fuel_card'))) * @vat / (100 + @vat), 2), 0)
             FROM v_fuel_sales_local s
             -- average cost of a litre in the sale's tank at the moment of the sale (FuelCostAverager)
             LEFT JOIN LATERAL (
@@ -137,8 +137,8 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
                    count(*), count(DISTINCT l.receipt_id),
                    sum(l.quantity * c.cost) FILTER (WHERE c.cost IS NOT NULL),
                    COALESCE(sum(l.amount) FILTER (WHERE c.cost IS NOT NULL), 0),
-                   COALESCE(sum(l.amount) FILTER (WHERE COALESCE(l.fiscal_number, 0) <> 0), 0),
-                   COALESCE(round(sum(l.amount) FILTER (WHERE c.cost IS NOT NULL AND COALESCE(l.fiscal_number, 0) <> 0) * @vat / (100 + @vat), 2), 0)
+                   COALESCE(sum(l.amount) FILTER (WHERE COALESCE(l.fiscal_number, 0) <> 0 OR l.pay_category IN ('contract', 'fuel_card')), 0),
+                   COALESCE(round(sum(l.amount) FILTER (WHERE c.cost IS NOT NULL AND (COALESCE(l.fiscal_number, 0) <> 0 OR l.pay_category IN ('contract', 'fuel_card'))) * @vat / (100 + @vat), 2), 0)
             FROM v_shop_lines_local l
             LEFT JOIN v_item_keys k ON k.station_id = l.station_id AND k.item_id = l.item_id
             -- latest cost in effect at the sale; a station-specific price wins over an "all stations" one of the same date

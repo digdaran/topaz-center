@@ -1,9 +1,10 @@
-import { Alert, Card, Col, Row, Table } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Col, Row, Space, Table, Tabs, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
-import { useFiltered } from '../api/client';
+import { csvUrl, useFilter, useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
-import { bucketLabel, compact, liters, money, Num, pct } from '../lib/format';
+import { bucketLabel, compact, int, liters, money, Num, pct } from '../lib/format';
 
 type R = Record<string, any>;
 interface Finance { filter: { g: string }; vat: { mode: string; rate: number }; fuel: R; shop: R; by_station: R[]; by_fuel: R[]; by_group: R[]; series: R[]; cash: R[] }
@@ -20,12 +21,13 @@ export default function FinancePage() {
   const net = data?.vat?.mode === 'net';
   const revenue = Number(fuel.revenue ?? 0) + Number(shop.revenue ?? 0);
   const fiscal = Number(fuel.fiscal_revenue ?? 0) + Number(shop.fiscal_revenue ?? 0);
-  const vatNote = net ? ` · без НДС ${Number(data!.vat.rate)} % из продаж с чеком` : ' · с НДС';
+  const vatNote = net ? ` · без НДС ${Number(data!.vat.rate)} % из продаж с чеком и по договорам` : ' · с НДС';
 
   return (
     <>
       <PageTitle title="Финансы" />
-      <FilterBar compare={false} fuel />
+      <FilterBar compare={false} fuel pay />
+      <Tabs destroyInactiveTabPane items={[{ key: 'money', label: 'Маржа и деньги', children: (
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
@@ -42,7 +44,7 @@ export default function FinancePage() {
                 { title: 'Маржа на литр', value: fuel.margin_per_liter, format: (v: Num) => money(v, true) },
                 { title: 'Маржа магазин', value: shop.margin, format: money, hint: `наценка ${pct(shop.markup_pct)}${coverageWarn(shop.coverage)}` },
                 { title: 'Скидки', value: fuel.discounts, format: money, hint: 'Скидки Топаза и скидки по дисконтным видам оплаты (цена заказа − цена колонки)' },
-                { title: 'Выручка с чеком', value: revenue ? fiscal / revenue : null, format: pct, hint: `Доля выручки с фискальным чеком${net ? ': из неё вычитается НДС для маржи' : ''}` },
+                { title: 'Выручка с чеком или по договору', value: revenue ? fiscal / revenue : null, format: pct, hint: `Доля выручки с фискальным чеком или по договору (ведомости, топливные карты)${net ? ': из неё вычитается НДС для маржи' : ''}` },
                 { title: 'Отпуск без оплаты', value: fuel.service_cost, format: money, hint: `Тех. прокачки и переливы по закупочной цене: ${liters(fuel.service_liters)}` },
                 { title: 'Покрытие себестоимостью', value: fuel.coverage, format: pct, hint: 'Доля проданных литров, для которых введена закупочная цена' },
               ].map((k) => <Col key={k.title} xs={12} md={8} xl={6}><KpiCard {...k} /></Col>)}
@@ -108,16 +110,18 @@ export default function FinancePage() {
                 </Card>
               </Col>
               <Col xs={24}>
-                <ChartCard title="Деньги по дням: наличные, безнал, инкассация" empty={!data.cash.length} option={{
-                  color: [CHART_COLORS[4], CHART_COLORS[0], CHART_COLORS[3]],
+                <ChartCard title="Деньги по дням: наличные, карты, договоры, выдача из кассы" empty={!data.cash.length} option={{
+                  color: [CHART_COLORS[4], CHART_COLORS[0], CHART_COLORS[2], CHART_COLORS[5], CHART_COLORS[3]],
                   tooltip: { trigger: 'axis', valueFormatter: (v: any) => money(Number(v)) },
                   legend: { top: 0 },
                   grid: { left: 8, right: 8, bottom: 8, top: 36, containLabel: true },
                   xAxis: { type: 'category', data: data.cash.map((c) => bucketLabel(c.day, 'day')) },
                   yAxis: { type: 'value', axisLabel: { formatter: (v: number) => compact(v) } },
                   series: [
-                    { name: 'Наличные (топливо + магазин)', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_cash) + Number(c.shop_cash)) },
-                    { name: 'Безнал (топливо + магазин)', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_cashless) + Number(c.shop_cashless)) },
+                    { name: 'Наличные', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_cash) + Number(c.shop_cash)) },
+                    { name: 'Банковские карты', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_card) + Number(c.shop_card)) },
+                    { name: 'По договорам', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_contract) + Number(c.shop_contract)) },
+                    { name: 'Топливные карты', type: 'bar', stack: 'p', data: data.cash.map((c) => Number(c.fuel_fuel_card)) },
                     { name: 'Выдано из кассы', type: 'line', data: data.cash.map((c) => c.cash_out) },
                   ],
                 }} />
@@ -126,6 +130,51 @@ export default function FinancePage() {
           </>
         )}
       </QueryState>
+      ) }, { key: 'contracts', label: 'Продажи по договорам', children: <ContractSales /> }]} />
     </>
+  );
+}
+
+interface ContractRow { station: string; month: string; category: string; payment_mode: string; fuel: string; liters: number; amount: number; orders: number }
+
+/** Fuel sold on contract (ведомости) and by fuel cards: what the clients and card issuers owe for the period. */
+function ContractSales() {
+  const [filter] = useFilter();
+  const { data, error, isLoading } = useFiltered<{ rows: ContractRow[]; totals: { category: string; liters: number; amount: number; orders: number }[] }>('/analytics/contracts');
+  const months = (m: string) => { const [y, mm] = m.split('-'); return `${mm}.${y}`; };
+  return (
+    <QueryState error={error} loading={isLoading}>
+      {data && (
+        <>
+          <Typography.Paragraph type="secondary">
+            Отпуски по видам оплаты со способом «По договору» (ведомости) и «Топливные карты» — деньги за них приходят на счёт позже.
+            Способ оплаты у каждого вида оплаты можно проверить в «Настройки → Виды оплаты».
+          </Typography.Paragraph>
+          <Space wrap style={{ marginBottom: 12 }}>
+            {data.totals.map((t) => (
+              <Card key={t.category} size="small" style={{ minWidth: 220 }}>
+                <Typography.Text type="secondary">{t.category}</Typography.Text>
+                <div style={{ fontSize: 20, fontWeight: 600 }}>{money(t.amount)}</div>
+                <Typography.Text type="secondary">{liters(t.liters)} · {int(t.orders)} отпусков</Typography.Text>
+              </Card>
+            ))}
+            <Button icon={<DownloadOutlined />} href={csvUrl('/analytics/contracts', filter)}>Скачать CSV (Excel)</Button>
+          </Space>
+          <Table<ContractRow> size="small" rowKey={(r) => `${r.station}/${r.month}/${r.category}/${r.payment_mode}/${r.fuel}`} dataSource={data.rows}
+            pagination={{ pageSize: 50 }} scroll={{ x: 800 }}
+            locale={{ emptyText: 'За период нет продаж по договорам и топливным картам' }}
+            columns={[
+              { title: 'АЗС', dataIndex: 'station' },
+              { title: 'Месяц', dataIndex: 'month', render: months },
+              { title: 'Способ', dataIndex: 'category', render: (v: string) => <Tag color={v === 'По договору' ? 'purple' : 'gold'}>{v}</Tag> },
+              { title: 'Вид оплаты в Топазе', dataIndex: 'payment_mode' },
+              { title: 'Топливо', dataIndex: 'fuel' },
+              numCol<ContractRow>('Литры', 'liters', liters),
+              numCol<ContractRow>('Сумма', 'amount', money),
+              numCol<ContractRow>('Отпусков', 'orders', int),
+            ]} />
+        </>
+      )}
+    </QueryState>
   );
 }

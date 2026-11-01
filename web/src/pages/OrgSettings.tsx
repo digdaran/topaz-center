@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Form, InputNumber, Radio, Select, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Form, InputNumber, Radio, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { int } from '../lib/format';
+import { PAY, PayCategory } from '../lib/payments';
 
 interface OrgSettingsData { id: string; name: string; margin_vat: 'gross' | 'net'; vat_rate: number }
 
@@ -59,21 +60,37 @@ export function OrganizationSettings() {
   );
 }
 
-interface Mode { station_id: string; station: string; payment_mode_id: number; name: string; is_discount: boolean; manual: boolean; sales_30d: number }
+interface Mode {
+  station_id: string; station: string; payment_mode_id: number; name: string; is_discount: boolean; manual: boolean; sales_30d: number;
+  category: PayCategory; category_manual: boolean; category_guess: PayCategory; paid_90d: number; in_cash_register: number;
+}
 
-/** Discount payment modes: a lower pump price there is a legitimate discount, elsewhere it is an alert. */
+/** Does the cash drawer evidence contradict the category? (cash goes into Topaz's cash drawer, cards and contracts never do) */
+function registerHint(m: Mode): { text: string; warn: boolean } | null {
+  if (m.paid_90d === 0) return null;
+  const share = m.in_cash_register / m.paid_90d;
+  const text = share >= 0.95 ? 'в кассе' : share <= 0.05 ? 'не в кассе' : `в кассе ${Math.round(share * 100)} %`;
+  const warn = (m.category === 'cash' && share <= 0.05) || (m.category !== 'cash' && m.category !== 'none' && share >= 0.95);
+  return { text, warn };
+}
+
+/**
+ * Payment modes of the stations: how each is paid (cash, bank card, contract, fuel card, unpaid) and whether it gives
+ * a discount. Topaz has no type for a payment mode, so both are guessed from the name; the owner can correct them.
+ */
 export function PaymentModes() {
   const qc = useQueryClient();
   const { message } = App.useApp();
   const { data, isLoading } = useQuery({ queryKey: ['payment-modes'], queryFn: () => api<Mode[]>('/payment-modes') });
   const [station, setStation] = useState<string | undefined>();
+  const [used, setUsed] = useState(true);
   const stations = [...new Map((data ?? []).map((m) => [m.station_id, m.station])).entries()];
-  const rows = (data ?? []).filter((m) => !station || m.station_id === station);
+  const rows = (data ?? []).filter((m) => (!station || m.station_id === station) && (!used || m.sales_30d > 0 || m.paid_90d > 0 || m.manual || m.category_manual));
 
-  const set = async (m: Mode, value: boolean | null) => {
+  const save = async (m: Mode, body: Record<string, unknown>) => {
     try {
-      await api(`/payment-modes/${m.station_id}/${m.payment_mode_id}`, { method: 'PUT', body: { is_discount: value } });
-      qc.invalidateQueries({ queryKey: ['payment-modes'] });
+      await api(`/payment-modes/${m.station_id}/${m.payment_mode_id}`, { method: 'PUT', body });
+      qc.invalidateQueries();
     } catch (e) {
       message.error((e as Error).message);
     }
@@ -82,26 +99,53 @@ export function PaymentModes() {
   return (
     <>
       <Typography.Paragraph type="secondary">
-        На дисконтном виде оплаты колонка отпускает со скидкой, и цена на колонке ниже цены заказа — это законная скидка.
-        На остальных видах оплаты такое снижение цены мимо скидок Топаза попадает в «Контроль». Скидка, которую записал сам Топаз
-        (дисконтная программа по карте), событием не считается никогда. Отметка ставится автоматически по названию
-        («Дисконтная…», «Скидка…»), её можно исправить.
+        <b>Способ оплаты</b> решает, куда попадают деньги в отчётах: наличные, банковские карты, продажи по договорам (ведомости)
+        или топливные карты. В Топазе у вида оплаты нет такого признака, поэтому сервис определяет его по названию
+        («Ведомости» — договор, «Банк. Терминал» — карта, «E1CARD» — топливная карта). Если определил неверно — выберите правильный способ.
+        Подсказка «в кассе / не в кассе» показывает, проводит ли Топаз эти отпуски через кассу: наличные проходят через кассу,
+        карты и договоры — нет.
       </Typography.Paragraph>
-      {stations.length > 1 && (
-        <Select allowClear placeholder="Все АЗС" style={{ width: 260, marginBottom: 12 }} value={station} onChange={setStation}
-          options={stations.map(([id, name]) => ({ value: id, label: name }))} />
-      )}
-      <Table<Mode> size="small" rowKey={(m) => `${m.station_id}/${m.payment_mode_id}`} loading={isLoading} dataSource={rows} pagination={false} scroll={{ x: 640 }}
+      <Typography.Paragraph type="secondary">
+        <b>Дисконтный</b> вид оплаты отпускает со скидкой: цена на колонке ниже цены заказа — это законная скидка. На остальных видах
+        такое снижение цены мимо скидок Топаза попадает в «Контроль». Скидка, которую записал сам Топаз, событием не считается.
+      </Typography.Paragraph>
+      <Space wrap style={{ marginBottom: 12 }}>
+        {stations.length > 1 && (
+          <Select allowClear placeholder="Все АЗС" style={{ width: 260 }} value={station} onChange={setStation}
+            options={stations.map(([id, name]) => ({ value: id, label: name }))} />
+        )}
+        <Checkbox checked={used} onChange={(e) => setUsed(e.target.checked)}>Только используемые</Checkbox>
+      </Space>
+      <Table<Mode> size="small" rowKey={(m) => `${m.station_id}/${m.payment_mode_id}`} loading={isLoading} dataSource={rows} pagination={false} scroll={{ x: 900 }}
         columns={[
           { title: 'АЗС', dataIndex: 'station' },
           { title: 'Вид оплаты', dataIndex: 'name' },
           { title: 'Отпусков за 30 дней', dataIndex: 'sales_30d', align: 'right', render: (v) => int(v) },
           {
-            title: 'Дисконтный', dataIndex: 'is_discount', width: 200, render: (v: boolean, m) => (
+            title: 'Способ оплаты', dataIndex: 'category', width: 300, render: (v: PayCategory, m) => {
+              const hint = registerHint(m);
+              return (
+                <Space size={4} wrap>
+                  <Select size="small" style={{ width: 200 }} value={v} onChange={(c) => save(m, { category: c })}
+                    options={(Object.keys(PAY) as PayCategory[]).map((k) => ({ value: k, label: PAY[k].label }))} />
+                  {m.category_manual
+                    ? <Button size="small" type="link" onClick={() => save(m, { category: null })} title={`По названию: ${PAY[m.category_guess].label}`}>авто</Button>
+                    : <Tag>по названию</Tag>}
+                  {hint && (
+                    <Tooltip title={hint.warn ? 'Похоже, способ определён неверно: проверьте' : `Оплаченных отпусков за 90 дней: ${int(m.paid_90d)}`}>
+                      <Tag color={hint.warn ? 'orange' : undefined}>{hint.text}</Tag>
+                    </Tooltip>
+                  )}
+                </Space>
+              );
+            },
+          },
+          {
+            title: 'Дисконтный', dataIndex: 'is_discount', width: 170, render: (v: boolean, m) => (
               <>
-                <Switch size="small" checked={v} onChange={(c) => set(m, c)} />{' '}
+                <Switch size="small" checked={v} onChange={(c) => save(m, { is_discount: c })} />{' '}
                 {m.manual
-                  ? <Button size="small" type="link" onClick={() => set(m, null)} title="Вернуть отметку по названию">авто</Button>
+                  ? <Button size="small" type="link" onClick={() => save(m, { is_discount: null })} title="Вернуть отметку по названию">авто</Button>
                   : <Tag style={{ marginInlineStart: 4 }}>по названию</Tag>}
               </>
             ),
