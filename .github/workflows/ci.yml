@@ -35,7 +35,7 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Wait for Firebird
-        run: for i in $(seq 1 30); do (echo > /dev/tcp/localhost/3050) 2>/dev/null && break; sleep 2; done
+        run: for _ in $(seq 1 30); do (echo > /dev/tcp/localhost/3050) 2>/dev/null && break; sleep 2; done
       - run: dotnet restore
       - run: dotnet build --no-restore -c Release
       - run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx" --results-directory TestResults
@@ -74,16 +74,36 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Publish self-contained single-file agent
+        id: pub
         run: |
           VERSION=${GITHUB_REF_NAME#v}; [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION=1.0.0-ci.${GITHUB_RUN_NUMBER}
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           dotnet publish src/Topaz.Agent -c Release -r ${{ matrix.rid }} --self-contained \
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
-            -p:DebugType=none -p:Version=$VERSION -o out/TopazAgent
+            -p:DebugType=none -p:Version="$VERSION" -o out/TopazAgent
           cp deploy/agent/install.ps1 deploy/agent/uninstall.ps1 deploy/agent/README.md out/TopazAgent/
+      - name: Check package contents
+        run: |
+          set -e
+          for f in TopazAgent.exe appsettings.json datasets.json install.ps1 uninstall.ps1; do test -f "out/TopazAgent/$f" || { echo "missing $f"; exit 1; }; done
+          # secret columns must stay excluded (also asserted by a unit test)
+          jq -e '[.datasets[] | select(.table=="sysUsers")][0].exclude | index("PswHash") and index("Psw") and index("SecurityData")' out/TopazAgent/datasets.json
+          jq -e '[.datasets[] | select(.table=="dcAgents")][0].exclude | index("Password")' out/TopazAgent/datasets.json
+          jq -e '[.datasets[] | select(.table=="dcPaymentModes")][0].exclude | index("Config")' out/TopazAgent/datasets.json
+      - name: Zip
+        run: |
+          NAME=TopazAgent-${{ steps.pub.outputs.version }}-${{ matrix.rid }}
+          mkdir -p dist && mv out/TopazAgent "out/$NAME"
+          (cd out && zip -9 -r "../dist/$NAME.zip" "$NAME")
+          mv "out/$NAME" out/TopazAgent
       - uses: actions/upload-artifact@v4
         with:
           name: TopazAgent-${{ matrix.rid }}
           path: out/TopazAgent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-zip-${{ matrix.rid }}
+          path: dist/*.zip
 
   central-image:
     needs: [test, web]
@@ -114,3 +134,56 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:latest
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, web, agent-package, central-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-zip-*
+          merge-multiple: true
+          path: dist
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -e
+          V=${GITHUB_REF_NAME#v}
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/topaz-central:$V
+          cd dist
+          sha256sum TopazAgent-*.zip > SHA256SUMS.txt
+          cat > notes.md <<EOF
+          ## Агент АЗС (Windows)
+
+          | Файл | Для |
+          |---|---|
+          | \`TopazAgent-$V-win-x64.zip\` | Windows 10/11, Server 2016+ (64-бит) — обычно нужен этот |
+          | \`TopazAgent-$V-win-x86.zip\` | 32-битная Windows 10 |
+
+          .NET устанавливать не нужно. Windows 7 не поддерживается.
+
+          1. Скачайте архив, распакуйте, откройте PowerShell **от имени администратора** в распакованной папке.
+          2. Выполните:
+          \`\`\`powershell
+          Get-ChildItem -Recurse | Unblock-File
+          Set-ExecutionPolicy -Scope Process Bypass
+          .\\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://<ваш-сервер> -EnrollmentKey <ключ> -DatabasePath "C:\\TopazAZS\\DB\\TopazAZS.fdb"
+          \`\`\`
+          Подробно: [deploy/agent/README.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/deploy/agent/README.md). Контрольные суммы — в \`SHA256SUMS.txt\`.
+
+          ## Сервер
+
+          Образ: \`$IMAGE\` (\`CENTRAL_IMAGE=$IMAGE\` в \`.env\`, затем \`docker compose up -d\`).
+          EOF
+          FLAGS=(); [[ "$V" == *-* ]] && FLAGS+=(--prerelease)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" TopazAgent-*.zip SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" TopazAgent-*.zip SHA256SUMS.txt --verify-tag --title "Topaz Agent $V" \
+              --notes-file notes.md --generate-notes "${FLAGS[@]}"
+          fi

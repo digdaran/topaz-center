@@ -6,10 +6,14 @@
 
 ## Установка
 
-1. Скачайте артефакт `TopazAgent-win-x64` из GitHub Actions (или релиза) и распакуйте во временную папку.
-2. Откройте PowerShell **от имени администратора** в этой папке:
+1. Скачайте `TopazAgent-<версия>-win-x64.zip` (для 32-битной Windows — `win-x86`) со страницы [Releases](https://github.com/digdaran/topaz-center/releases/latest) и распакуйте во временную папку.
+2. Откройте PowerShell **от имени администратора** в распакованной папке `TopazAgent-<версия>-win-x64`:
 
 ```powershell
+# необязательно: сверить контрольную сумму с SHA256SUMS.txt из релиза
+Get-FileHash ..\TopazAgent-*-win-x64.zip -Algorithm SHA256
+# снять пометку «скачано из интернета», иначе PowerShell может не запустить скрипт
+Get-ChildItem -Recurse | Unblock-File
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1 -StationName "АЗС-5 Северная" `
     -ServerUrl https://topaz.example.com `
@@ -27,6 +31,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 - выполняет `check` и запускает службу.
 
 Название АЗС должно быть уникальным: по нему АЗС видна на сервере.
+
+`TopazAgent.exe` не подписан цифровой подписью, поэтому при ручном запуске Windows SmartScreen может показать предупреждение («Подробнее → Выполнить в любом случае»). Службу это не затрагивает.
 
 Дополнительные параметры: `-FirebirdHost`, `-FirebirdPort`, `-FirebirdUser`, `-TimeZone` (например, `"Ekaterinburg Standard Time"`; по умолчанию берётся пояс Windows).
 

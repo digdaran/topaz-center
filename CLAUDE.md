@@ -27,6 +27,7 @@ docker run --rm -v "$PWD":/src -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet t
 
 # agent publish (single exe for stations)
 dotnet publish src/Topaz.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+# release: pushing a tag v* makes CI publish a GitHub release (agent zips + SHA256SUMS.txt) and the GHCR image
 # central stack
 cd deploy/central && cp .env.example .env && docker compose up -d --build
 ```

@@ -67,6 +67,14 @@ E2E_BASE_URL=http://localhost:8080 E2E_LOGIN=admin E2E_PASSWORD=... npx playwrig
 
 ## Сборка поставки
 
+Готовые сборки агента (zip с `TopazAgent.exe` и скриптами установки, `win-x64` и `win-x86`) лежат на странице [Releases](https://github.com/digdaran/topaz-center/releases/latest). Новая версия выпускается тегом: CI прогонит тесты, создаст релиз с архивами и `SHA256SUMS.txt` и опубликует образ сервера в GHCR.
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1      # тег с «-» (v1.1.0-rc1) — предварительный релиз
+```
+
+Собрать вручную:
+
 ```bash
 # агент: один exe для Windows
 dotnet publish src/Topaz.Agent -c Release -r win-x64 --self-contained \
@@ -77,4 +85,4 @@ cp deploy/agent/*.ps1 out/TopazAgent/
 docker build -f src/Topaz.Central/Dockerfile -t topaz-central .
 ```
 
-CI (`.github/workflows/ci.yml`) прогоняет все тесты на PostgreSQL 16 и Firebird 2.5, собирает агент под `win-x64` и `win-x86`, а по тегу `v*` публикует образ сервера в GHCR.
+CI (`.github/workflows/ci.yml`) прогоняет все тесты на PostgreSQL 16 и Firebird 2.5, собирает агент под `win-x64` и `win-x86`, а по тегу `v*` публикует релиз агента и образ сервера в GHCR.
