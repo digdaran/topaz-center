@@ -132,6 +132,60 @@ public sealed class ControlTests(CentralFixture fx) : IClassFixture<CentralFixtu
         Assert.Equal("closed", await fx.QueryAsync<string>("SELECT status FROM alerts WHERE id = @id", new { id }));
     }
 
+    /// <summary>
+    /// A station uploading its history sends the newest shifts first: the counter of shift 3 must not be compared with
+    /// shift 1 while shift 2 is missing. A totalizer passing 999 999,99 → 0 is not minus a million litres. An alert the
+    /// data no longer supports closes by itself.
+    /// </summary>
+    [PostgresFact]
+    public async Task Counter_checks_wait_for_the_previous_shift_and_survive_a_rollover()
+    {
+        var st = await fx.EnrollAsync("АЗС-счётчики");
+        var users = fx.Factory!.Services.GetRequiredService<UserService>();
+        try { await users.CreateAsync("counter-owner", "o", Roles.Owner, "control-password-1"); } catch (Npgsql.PostgresException) { }
+        var owner = fx.Factory.CreateClient();
+        owner.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
+        (await owner.PostAsJsonAsync("/api/v1/ui/auth/login", new { login = "counter-owner", password = "control-password-1" })).EnsureSuccessStatusCode();
+        var t = DateTimeOffset.UtcNow.AddDays(-3);
+        RecordChange Shift(int id) => Row("sysSessions", $"{id}", new JsonObject { ["SessionID"] = id, ["SessionNum"] = id, ["UserName"] = "Оператор", ["StartDateTime"] = Ts(t.AddHours(10 * id)), ["EndDateTime"] = Ts(t.AddHours(10 * id + 9)), ["Deleted"] = 0 });
+        RecordChange Hose(int session, decimal start, decimal end) => Row("flSesHoses", $"{session}|1", new JsonObject { ["SessionID"] = session, ["HoseID"] = 1, ["StartAdder"] = start, ["EndAdder"] = end, ["PumpNum"] = 1, ["NumInPump"] = 1 });
+        RecordChange Sale(int id, int session, decimal volume) => Row("flOrders", $"{id}", new JsonObject
+        {
+            ["OrderID"] = id, ["SessionID"] = session, ["OrderNum"] = id, ["DateTime"] = Ts(t.AddHours(10 * session + 1)), ["FuelID"] = 1, ["TankID"] = 1, ["HoseID"] = 1, ["PaymentModeID"] = 1,
+            ["Remark"] = "", ["Price"] = 50m, ["PricePump"] = 50m, ["Volume"] = volume, ["Amount"] = volume * 50, ["AmountCash"] = volume * 50, ["AmountCashless"] = 0, ["AmountDiscount"] = 0,
+        });
+        async Task SendAsync(params RecordChange[] items)
+        {
+            var batch = new BatchEnvelope { BatchId = Guid.NewGuid(), Seq = 1, CreatedAt = DateTimeOffset.UtcNow, AgentVersion = "t", Items = items.ToList() };
+            using var ms = new MemoryStream();
+            using (var gz = new GZipStream(ms, CompressionLevel.Fastest, true)) JsonSerializer.Serialize(gz, batch, Protocol.Json);
+            var content = new ByteArrayContent(ms.ToArray());
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            content.Headers.ContentEncoding.Add("gzip");
+            (await fx.Client(st.Token).PostAsync("/api/v1/batches", content)).EnsureSuccessStatusCode();
+            await fx.WaitProcessedAsync();
+        }
+        Task<long> CountAsync(string rule, string status = "new") =>
+            fx.QueryAsync<long>("SELECT count(*) FROM alerts WHERE station_id = @s AND rule_code = @rule AND status = @status", new { s = st.StationId, rule, status });
+
+        // Newest first: shifts 1 and 3 (the counter rolls over during shift 3), shift 2 still missing.
+        await SendAsync(Shift(1), Shift(3), Hose(1, 999_000m, 999_900m), Hose(3, 999_980m, 30m), Sale(1, 1, 900m), Sale(3, 3, 50m));
+        // The alert an older version raised in this situation (shift 3 against shift 1).
+        await fx.QueryAsync<long>("""
+            INSERT INTO alerts (station_id, rule_code, dedupe_key, severity, title, value, session_id) VALUES (@s, 'counter_gap', '1/3', 'critical', 'старое', 80, 3) RETURNING id
+            """, new { s = st.StationId });
+        (await owner.PostAsync("/api/v1/ui/alerts/run", null)).EnsureSuccessStatusCode();
+        Assert.Equal(0, await CountAsync("counter_gap"));             // the stale one is gone
+        Assert.Equal(0, await CountAsync("counter_gap", "closed"));
+        Assert.Equal(0, await CountAsync("counter_mismatch"));        // 999 980 → 30 is 50 l, as the orders
+
+        // Shift 2 arrives and leaves 80 l between its end and the start of shift 3 unaccounted.
+        await SendAsync(Shift(2), Hose(2, 999_900m, 999_900m));
+        (await owner.PostAsync("/api/v1/ui/alerts/run", null)).EnsureSuccessStatusCode();
+        Assert.Equal(1, await CountAsync("counter_gap"));             // a real gap of the same shift and hose is raised
+        Assert.Equal(80m, await fx.QueryAsync<decimal>("SELECT value FROM alerts WHERE station_id = @s AND rule_code = 'counter_gap'", new { s = st.StationId }));
+    }
+
     [PostgresFact]
     public async Task Tank_plan_days_of_cover_and_order()
     {

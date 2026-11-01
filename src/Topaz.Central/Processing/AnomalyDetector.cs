@@ -73,6 +73,20 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                 UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM station_registrations g
                 WHERE a.rule_code = 'station_registration' AND a.status <> 'closed' AND g.id = a.registration_id AND g.status <> 'pending'
                 """);
+            // Counter alerts the data no longer supports are removed (e.g. raised while the station's history was still
+            // uploading and the previous shift was missing), so a real problem of the same shift and hose can still be raised.
+            await c.ExecuteAsync("""
+                DELETE FROM alerts a
+                WHERE a.rule_code = 'counter_gap' AND a.status <> 'closed'
+                  AND NOT EXISTS (SELECT 1 FROM v_hose_counter_gaps g JOIN v_station_rules r ON r.station_id = g.station_id AND r.code = 'counter_gap'
+                                  WHERE g.station_id = a.station_id AND g.hose_id || '/' || g.session_id = a.dedupe_key AND g.gap > r.threshold)
+                """);
+            await c.ExecuteAsync("""
+                DELETE FROM alerts a
+                WHERE a.rule_code = 'counter_mismatch' AND a.status <> 'closed'
+                  AND NOT EXISTS (SELECT 1 FROM v_hose_counter_mismatches m JOIN v_station_rules r ON r.station_id = m.station_id AND r.code = 'counter_mismatch'
+                                  WHERE m.station_id = a.station_id AND m.hose_id || '/' || m.session_id = a.dedupe_key AND abs(m.by_counter - m.by_orders) > r.threshold)
+                """);
             // A receipt alert closes once the receipt has a price.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
@@ -102,29 +116,24 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         // Counter of a hose at the start of a shift is above its end in the previous shift: fuel dispensed between shifts.
         Insert + $"""
         SELECT h.station_id, 'counter_gap', h.hose_id || '/' || h.session_id, r.severity,
-               'Разрыв счётчика рукава ' || h.hose_id || ': ' || fmt_num(h.start_counter - h.prev_end) || ' л',
-               format('Смена №%s: на начало смены %s, на конец предыдущей %s. Возможен отпуск мимо учёта.', s.session_num, fmt_num(h.start_counter), fmt_num(h.prev_end)),
-               round(h.start_counter - h.prev_end, 2), h.session_id, s.started_at
-        FROM (SELECT station_id, hose_id, session_id, start_counter,
-                     lag(end_counter) OVER (PARTITION BY station_id, hose_id ORDER BY session_id) AS prev_end
-              FROM hose_shift_counters) h
-        JOIN shifts s ON s.station_id = h.station_id AND s.session_id = h.session_id
+               'Разрыв счётчика рукава ' || h.hose_id || ': ' || fmt_num(h.gap) || ' л',
+               format('Смена №%s: на начало смены %s, на конец предыдущей смены №%s — %s. Возможен отпуск мимо учёта.',
+                      h.session_num, fmt_num(h.start_counter), h.session_num - 1, fmt_num(h.prev_end)),
+               round(h.gap, 2), h.session_id, h.started_at
+        FROM v_hose_counter_gaps h
         {string.Format(Rule, "counter_gap", "h")}
-        WHERE h.start_counter - h.prev_end > r.threshold AND {Recent}
+        WHERE h.gap > r.threshold AND h.started_at > now() - interval '30 days'
         ON CONFLICT DO NOTHING
         """,
         // Counter delta of a closed shift differs from the orders of that hose.
         Insert + $"""
         SELECT h.station_id, 'counter_mismatch', h.hose_id || '/' || h.session_id, r.severity,
-               'Счётчик рукава ' || h.hose_id || ' расходится с заказами на ' || fmt_num(abs(h.end_counter - h.start_counter - COALESCE(o.liters, 0))) || ' л',
-               format('Смена №%s: по счётчику %s л, по заказам %s л.', s.session_num, fmt_num(h.end_counter - h.start_counter), fmt_num(COALESCE(o.liters, 0))),
-               round(h.end_counter - h.start_counter - COALESCE(o.liters, 0), 2), h.session_id, s.ended_at
-        FROM hose_shift_counters h
-        JOIN shifts s ON s.station_id = h.station_id AND s.session_id = h.session_id AND s.ended_at IS NOT NULL
-        LEFT JOIN (SELECT station_id, session_id, hose_id, sum(volume) AS liters FROM fuel_sales GROUP BY 1, 2, 3) o
-               ON o.station_id = h.station_id AND o.session_id = h.session_id AND o.hose_id = h.hose_id
+               'Счётчик рукава ' || h.hose_id || ' расходится с заказами на ' || fmt_num(abs(h.by_counter - h.by_orders)) || ' л',
+               format('Смена №%s: по счётчику %s л, по заказам %s л.', h.session_num, fmt_num(h.by_counter), fmt_num(h.by_orders)),
+               round(h.by_counter - h.by_orders, 2), h.session_id, h.ended_at
+        FROM v_hose_counter_mismatches h
         {string.Format(Rule, "counter_mismatch", "h")}
-        WHERE abs(h.end_counter - h.start_counter - COALESCE(o.liters, 0)) > r.threshold AND {Recent}
+        WHERE abs(h.by_counter - h.by_orders) > r.threshold AND h.started_at > now() - interval '30 days'
         ON CONFLICT DO NOTHING
         """,
         // Aborted fuellings (volume 0) share of a closed shift.
