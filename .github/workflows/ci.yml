@@ -172,8 +172,9 @@ jobs:
           \`\`\`powershell
           Get-ChildItem -Recurse | Unblock-File
           Set-ExecutionPolicy -Scope Process Bypass
-          .\\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://<ваш-сервер> -EnrollmentKey <ключ> -DatabasePath "C:\\TopazAZS\\DB\\TopazAZS.fdb"
+          .\\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://<ваш-сервер> -EnrollmentKey <ключ>
           \`\`\`
+          База Топаза ищется в \`C:\\Program Files (x86)\\TopazAZS-*\`; если её там нет, установщик спросит путь.
           Подробно: [deploy/agent/README.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/deploy/agent/README.md). Контрольные суммы — в \`SHA256SUMS.txt\`.
 
           ## Сервер

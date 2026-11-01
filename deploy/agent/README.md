@@ -17,10 +17,16 @@ Get-ChildItem -Recurse | Unblock-File
 Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1 -StationName "АЗС-5 Северная" `
     -ServerUrl https://topaz.example.com `
-    -EnrollmentKey <TOPAZ_ENROLLMENT_KEY с сервера> `
-    -DatabasePath "C:\TopazAZS\DB\TopazAZS.fdb"
+    -EnrollmentKey <TOPAZ_ENROLLMENT_KEY с сервера>
 # пароль Firebird будет запрошен (для Топаза обычно это пароль SYSDBA)
 ```
+
+**Где скрипт ищет базу Топаза** (если не указан `-DatabasePath`):
+1. при обновлении — путь из прежней установки;
+2. в стандартной папке `C:\Program Files (x86)\TopazAZS-*\TopazAZS.fdb` (и в `C:\Program Files\TopazAZS-*` на 32-битной Windows). Если найдено несколько баз, скрипт покажет список и попросит выбрать номер (по умолчанию самая свежая);
+3. если ничего не найдено — попросит ввести путь к `TopazAZS.fdb` (можно вставить с кавычками из «Копировать как путь»).
+
+Указать путь явно: `-DatabasePath "D:\Topaz\TopazAZS.fdb"`. Если Firebird стоит на другом компьютере (`-FirebirdHost`), путь не ищется: укажите его так, как он виден на том компьютере, или алиас Firebird.
 
 Скрипт:
 - копирует агент в `C:\Program Files\TopazAgent`;
@@ -34,7 +40,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 `TopazAgent.exe` не подписан цифровой подписью, поэтому при ручном запуске Windows SmartScreen может показать предупреждение («Подробнее → Выполнить в любом случае»). Службу это не затрагивает.
 
-Дополнительные параметры: `-FirebirdHost`, `-FirebirdPort`, `-FirebirdUser`, `-TimeZone` (например, `"Ekaterinburg Standard Time"`; по умолчанию берётся пояс Windows).
+Дополнительные параметры: `-DatabasePath`, `-FirebirdHost`, `-FirebirdPort`, `-FirebirdUser`, `-TimeZone` (например, `"Ekaterinburg Standard Time"`; по умолчанию берётся пояс Windows).
 
 ## Команды
 

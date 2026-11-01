@@ -5,6 +5,8 @@
 
 .DESCRIPTION
   - copies the agent next to this script into -InstallDir;
+  - finds the Topaz database if -DatabasePath is not given: the path from a previous install,
+    then "Program Files (x86)\TopazAZS-*\TopazAZS.fdb", otherwise asks for it;
   - writes appsettings.json (station name, server, Topaz DB path) - no secrets in it;
   - stores secrets (Firebird password, enrollment key) as environment variables of the
     service only (registry: HKLM\SYSTEM\CurrentControlSet\Services\TopazAgent\Environment);
@@ -15,13 +17,17 @@
 
 .EXAMPLE
   .\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://topaz.example.com `
-      -EnrollmentKey <key from server .env> -DatabasePath "C:\TopazAZS\DB\TopazAZS.fdb"
+      -EnrollmentKey <key from server .env>
+
+.EXAMPLE
+  .\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://topaz.example.com `
+      -EnrollmentKey <key> -DatabasePath "D:\Topaz\TopazAZS.fdb"
 #>
 param(
     [Parameter(Mandatory)] [string] $StationName,
     [Parameter(Mandatory)] [string] $ServerUrl,
     [string] $EnrollmentKey,
-    [Parameter(Mandatory)] [string] $DatabasePath,
+    [string] $DatabasePath,
     [string] $FirebirdHost = "127.0.0.1",
     [int] $FirebirdPort = 3050,
     [string] $FirebirdUser = "SYSDBA",
@@ -35,7 +41,60 @@ $ErrorActionPreference = "Stop"
 $source = $PSScriptRoot
 if (-not (Test-Path (Join-Path $source "TopazAgent.exe"))) { throw "TopazAgent.exe not found next to install.ps1" }
 
+function Resolve-DatabasePath {
+    <# Picks the Topaz DB path: explicit value > previous install > standard folders > ask the operator. #>
+    param(
+        [string] $Given,
+        [string] $PreviousSettings,
+        [string[]] $SearchRoots,
+        [bool] $LocalFirebird = $true
+    )
+    if ($Given) { return $Given }
+
+    if ($PreviousSettings -and (Test-Path $PreviousSettings -PathType Leaf)) {
+        $prev = (Get-Content $PreviousSettings -Raw -Encoding UTF8 | ConvertFrom-Json).Firebird.Database
+        if ($prev) { Write-Host "Topaz database (from the previous install): $prev"; return $prev }
+    }
+
+    if ($LocalFirebird) {
+        $found = @($SearchRoots | Where-Object { $_ } | Select-Object -Unique |
+            ForEach-Object { Get-ChildItem -Path (Join-Path $_ "TopazAZS-*\TopazAZS.fdb") -File -ErrorAction SilentlyContinue } |
+            Sort-Object FullName -Unique | Sort-Object LastWriteTime -Descending)
+        if ($found.Count -eq 1) {
+            Write-Host "Topaz database found: $($found[0].FullName)"
+            return $found[0].FullName
+        }
+        if ($found.Count -gt 1) {
+            Write-Host "Several Topaz databases found:"
+            for ($i = 0; $i -lt $found.Count; $i++) {
+                $f = $found[$i]
+                Write-Host ("  {0}. {1}  ({2:N0} MB, changed {3:yyyy-MM-dd HH:mm})" -f ($i + 1), $f.FullName, ($f.Length / 1MB), $f.LastWriteTime)
+            }
+            while ($true) {
+                $answer = Read-Host "Номер базы Топаза [1]"
+                if (-not $answer) { $answer = "1" }
+                $n = 0
+                if ([int]::TryParse($answer, [ref] $n) -and $n -ge 1 -and $n -le $found.Count) { return $found[$n - 1].FullName }
+                Write-Host "Enter a number from 1 to $($found.Count)."
+            }
+        }
+        Write-Host "Topaz database not found in: $(($SearchRoots | Where-Object { $_ } | ForEach-Object { Join-Path $_ 'TopazAZS-*' }) -join ', ')"
+    }
+
+    while ($true) {
+        $path = (Read-Host "Путь к базе Топаза (например, C:\Program Files (x86)\TopazAZS-2\TopazAZS.fdb)").Trim().Trim('"').Trim("'")
+        if (-not $path) { throw "Topaz database path is required (-DatabasePath)." }
+        if (-not $LocalFirebird -or (Test-Path $path -PathType Leaf)) { return $path }
+        Write-Host "File not found: $path"
+    }
+}
+
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$localFirebird = $FirebirdHost -in @("127.0.0.1", "localhost", "::1", ".", $env:COMPUTERNAME)
+$DatabasePath = Resolve-DatabasePath -Given $DatabasePath `
+    -PreviousSettings $(if ($existing) { Join-Path $InstallDir "appsettings.json" }) `
+    -SearchRoots @(${env:ProgramFiles(x86)}, $env:ProgramFiles) -LocalFirebird $localFirebird
+Write-Host "Using Topaz database: $DatabasePath"
 if (-not $FirebirdPassword -and -not $existing) {
     $sec = Read-Host "Firebird password for $FirebirdUser" -AsSecureString
     $FirebirdPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
