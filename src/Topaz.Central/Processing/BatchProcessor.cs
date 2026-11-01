@@ -30,17 +30,23 @@ public sealed class BatchSignal
 public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, RollupRefresher rollups, IOptions<CentralOptions> options, ILogger<BatchProcessor> log)
     : BackgroundService
 {
-    // Oldest unprocessed batch of any station that has no earlier unprocessed/failed batch.
+    // The head (oldest unprocessed) batch of each station; stations take turns (round robin after @last), so a
+    // station sending a long history does not hold up the others. A 'failed' head blocks only its own station.
     private const string NextBatchSql = """
+        WITH heads AS (
+            SELECT DISTINCT ON (station_id) id, station_id, status
+            FROM raw_batches WHERE status <> 'processed'
+            ORDER BY station_id, id
+        )
         SELECT b.id, b.station_id AS StationId, b.payload::text AS Payload, b.attempts
-        FROM raw_batches b
-        WHERE b.status = 'received'
-          AND NOT EXISTS (SELECT 1 FROM raw_batches p
-                          WHERE p.station_id = b.station_id AND p.id < b.id AND p.status <> 'processed')
-        ORDER BY b.id
+        FROM heads h JOIN raw_batches b ON b.id = h.id
+        WHERE h.status = 'received'
+        ORDER BY h.station_id <= @last, h.station_id
         LIMIT 1
-        FOR UPDATE SKIP LOCKED
+        FOR UPDATE OF b SKIP LOCKED
         """;
+
+    private Guid _last = Guid.Empty;
 
     private sealed record PendingBatch(long Id, Guid StationId, string? Payload, int Attempts);
 
@@ -72,8 +78,9 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
     {
         await using var conn = await db.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        var batch = await conn.QuerySingleOrDefaultAsync<PendingBatch>(new CommandDefinition(NextBatchSql, transaction: tx, cancellationToken: ct));
+        var batch = await conn.QuerySingleOrDefaultAsync<PendingBatch>(new CommandDefinition(NextBatchSql, new { last = _last }, tx, cancellationToken: ct));
         if (batch is null) return false;
+        _last = batch.StationId;
 
         var sw = Stopwatch.StartNew();
         try

@@ -5,6 +5,8 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dapper;
+using Npgsql;
 using Topaz.Contracts;
 using Xunit;
 
@@ -186,5 +188,37 @@ public sealed class ApiTests(CentralFixture fx) : IClassFixture<CentralFixture>
         Assert.Equal(2, rows.Length);
 
         Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync("/api/v1/export/bad-name")).StatusCode);
+    }
+    [PostgresFact]
+    public async Task A_station_sending_its_history_does_not_hold_up_the_others()
+    {
+        var a = await fx.EnrollAsync("АЗС-история");
+        var b = await fx.EnrollAsync("АЗС-соседка");
+        (await fx.Client(a.Token).PostAsync("/api/v1/batches", Gzip(Batch(1, Order(1, 5m))))).EnsureSuccessStatusCode();
+        (await fx.Client(b.Token).PostAsync("/api/v1/batches", Gzip(Batch(1, Order(1, 7m))))).EnsureSuccessStatusCode();
+        await fx.WaitProcessedAsync();
+
+        // A backlog of 40 batches of station A arrives first, then one batch of B, all visible at once.
+        await using (var c = new NpgsqlConnection(fx.ConnectionString))
+        {
+            await c.OpenAsync();
+            await using var tx = await c.BeginTransactionAsync();
+            const string copy = """
+                INSERT INTO raw_batches (station_id, batch_id, seq, schema_version, agent_version, created_at, item_count, payload_sha256, payload)
+                SELECT station_id, gen_random_uuid(), seq + @n, schema_version, agent_version, created_at, item_count, payload_sha256, payload
+                FROM raw_batches WHERE station_id = @s ORDER BY id LIMIT 1
+                """;
+            for (var n = 1; n <= 40; n++) await c.ExecuteAsync(copy, new { s = a.StationId, n }, tx);
+            await c.ExecuteAsync(copy, new { s = b.StationId, n = 1 }, tx);
+            await tx.CommitAsync();
+        }
+        await fx.WaitProcessedAsync();
+
+        // B waits for at most one batch of A, not for the whole backlog.
+        var rank = await fx.QueryAsync<long>("""
+            SELECT count(*) FROM raw_batches a, (SELECT max(processed_at) AS t FROM raw_batches WHERE station_id = @b) bb
+            WHERE a.station_id = @a AND a.seq > 1 AND a.processed_at < bb.t
+            """, new { a = a.StationId, b = b.StationId });
+        Assert.True(rank <= 2, $"station B waited for {rank} batches of A");
     }
 }
