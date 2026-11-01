@@ -41,7 +41,24 @@ public sealed class UpdateCoordinator
     }
 
     public SemaphoreSlim Signal { get; } = new(0, 1);
-    public AgentUpdateReport? Report { get { lock (_gate) return _report; } }
+    /// <summary>
+    /// Latest update state. While "installing", result.json is re-read: the installer writes the final verdict
+    /// a few seconds after this (new) process has started.
+    /// </summary>
+    public AgentUpdateReport? Report
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_report is { Status: AgentUpdateStatus.Installing } current
+                    && UpdatePaths.Read<AgentUpdateReport>(_paths.ResultFile) is { } saved
+                    && saved.Version == current.Version && saved.Status != AgentUpdateStatus.Installing && saved.At >= current.At)
+                    _report = saved;
+                return _report;
+            }
+        }
+    }
 
     public void Offer(AgentUpdateOffer? offer)
     {

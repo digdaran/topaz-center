@@ -84,6 +84,11 @@ public sealed class AgentUpdateTests(CentralFixture fx) : IClassFixture<CentralF
         Assert.Null(await Heartbeat(old, "1.0.2", rid: null));
         Assert.Null(await Heartbeat(pilot, "1.2.0"));                       // already there
 
+        // A 1.2.1 agent kept reporting "installing" after it had been installed: the server reads that as done.
+        await Heartbeat(normal, "1.2.0", report: new AgentUpdateReport { Version = "1.2.0", Status = AgentUpdateStatus.Installing, At = DateTimeOffset.UtcNow.AddMinutes(-5) });
+        Assert.Equal("succeeded", await fx.QueryAsync<string>("SELECT status FROM agent_update_reports WHERE station_id = @id", new { id = normalSt.StationId }));
+        await fx.QueryAsync<int>("WITH d AS (DELETE FROM agent_update_reports WHERE station_id = @id RETURNING 1) SELECT count(*)::int FROM d", new { id = normalSt.StationId });
+
         // Files: station token required, only the package's own files.
         var anon = app.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.GetAsync("/api/v1/agent/updates/1.2.0/win-x64/manifest.json")).StatusCode);

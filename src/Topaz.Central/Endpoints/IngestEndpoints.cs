@@ -231,11 +231,16 @@ public static class IngestEndpoints
         // Self-update: remember the runtime and the reported state, then maybe offer the newest package.
         if (body.Update is { Version.Length: > 0 and <= 64 } u
             && u.Status is AgentUpdateStatus.Downloading or AgentUpdateStatus.Installing or AgentUpdateStatus.Succeeded or AgentUpdateStatus.Failed)
+        {
+            // An agent already running the version it reports as "installing" has finished (agent 1.2.1 never re-read the verdict).
+            var status = u.Status is AgentUpdateStatus.Downloading or AgentUpdateStatus.Installing && SemVer.Compare(body.AgentVersion, u.Version) >= 0
+                ? AgentUpdateStatus.Succeeded : u.Status;
             await conn.ExecuteAsync("""
                 INSERT INTO agent_update_reports (station_id, version, status, error, at) VALUES (@id, @v, @status, @error, @at)
                 ON CONFLICT (station_id, version) DO UPDATE SET status = EXCLUDED.status, error = EXCLUDED.error, at = EXCLUDED.at
                 WHERE agent_update_reports.at <= EXCLUDED.at
-                """, new { id = station.Id, v = u.Version, status = u.Status, error = u.Error is { Length: > 1000 } e ? e[..1000] : u.Error, at = u.At });
+                """, new { id = station.Id, v = u.Version, status, error = u.Error is { Length: > 1000 } e ? e[..1000] : u.Error, at = u.At });
+        }
         if (body.Rid is { Length: > 0 and <= 32 } rid)
             await conn.ExecuteAsync("UPDATE stations SET agent_rid = @rid WHERE id = @id", new { id = station.Id, rid });
         if (body.Host is { } host) await SaveHostAsync(conn, station.Id, host);

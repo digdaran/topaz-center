@@ -183,6 +183,20 @@ public sealed class UpdateTests : IDisposable
         Assert.False(await worker.TryUpdateAsync(new AgentUpdateOffer { Version = "1.0.0", Rid = Rid }, CancellationToken.None));
     }
 
+    [Fact]
+    public void New_version_picks_up_the_installers_verdict_after_start()
+    {
+        using var state = new StateStore(Path.Combine(_dir.Path, "state"));
+        var paths = new UpdatePaths(Path.Combine(_dir.Path, "state"));
+        var started = DateTimeOffset.UtcNow;
+        // As found by the new process on start: the installer still waits for it.
+        UpdatePaths.Write(paths.ResultFile, new AgentUpdateReport { Version = "1.2.1", Status = AgentUpdateStatus.Installing, At = started });
+        var coordinator = new UpdateCoordinator(state, paths);
+        Assert.Equal(AgentUpdateStatus.Installing, coordinator.Report!.Status);
+        UpdatePaths.Write(paths.ResultFile, new AgentUpdateReport { Version = "1.2.1", Status = AgentUpdateStatus.Succeeded, At = started.AddSeconds(5) });
+        Assert.Equal(AgentUpdateStatus.Succeeded, coordinator.Report!.Status);
+    }
+
     /// <summary>Stands in for the Windows service: "starting" it runs the (fake) new version, which may report itself healthy.</summary>
     private sealed class FakeService(Action onStart) : IServiceControl
     {
