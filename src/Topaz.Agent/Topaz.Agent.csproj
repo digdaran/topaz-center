@@ -16,6 +16,10 @@
     <!-- No console window on double click; console commands attach to the parent console (Setup/ConsoleAttach). -->
     <OutputType>WinExe</OutputType>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Segoe UI, 9.75pt</ApplicationDefaultFont>
+    <!-- WinForms runtime packs exist for Windows only -->
+    <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>agent.ico</ApplicationIcon>
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
