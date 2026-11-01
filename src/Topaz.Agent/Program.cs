@@ -67,7 +67,16 @@ var options = builder.Configuration.Get<AgentOptions>() ?? new AgentOptions();
 var configErrors = options.Validate().ToList();
 if (configErrors.Count > 0)
 {
-    Console.Error.WriteLine("Configuration errors:\n - " + string.Join("\n - ", configErrors));
+    var text = "Configuration errors:\n - " + string.Join("\n - ", configErrors);
+    Console.Error.WriteLine(text);
+    // A service has no console: leave the reason where people (and the setup) look.
+    try
+    {
+        var logs = Path.Combine(options.ResolveStateDirectory(), "logs");
+        Directory.CreateDirectory(logs);
+        File.AppendAllText(Path.Combine(logs, "startup-errors.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {text}{Environment.NewLine}");
+    }
+    catch (Exception) { /* nothing else to do */ }
     return 2;
 }
 

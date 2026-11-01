@@ -93,6 +93,8 @@ public sealed class SetupPlan
                    ?? JsonNode.Parse(defaultsJson, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })!.AsObject();
         JsonObject Section(string name) => root[name] as JsonObject ?? (JsonObject)(root[name] = new JsonObject());
         Section("Server")["Url"] = ServerUrl;
+        // Plain http only when the administrator typed it on purpose (test servers); https is the default.
+        Section("Server")["AllowInsecureHttp"] = ServerUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
         Section("Server").Remove("EnrollmentKey");
         Section("Station")["Name"] = StationName.Trim();
         if (!string.IsNullOrWhiteSpace(TimeZone)) Section("Station")["TimeZone"] = TimeZone;

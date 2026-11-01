@@ -136,8 +136,9 @@ public sealed class Installer(IMachine machine, ISetupProbe probe, Action<string
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or System.ServiceProcess.TimeoutException)
         {
-            Step("start", "Запуск службы", StepState.Failed, ex.Message);
-            return new SetupResult(SetupOutcome.Failed, connection, warnings, "Служба не запустилась: " + ex.Message);
+            var reason = ex.InnerException is { } inner ? $"{ex.Message} ({inner.Message})" : ex.Message;
+            Step("start", "Запуск службы", StepState.Failed, reason);
+            return new SetupResult(SetupOutcome.Failed, connection, warnings, "Служба не запустилась: " + reason);
         }
 
         Step("register", "Регистрация в Windows", StepState.Running);

@@ -202,6 +202,13 @@ jobs:
           if (Test-Path "$env:ProgramFiles\TopazAgent") { throw "program folder still there" }
           if (Test-Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\TopazCenterAgent) { throw "Programs and Features entry still there" }
           Write-Host "install / update / uninstall OK"
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sc.exe qc TopazAgent
+          Get-ChildItem "$env:ProgramData\TopazAgent\logs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName -Tail 30 }
+          Get-WinEvent -LogName Application -MaxEvents 15 -ErrorAction SilentlyContinue | Where-Object { $_.LevelDisplayName -in 'Error', 'Critical' } | Format-List TimeCreated, ProviderName, Message
+          Get-WinEvent -LogName System -MaxEvents 30 -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -eq 'Service Control Manager' } | Format-List TimeCreated, Message
       - name: Pictures of the setup window
         run: |
           $setup = (Get-ChildItem setup\*.exe)[0].FullName
