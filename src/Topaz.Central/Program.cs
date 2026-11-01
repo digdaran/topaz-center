@@ -28,7 +28,12 @@ var options = builder.Configuration.GetSection("Topaz").Get<CentralOptions>() ??
 
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings__Postgres is not set");
-builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString).Build());
+// Background work, ingestion, admin API: the system pool. The web UI uses its own pool restricted by row level security.
+builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(
+    new NpgsqlConnectionStringBuilder(connectionString) { Options = "-c app.scope=system" }.ConnectionString).Build());
+builder.Services.AddSingleton(_ => new UiDataSource(UiDb.BuildUiSource(connectionString)));
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<UiDb>();
 
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<StationAuthenticator>();
@@ -155,6 +160,7 @@ ui.MapUiMoney();
 ui.MapUiControl();
 ui.MapUiAgentUpdates();
 ui.MapUiRegistrations();
+ui.MapUiOrganizations();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>

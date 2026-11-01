@@ -9,7 +9,7 @@ namespace Topaz.Central.Ui;
 public sealed record TankSettingsBody(decimal MinLiters, decimal LeadTimeDays, decimal SafetyDays);
 public sealed record AlertStatusBody(string Status);
 public sealed record RuleBody(bool Enabled, decimal? Threshold, string? Severity);
-public sealed record ChannelBody(string Target, string? Title, string MinSeverity, bool DailyDigest);
+public sealed record ChannelBody(string Target, string? Title, string MinSeverity, bool DailyDigest, bool? Platform = null);
 
 /// <summary>Stage 4: fuel stock planning, alerts (anomalies), alert rules, notification channels.</summary>
 public static class ControlEndpoints
@@ -24,8 +24,10 @@ public static class ControlEndpoints
         ui.MapPost("/alerts/run", async (AnomalyDetector d, CancellationToken ct) => Results.Ok(new { found = await d.RunAsync(ct) })).RequireAuthorization(Policies.Owner);
 
         var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
-        owner.MapGet("/alert-rules", async (NpgsqlDataSource db) => { await using var c = await db.OpenConnectionAsync(); return Results.Ok(await c.QueryAsync("SELECT * FROM alert_rules ORDER BY sort")); });
+        owner.MapGet("/alert-rules", Rules);
         owner.MapPut("/alert-rules/{code}", SetRule);
+        owner.MapDelete("/alert-rules/{code}", ResetRule);
+        ui.MapPut("/alert-rules/{code}/default", SetDefaultRule).RequireAuthorization(Policies.Super);
         owner.MapGet("/notifications", Channels);
         owner.MapPost("/notifications", AddChannel);
         owner.MapDelete("/notifications/{id:long}", DeleteChannel);
@@ -34,7 +36,7 @@ public static class ControlEndpoints
 
     // ---------------------------------------------------------------- tanks
 
-    private static async Task<IResult> Tanks(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Tanks(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -72,7 +74,7 @@ public static class ControlEndpoints
         return Results.Ok(new { tanks = rows, history, receipts });
     }
 
-    private static async Task<IResult> SetTank(Guid station, long tank, TankSettingsBody body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> SetTank(Guid station, long tank, TankSettingsBody body, ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         if (!await scope.CanSeeAsync(user, station)) return Results.Forbid();
         if (body.MinLiters < 0 || body.LeadTimeDays is < 0 or > 60 || body.SafetyDays is < 0 or > 60) return Results.Problem(statusCode: 400, title: "Недопустимые значения");
@@ -88,13 +90,13 @@ public static class ControlEndpoints
 
     // ---------------------------------------------------------------- alerts
 
-    private static async Task<IResult> Alerts(HttpContext ctx, StationScope scope, NpgsqlDataSource db, string? status, string? severity, string? rule)
+    private static async Task<IResult> Alerts(HttpContext ctx, StationScope scope, UiDb db, string? status, string? severity, string? rule)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
         var f = fp!;
         // Alerts without a station (connection requests) are for owners and superadmins.
-        var owner = ctx.User.IsInRole(Roles.Owner) && ctx.Request.Query["stations"].Count == 0;
+        var owner = ctx.User.IsInRole(Roles.Superadmin) && ctx.Request.Query["stations"].Count == 0; // connection requests: platform only
         await using var c = await db.OpenConnectionAsync();
         var rows = await c.QueryAsync("""
             SELECT a.id, a.station_id, COALESCE(sn.station, 'Новая АЗС') AS station, a.rule_code, r.title AS rule_title, a.severity, a.title, a.details, a.value,
@@ -118,10 +120,10 @@ public static class ControlEndpoints
     }
 
     /// <summary>Counts for the menu badge and the overview.</summary>
-    private static async Task<IResult> Summary(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Summary(ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         var st = await scope.AllowedAsync(user);
-        var owner = user.IsInRole(Roles.Owner);
+        var owner = user.IsInRole(Roles.Superadmin); // alerts without a station (connection requests) are the platform's
         await using var c = await db.OpenConnectionAsync();
         var counts = await c.QuerySingleAsync("""
             SELECT count(*) FILTER (WHERE status = 'new') AS new, count(*) FILTER (WHERE status = 'new' AND severity = 'critical') AS critical
@@ -137,20 +139,68 @@ public static class ControlEndpoints
         return Results.Ok(new { counts, latest });
     }
 
-    private static async Task<IResult> SetStatus(long id, AlertStatusBody body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> SetStatus(long id, AlertStatusBody body, ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         if (body.Status is not ("new" or "seen" or "closed")) return Results.Problem(statusCode: 400, title: "status: new | seen | closed");
         await using var c = await db.OpenConnectionAsync();
         var found = (await c.QueryAsync<(long Id, Guid? Station)>("SELECT id, station_id FROM alerts WHERE id = @id", new { id })).ToList();
         if (found.Count == 0) return Results.NotFound();
-        if (found[0].Station is { } station ? !await scope.CanSeeAsync(user, station) : !user.IsInRole(Roles.Owner)) return Results.Forbid();
+        if (found[0].Station is { } station ? !await scope.CanSeeAsync(user, station) : !user.IsInRole(Roles.Superadmin)) return Results.NotFound();
         await c.ExecuteAsync("UPDATE alerts SET status = @s, status_by = @by WHERE id = @id", new { id, s = body.Status, by = user.Identity?.Name });
         return Results.NoContent();
     }
 
     // ---------------------------------------------------------------- rules and channels (owner)
 
-    private static async Task<IResult> SetRule(string code, RuleBody body, ClaimsPrincipal user, NpgsqlDataSource db)
+    /// <summary>Rules handled by the platform (not by organizations).</summary>
+    private static readonly string[] PlatformRules = ["station_registration", "agent_update_failed"];
+
+    /// <summary>Rules as the user's organization applies them: its override on top of the shared default.</summary>
+    private static async Task<IResult> Rules(ClaimsPrincipal user, UiDb db)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        var rows = await c.QueryAsync("""
+            SELECT r.code, r.title, r.description, r.unit, r.sort,
+                   COALESCE(o.enabled, r.enabled) AS enabled, COALESCE(o.threshold, r.threshold) AS threshold, COALESCE(o.severity, r.severity) AS severity,
+                   r.enabled AS default_enabled, r.threshold AS default_threshold, r.severity AS default_severity,
+                   o.code IS NOT NULL AS overridden, r.code = ANY(@platform) AS platform
+            FROM alert_rules r LEFT JOIN alert_rule_overrides o ON o.code = r.code AND o.organization_id = @org
+            WHERE @super OR NOT r.code = ANY(@platform)
+            ORDER BY r.sort
+            """, new { org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin), platform = PlatformRules });
+        return Results.Ok(rows);
+    }
+
+    /// <summary>The organization's own setting of a rule (platform rules: their defaults, superadmin only).</summary>
+    private static async Task<IResult> SetRule(string code, RuleBody body, ClaimsPrincipal user, UiDb db)
+    {
+        if (body.Severity is not null && !AnomalyDetector.SeverityRank.ContainsKey(body.Severity)) return Results.Problem(statusCode: 400, title: "severity: critical | warning | info");
+        if (PlatformRules.Contains(code)) return user.IsInRole(Roles.Superadmin) ? await SetDefaultRule(code, body, user, db) : Results.NotFound();
+        if (user.OrganizationId() is not { } org) return Results.Problem(statusCode: 400, title: "Выберите организацию");
+        await using var c = await db.OpenConnectionAsync();
+        if (!await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM alert_rules WHERE code = @code)", new { code })) return Results.NotFound();
+        await c.ExecuteAsync("""
+            INSERT INTO alert_rule_overrides (organization_id, code, enabled, threshold, severity)
+            SELECT @org, @code, @Enabled, CASE WHEN r.threshold IS NULL THEN NULL ELSE COALESCE(@Threshold, r.threshold) END, COALESCE(@Severity, r.severity)
+            FROM alert_rules r WHERE r.code = @code
+            ON CONFLICT (organization_id, code) DO UPDATE SET enabled = EXCLUDED.enabled,
+                threshold = COALESCE(@Threshold, alert_rule_overrides.threshold, EXCLUDED.threshold), severity = EXCLUDED.severity
+            """, new { org, code, body.Enabled, body.Threshold, body.Severity });
+        await Audit.WriteAsync(db, user, "alert_rule_updated", "rule:" + code, body);
+        return Results.NoContent();
+    }
+
+    /// <summary>Back to the shared default for this organization.</summary>
+    private static async Task<IResult> ResetRule(string code, ClaimsPrincipal user, UiDb db)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        await c.ExecuteAsync("DELETE FROM alert_rule_overrides WHERE organization_id = @org AND code = @code", new { org = user.OrganizationId(), code });
+        await Audit.WriteAsync(db, user, "alert_rule_reset", "rule:" + code, null);
+        return Results.NoContent();
+    }
+
+    /// <summary>Shared defaults (every organization without its own setting), superadmin only.</summary>
+    private static async Task<IResult> SetDefaultRule(string code, RuleBody body, ClaimsPrincipal user, UiDb db)
     {
         if (body.Severity is not null && !AnomalyDetector.SeverityRank.ContainsKey(body.Severity)) return Results.Problem(statusCode: 400, title: "severity: critical | warning | info");
         await using var c = await db.OpenConnectionAsync();
@@ -159,42 +209,52 @@ public static class ControlEndpoints
                 severity = COALESCE(@Severity, severity) WHERE code = @code
             """, new { code, body.Enabled, body.Threshold, body.Severity });
         if (n == 0) return Results.NotFound();
-        await Audit.WriteAsync(db, user, "alert_rule_updated", "rule:" + code, body);
+        await Audit.WritePlatformAsync(db.System, user, "alert_rule_default_updated", "rule:" + code, body);
         return Results.NoContent();
     }
 
-    private static async Task<IResult> Channels(NpgsqlDataSource db, IOptions<CentralOptions> options)
+    /// <summary>The organization's Telegram chats; a superadmin also sees the platform's own chats.</summary>
+    private static async Task<IResult> Channels(ClaimsPrincipal user, UiDb db, IOptions<CentralOptions> options)
     {
         await using var c = await db.OpenConnectionAsync();
-        var rows = await c.QueryAsync("SELECT id, kind, target, title, min_severity, daily_digest, enabled, last_digest, created_at FROM notification_channels ORDER BY id");
+        var rows = await c.QueryAsync("""
+            SELECT id, kind, target, title, min_severity, daily_digest, enabled, last_digest, created_at, organization_id IS NULL AS platform
+            FROM notification_channels WHERE organization_id = @org OR (organization_id IS NULL AND @super) ORDER BY organization_id IS NULL, id
+            """, new { org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin) });
         return Results.Ok(new { token_configured = !string.IsNullOrWhiteSpace(options.Value.TelegramBotToken), channels = rows });
     }
 
-    private static async Task<IResult> AddChannel(ChannelBody body, ClaimsPrincipal user, NpgsqlDataSource db)
+    private static async Task<IResult> AddChannel(ChannelBody body, ClaimsPrincipal user, UiDb db)
     {
         if (string.IsNullOrWhiteSpace(body.Target) || body.Target.Length > 64) return Results.Problem(statusCode: 400, title: "Укажите chat id Telegram");
         if (!AnomalyDetector.SeverityRank.ContainsKey(body.MinSeverity)) return Results.Problem(statusCode: 400, title: "min_severity: critical | warning | info");
+        var platform = body.Platform == true && user.IsInRole(Roles.Superadmin);
+        var org = platform ? null : user.OrganizationId();
+        if (!platform && org is null) return Results.Problem(statusCode: 400, title: "Выберите организацию");
         await using var c = await db.OpenConnectionAsync();
         var id = await c.ExecuteScalarAsync<long>(
-            "INSERT INTO notification_channels (target, title, min_severity, daily_digest) VALUES (@Target, @Title, @MinSeverity, @DailyDigest) RETURNING id",
-            new { Target = body.Target.Trim(), body.Title, body.MinSeverity, body.DailyDigest });
+            "INSERT INTO notification_channels (target, title, min_severity, daily_digest, organization_id) VALUES (@Target, @Title, @MinSeverity, @DailyDigest, @org) RETURNING id",
+            new { Target = body.Target.Trim(), body.Title, body.MinSeverity, body.DailyDigest, org });
         await Audit.WriteAsync(db, user, "channel_added", "channel:" + id, body);
         return Results.Ok(new { id });
     }
 
-    private static async Task<IResult> DeleteChannel(long id, ClaimsPrincipal user, NpgsqlDataSource db)
+    private const string OwnChannel = "id = @id AND (organization_id = @org OR (organization_id IS NULL AND @super))";
+
+    private static async Task<IResult> DeleteChannel(long id, ClaimsPrincipal user, UiDb db)
     {
         await using var c = await db.OpenConnectionAsync();
-        await c.ExecuteAsync("DELETE FROM notification_channels WHERE id = @id", new { id });
+        var n = await c.ExecuteAsync($"DELETE FROM notification_channels WHERE {OwnChannel}", new { id, org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin) });
+        if (n == 0) return Results.NotFound();
         await Audit.WriteAsync(db, user, "channel_deleted", "channel:" + id, null);
         return Results.NoContent();
     }
 
-    private static async Task<IResult> TestChannel(long id, NpgsqlDataSource db, AnomalyDetector detector, IOptions<CentralOptions> options, CancellationToken ct)
+    private static async Task<IResult> TestChannel(long id, ClaimsPrincipal user, UiDb db, AnomalyDetector detector, IOptions<CentralOptions> options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.Value.TelegramBotToken)) return Results.Problem(statusCode: 400, title: "Токен бота не задан (Topaz__TelegramBotToken)");
         await using var c = await db.OpenConnectionAsync();
-        var target = await c.QuerySingleOrDefaultAsync<string>("SELECT target FROM notification_channels WHERE id = @id", new { id });
+        var target = await c.QuerySingleOrDefaultAsync<string>($"SELECT target FROM notification_channels WHERE {OwnChannel}", new { id, org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin) });
         if (target is null) return Results.NotFound();
         var ok = await detector.SendAsync(options.Value.TelegramBotToken, target, "✅ Topaz Center: тестовое сообщение. Уведомления работают.", ct);
         return ok ? Results.NoContent() : Results.Problem(statusCode: 502, title: "Telegram не принял сообщение: проверьте chat id и что бот добавлен в чат");

@@ -17,7 +17,7 @@ public static class ShiftEndpoints
         AND (t.started_at AT TIME ZONE sn.time_zone)::date BETWEEN @from::date AND @to::date
         """;
 
-    private static async Task<IResult> List(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> List(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -36,7 +36,7 @@ public static class ShiftEndpoints
         return Results.Ok(rows);
     }
 
-    private static async Task<IResult> Operators(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Operators(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -65,7 +65,7 @@ public static class ShiftEndpoints
     }
 
     /// <summary>The Topaz shift report (reconciled with a real Topaz export, see docs/topaz-schema.md).</summary>
-    private static async Task<IResult> Card(Guid station, long session, HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Card(Guid station, long session, HttpContext ctx, StationScope scope, UiDb db)
     {
         if (!await scope.CanSeeAsync(ctx.User, station)) return Results.Forbid();
         await using var c = await db.OpenConnectionAsync(ctx.RequestAborted);

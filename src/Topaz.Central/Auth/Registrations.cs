@@ -111,10 +111,11 @@ public sealed class Registrations(NpgsqlDataSource db, StationAuthenticator auth
 
     // ---------------------------------------------------------------- administrator side
 
-    public enum Decision { Ok, NotFound, NotPending, WrongCode, NameTaken, NoStation }
+    public enum Decision { Ok, NotFound, NotPending, WrongCode, NameTaken, NoStation, NoOrganization }
 
     /// <summary>Approve as a new station (name) or as an existing one (reinstall / new PC, history kept).</summary>
-    public async Task<(Decision Result, Guid? StationId)> ApproveAsync(Guid id, string? code, Guid? existingStationId, string? newName, string by)
+    /// <param name="organizationId">For a new station; null is accepted only while there is exactly one organization.</param>
+    public async Task<(Decision Result, Guid? StationId)> ApproveAsync(Guid id, string? code, Guid? existingStationId, string? newName, string by, Guid? organizationId = null)
     {
         await using var c = await db.OpenConnectionAsync();
         await using var tx = await c.BeginTransactionAsync();
@@ -131,15 +132,18 @@ public sealed class Registrations(NpgsqlDataSource db, StationAuthenticator auth
         }
         else
         {
+            var orgs = (await c.QueryAsync<Guid>("SELECT id FROM organizations WHERE is_active", transaction: tx)).ToList();
+            var org = organizationId ?? (orgs.Count == 1 ? orgs[0] : (Guid?)null);
+            if (org is null || !orgs.Contains(org.Value)) return (Decision.NoOrganization, null);
             var name = (string.IsNullOrWhiteSpace(newName) ? reg.StationName : newName).Trim();
             if (name.Length is 0 or > 100) return (Decision.NameTaken, null);
             if (await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM stations WHERE name_normalized = @n)", new { n = name.ToLowerInvariant() }, tx))
                 return (Decision.NameTaken, null);
             stationId = Guid.NewGuid();
             await c.ExecuteAsync("""
-                INSERT INTO stations (id, name, name_normalized, status, machine_name, agent_version, last_ip)
-                SELECT @stationId, @name, @norm, 'active', machine_name, agent_version, ip FROM station_registrations WHERE id = @id
-                """, new { stationId, name, norm = name.ToLowerInvariant(), id }, tx);
+                INSERT INTO stations (id, name, name_normalized, status, machine_name, agent_version, last_ip, organization_id)
+                SELECT @stationId, @name, @norm, 'active', machine_name, agent_version, ip, @org FROM station_registrations WHERE id = @id
+                """, new { stationId, name, norm = name.ToLowerInvariant(), id, org }, tx);
         }
         await c.ExecuteAsync("""
             UPDATE station_registrations SET status = 'approved', station_id = @stationId, decided_by = @by, decided_at = now() WHERE id = @id

@@ -4,7 +4,7 @@ import { Alert, App, Button, Flex, Input, Modal, Popconfirm, Select, Space, Swit
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMe } from '../auth/auth';
-import { api, isOwner, useMeta } from '../api/client';
+import { api, isOwner, isSuper, useMeta } from '../api/client';
 import { dateTime } from '../lib/format';
 
 interface FuelType { code: string; name: string; sort: number; is_active: boolean; confirmed: number; suggested: number; in_use: boolean }
@@ -103,6 +103,7 @@ function Mapping() {
 /** The reference list itself: add, rename, reorder, hide, delete unused. */
 function Reference() {
   const refresh = useRefresh();
+  const edit = isSuper(useMe());
   const { message } = App.useApp();
   const { data, isLoading } = useQuery({ queryKey: ['fuel-types'], queryFn: () => api<FuelType[]>('/catalog/fuel-types') });
   const [adding, setAdding] = useState(false);
@@ -131,10 +132,11 @@ function Reference() {
       <Typography.Paragraph type="secondary">
         Эталонные виды топлива. Скрытый вид не предлагается для новых сопоставлений, но уже сопоставленное топливо остаётся в нём.
         Удалить можно только вид, который нигде не используется. «Прочее» — для нераспознанного топлива, его нельзя скрыть или удалить.
+        {!edit && ' Справочник общий для всех организаций, его ведёт администратор платформы.'}
       </Typography.Paragraph>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => { setName(''); setAdding(true); }} style={{ marginBottom: 12 }}>Добавить вид</Button>
+      {edit && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setName(''); setAdding(true); }} style={{ marginBottom: 12 }}>Добавить вид</Button>}
       <Table<FuelType> size="small" rowKey="code" loading={isLoading} dataSource={rows} pagination={false} scroll={{ x: 700 }}
-        columns={[
+        columns={edit ? [
           {
             title: 'Порядок', key: 'm', width: 90, render: (_, _r, i) => (
               <Space size={0}>
@@ -160,6 +162,10 @@ function Reference() {
               </Popconfirm>
             )),
           },
+        ] : [
+          { title: 'Название', dataIndex: 'name' },
+          { title: 'Сопоставлено', dataIndex: 'confirmed', width: 130, render: (v: number, r) => <>{v}{r.suggested > 0 && <Typography.Text type="secondary"> + {r.suggested} предл.</Typography.Text>}</> },
+          { title: 'Активен', dataIndex: 'is_active', width: 90, render: (v: boolean) => (v ? 'да' : 'скрыт') },
         ]} />
       <Modal open={adding} title="Новый вид топлива" okText="Добавить" cancelText="Отмена" onCancel={() => setAdding(false)} okButtonProps={{ disabled: !name.trim() }}
         onOk={async () => { if (await call(() => api('/catalog/fuel-types', { method: 'POST', body: { name: name.trim() } }))) setAdding(false); }}>

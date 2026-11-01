@@ -1,16 +1,17 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Badge, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd';
+import { App, Badge, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, isOwner, isSuper, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { PageTitle } from '../components/ui';
 import { FuelCatalog } from './FuelCatalog';
+import Organizations from './Organizations';
 import { dateTime } from '../lib/format';
 
-interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[] }
-interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string }
+interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
+interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string; organization?: string | null }
 
 const ROLE_LABEL: Record<string, string> = { superadmin: 'Суперадминистратор', owner: 'Владелец', manager: 'Управляющий', viewer: 'Просмотр' };
 const ROLE_HELP: Record<string, string> = {
@@ -30,18 +31,22 @@ function Users() {
   const [edit, setEdit] = useState<UserRow | 'new' | null>(null);
   const [form] = Form.useForm();
   const role = Form.useWatch('role', form);
+  const formOrg = Form.useWatch('organization_id', form);
+  const sup = isSuper(me);
+  // Stations offered are those of the organization on screen (a superadmin switches it in the header).
+  const stationsSelectable = !sup || !formOrg || formOrg === me.organization_id;
   const stationName = (id: string) => meta.data?.stations.find((s) => s.id === id)?.name ?? id.slice(0, 8);
 
   const open = (u: UserRow | 'new') => {
     setEdit(u);
     form.resetFields();
-    form.setFieldsValue(u === 'new' ? { role: 'manager', stations: [] } : { ...u, password: undefined });
+    form.setFieldsValue(u === 'new' ? { role: 'manager', stations: [], organization_id: me.organization_id } : { ...u, password: undefined });
   };
   const save = async () => {
     const v = await form.validateFields();
     try {
       if (edit === 'new') await api('/users', { method: 'POST', body: v });
-      else await api(`/users/${(edit as UserRow).id}`, { method: 'PATCH', body: { name: v.name, role: v.role, is_active: v.is_active, stations: v.stations, password: v.password || null } });
+      else await api(`/users/${(edit as UserRow).id}`, { method: 'PATCH', body: { name: v.name, role: v.role, is_active: v.is_active, stations: stationsSelectable ? v.stations : undefined, password: v.password || null, organization_id: sup ? v.organization_id : undefined } });
       message.success('Сохранено');
       setEdit(null);
       qc.invalidateQueries({ queryKey: ['users'] });
@@ -57,6 +62,7 @@ function Users() {
         size="small" rowKey="id" loading={isLoading} dataSource={data} pagination={false} scroll={{ x: 800 }}
         onRow={(u) => ({ onClick: () => open(u), style: { cursor: 'pointer' } })}
         columns={[
+          ...(sup ? [{ title: 'Организация', dataIndex: 'organization', render: (v: string | null) => v ?? <Tag color="blue">платформа</Tag> }] : []),
           { title: 'Логин', dataIndex: 'login' },
           { title: 'Имя', dataIndex: 'name' },
           { title: 'Роль', dataIndex: 'role', render: (v) => ROLE_LABEL[v] },
@@ -70,9 +76,18 @@ function Users() {
           {edit === 'new' && <Form.Item name="login" label="Логин" rules={[{ required: true, max: 64 }]}><Input autoComplete="off" /></Form.Item>}
           <Form.Item name="name" label="Имя" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="role" label="Роль" extra={role && ROLE_HELP[role]}>
-            <Select disabled={edit !== 'new' && (edit as UserRow)?.id === me.id} options={Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label }))} />
+            <Select disabled={edit !== 'new' && (edit as UserRow)?.id === me.id}
+              options={Object.entries(ROLE_LABEL).filter(([value]) => sup || value !== 'superadmin').map(([value, label]) => ({ value, label }))} />
           </Form.Item>
-          {role !== 'owner' && role !== 'superadmin' && (
+          {sup && role !== 'superadmin' && (
+            <Form.Item name="organization_id" label="Организация" rules={[{ required: true, message: 'Выберите организацию' }]}>
+              <Select options={(me.organizations ?? []).map((o) => ({ value: o.id, label: o.name }))} />
+            </Form.Item>
+          )}
+          {role !== 'owner' && role !== 'superadmin' && !stationsSelectable && (
+            <Typography.Paragraph type="secondary">Чтобы выдать доступ к АЗС другой организации, переключитесь на неё в шапке.</Typography.Paragraph>
+          )}
+          {role !== 'owner' && role !== 'superadmin' && stationsSelectable && (
             <Form.Item name="stations" label="Доступ к АЗС">
               <Select mode="multiple" optionFilterProp="label" options={meta.data?.stations.map((s) => ({ value: s.id, label: s.name }))} />
             </Form.Item>
@@ -94,6 +109,7 @@ function AuditLog() {
     <Table<AuditRow> size="small" rowKey="id" loading={isLoading} dataSource={data} pagination={{ pageSize: 50 }} scroll={{ x: 800 }}
       columns={[
         { title: 'Когда', dataIndex: 'at', render: (v) => dateTime(v), width: 150 },
+        ...(isSuper(useMe()) ? [{ title: 'Организация', dataIndex: 'organization', width: 140, render: (v: string | null) => v ?? '—' }] : []),
         { title: 'Кто', dataIndex: 'user_login', width: 140 },
         { title: 'Действие', dataIndex: 'action', width: 160 },
         { title: 'Объект', dataIndex: 'entity', width: 200 },
@@ -136,12 +152,13 @@ export default function SettingsPage() {
   const me = useMe();
   const navigate = useNavigate();
   const location = useLocation();
-  const tab = location.pathname.split('/')[2] ?? (isSuper(me) ? 'users' : isOwner(me) ? 'fuels' : 'profile');
+  const tab = location.pathname.split('/')[2] ?? (isSuper(me) ? 'organizations' : isOwner(me) ? 'users' : 'profile');
   const unmapped = useMeta().data?.unmapped_fuels ?? 0;
   const items = [
-    ...(isSuper(me) ? [{ key: 'users', label: 'Пользователи', children: <Users /> }] : []),
+    ...(isSuper(me) ? [{ key: 'organizations', label: 'Организации', children: <Organizations /> }] : []),
+    ...(isOwner(me) ? [{ key: 'users', label: 'Пользователи', children: <Users /> }] : []),
     ...(isOwner(me) ? [{ key: 'fuels', label: <>Виды топлива {unmapped > 0 && <Badge count={unmapped} color="orange" size="small" />}</>, children: <FuelCatalog /> }] : []),
-    ...(isSuper(me) ? [{ key: 'audit', label: 'Журнал действий', children: <AuditLog /> }] : []),
+    ...(isOwner(me) ? [{ key: 'audit', label: 'Журнал действий', children: <AuditLog /> }] : []),
     { key: 'profile', label: 'Мой пароль', children: <Profile /> },
   ];
   return (

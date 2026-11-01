@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Col, Descriptions, Empty, Form, Input, Modal, Radio, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, isOwner, useMeta } from '../api/client';
+import { api, isSuper, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { QueryState } from '../components/ui';
 import { dateTime } from '../lib/format';
@@ -38,6 +38,7 @@ export default function StationRequests() {
   const qc = useQueryClient();
   const { message } = App.useApp();
   const meta = useMeta();
+  const me = useMe();
   const { data, error, isLoading } = useQuery({ queryKey: ['registrations'], queryFn: () => api<Data>('/registrations'), refetchInterval: 15_000 });
   const [approving, setApproving] = useState<Request | null>(null);
   const [rejecting, setRejecting] = useState<Request | null>(null);
@@ -49,7 +50,7 @@ export default function StationRequests() {
   const approve = async () => {
     const v = await form.validateFields();
     try {
-      await api(`/registrations/${approving!.id}/approve`, { method: 'POST', body: { code: v.code, ...(v.mode === 'existing' ? { station_id: v.station_id } : { station_name: v.station_name }) } });
+      await api(`/registrations/${approving!.id}/approve`, { method: 'POST', body: { code: v.code, ...(v.mode === 'existing' ? { station_id: v.station_id } : { station_name: v.station_name, organization_id: v.organization_id }) } });
       message.success('АЗС подключена. Агент получит доступ в течение минуты и отправит накопленные данные.');
       setApproving(null);
       refresh();
@@ -97,7 +98,7 @@ export default function StationRequests() {
                       <Space wrap style={{ marginTop: 8 }}>
                         <Button type="primary" icon={<CheckOutlined />} onClick={() => {
                           setApproving(r);
-                          form.setFieldsValue({ code: '', mode: r.previous_station_id ? 'existing' : 'new', station_name: r.station_name, station_id: r.previous_station_id ?? undefined });
+                          form.setFieldsValue({ code: '', mode: r.previous_station_id ? 'existing' : 'new', station_name: r.station_name, station_id: r.previous_station_id ?? undefined, organization_id: me.organization_id ?? undefined });
                         }}>Одобрить…</Button>
                         <Button icon={<CloseOutlined />} onClick={() => { setRejecting(r); rejectForm.setFieldsValue({ block_ip: false, note: '' }); }}>Отклонить…</Button>
                       </Space>
@@ -133,11 +134,17 @@ export default function StationRequests() {
               </Form.Item>
               {mode === 'existing' ? (
                 <Form.Item name="station_id" label="Какая АЗС" rules={[{ required: true, message: 'Выберите АЗС' }]}
-                  extra="История АЗС сохранится; прежний доступ перестанет работать, когда новый агент подключится.">
+                  extra="Список — АЗС организации, выбранной в шапке. История АЗС сохранится; прежний доступ перестанет работать, когда новый агент подключится.">
                   <Select showSearch optionFilterProp="label" options={(meta.data?.stations ?? []).map((s) => ({ value: s.id, label: s.name }))} />
                 </Form.Item>
               ) : (
-                <Form.Item name="station_name" label="Название АЗС" rules={[{ required: true, max: 100 }]}><Input /></Form.Item>
+                <>
+                  <Form.Item name="station_name" label="Название АЗС" rules={[{ required: true, max: 100 }]}><Input /></Form.Item>
+                  <Form.Item name="organization_id" label="Организация (хозяин АЗС)" rules={[{ required: true, message: 'Выберите организацию' }]}
+                    extra="Данные АЗС увидят только пользователи этой организации.">
+                    <Select options={(me.organizations ?? []).filter((o) => o.is_active).map((o) => ({ value: o.id, label: o.name }))} />
+                  </Form.Item>
+                </>
               )}
             </Form>
           </Modal>
@@ -159,7 +166,7 @@ export default function StationRequests() {
 export function PendingStationsBanner() {
   const me = useMe();
   const n = useMeta().data?.pending_registrations ?? 0;
-  if (!isOwner(me) || n === 0) return null;
+  if (!isSuper(me) || n === 0) return null;
   return (
     <Alert type="warning" showIcon style={{ marginBottom: 12 }}
       message={<>АЗС ожидают подключения: {n}. Агенты уже установлены и копят данные. <Link to="/stations?tab=connect">Открыть заявки</Link></>} />

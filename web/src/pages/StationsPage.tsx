@@ -88,9 +88,31 @@ export default function StationsPage() {
   const [edit, setEdit] = useState<StationRow | null>(null);
   const meta = useMeta();
   const [params, setParams] = useSearchParams();
-  const requests = isOwner(me) ? meta.data?.pending_registrations ?? 0 : 0;
+  const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
   const tab = params.get('tab') ?? (requests > 0 ? 'connect' : 'compare');
   const { modal } = App.useApp();
+
+  /** The station changes owner: its whole history moves with it (superadmin). */
+  const move = (r: StationRow) => {
+    let target: string | undefined;
+    modal.confirm({
+      title: `Передать «${r.name}» другой организации`,
+      content: (
+        <>
+          <p>Вся история АЗС перейдёт к новой организации; её управляющие и наблюдатели в текущей организации потеряют доступ.</p>
+          <Select style={{ width: '100%' }} placeholder="Организация" onChange={(v) => { target = v; }}
+            options={(me.organizations ?? []).filter((o) => o.id !== me.organization_id).map((o) => ({ value: o.id, label: o.name }))} />
+        </>
+      ),
+      okText: 'Передать', cancelText: 'Отмена',
+      onOk: async () => {
+        if (!target) { message.error('Выберите организацию'); throw new Error('no target'); }
+        await api(`/stations/${r.id}/organization`, { method: 'POST', body: { organization_id: target } });
+        message.success('АЗС передана');
+        qc.invalidateQueries();
+      },
+    });
+  };
 
   const access = (r: StationRow, action: 'block' | 'unblock' | 'reissue') => {
     const text = {
@@ -160,6 +182,7 @@ export default function StationsPage() {
                           ? { key: 'unblock', label: 'Разблокировать', onClick: () => access(r, 'unblock') }
                           : { key: 'block', label: 'Заблокировать', danger: true, onClick: () => access(r, 'block') },
                         { key: 'reissue', label: 'Перевыпустить доступ', onClick: () => access(r, 'reissue') },
+                        { key: 'move', label: 'Передать другой организации…', onClick: () => move(r) },
                       ],
                     }}><Button type="text" icon={<MoreOutlined />} aria-label="доступ АЗС" /></Dropdown>
                   )}
@@ -170,7 +193,7 @@ export default function StationsPage() {
         />
       </QueryState>
         ) },
-        ...(isOwner(me) ? [{ key: 'connect', label: <>Подключение {requests > 0 && <Badge count={requests} size="small" />}</>, children: <StationRequests /> }] : []),
+        ...(isSuper(me) ? [{ key: 'connect', label: <>Подключение {requests > 0 && <Badge count={requests} size="small" />}</>, children: <StationRequests /> }] : []),
         ...(isSuper(me) ? [{ key: 'updates', label: 'Обновление агентов', children: <AgentUpdates /> }] : []),
       ]} />
       <Modal open={!!edit} title={`АЗС: ${edit?.topaz_name}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>

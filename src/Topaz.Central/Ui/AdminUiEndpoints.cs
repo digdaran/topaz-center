@@ -5,8 +5,8 @@ using Npgsql;
 namespace Topaz.Central.Ui;
 
 public sealed record StationUpdate(string? DisplayName, string? TimeZone, string? Region, string? GroupName, string? Address);
-public sealed record UserCreate(string Login, string Name, string Role, string Password, Guid[]? Stations);
-public sealed record UserUpdate(string? Name, string? Role, bool? IsActive, Guid[]? Stations, string? Password);
+public sealed record UserCreate(string Login, string Name, string Role, string Password, Guid[]? Stations, Guid? OrganizationId = null);
+public sealed record UserUpdate(string? Name, string? Role, bool? IsActive, Guid[]? Stations, string? Password, Guid? OrganizationId = null);
 
 /// <summary>Meta for filters, station monitoring/settings, user management, audit log.</summary>
 public static class AdminUiEndpoints
@@ -17,21 +17,25 @@ public static class AdminUiEndpoints
         ui.MapGet("/stations", Stations);
         ui.MapPatch("/stations/{id:guid}", UpdateStation).RequireAuthorization(Policies.Owner);
 
-        var super = ui.MapGroup("").RequireAuthorization(Policies.Super);
-        super.MapGet("/users", ListUsers);
-        super.MapPost("/users", CreateUser);
-        super.MapPatch("/users/{id:guid}", UpdateUser);
-        super.MapGet("/audit", (NpgsqlDataSource db, int? limit) => QueryList(db,
-            "SELECT id, user_login, action, entity, details, at FROM audit_log ORDER BY id DESC LIMIT @limit", new { limit = Math.Clamp(limit ?? 200, 1, 2000) }));
+        // An owner manages the users of the own organization; a superadmin manages everyone.
+        var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
+        owner.MapGet("/users", ListUsers);
+        owner.MapPost("/users", CreateUser);
+        owner.MapPatch("/users/{id:guid}", UpdateUser);
+        owner.MapGet("/audit", (ClaimsPrincipal user, UiDb db, int? limit) => QueryList(db, """
+            SELECT a.id, a.user_login, a.action, a.entity, a.details, a.at, o.name AS organization
+            FROM audit_log a LEFT JOIN organizations o ON o.id = a.organization_id
+            WHERE @super OR a.organization_id = @org ORDER BY a.id DESC LIMIT @limit
+            """, new { super = user.IsInRole(Roles.Superadmin), org = user.OrganizationId(), limit = Math.Clamp(limit ?? 200, 1, 2000) }));
     }
 
-    private static async Task<IResult> QueryList(NpgsqlDataSource db, string sql, object args)
+    private static async Task<IResult> QueryList(UiDb db, string sql, object args)
     {
         await using var c = await db.OpenConnectionAsync();
         return Results.Ok(await c.QueryAsync(sql, args));
     }
 
-    private static async Task<IResult> Meta(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Meta(ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         var st = await scope.AllowedAsync(user);
         await using var c = await db.OpenConnectionAsync();
@@ -49,11 +53,12 @@ public static class AdminUiEndpoints
             FROM fuel_types ft ORDER BY ft.sort, ft.name
             """, new { st });
         var unmapped = await FuelCatalogEndpoints.UnconfirmedCountAsync(c, st);
-        var pendingRegistrations = user.IsInRole(Roles.Owner) ? await RegistrationUiEndpoints.PendingCountAsync(c) : 0;
+        // Connection requests belong to no organization yet: the superadmin's.
+        var pendingRegistrations = user.IsInRole(Roles.Superadmin) ? await RegistrationUiEndpoints.PendingCountAsync(db.System) : 0;
         return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, pending_registrations = pendingRegistrations, item_groups = groups, payment_modes = paymentModes, data_range = range });
     }
 
-    private static async Task<IResult> Stations(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Stations(ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         var st = await scope.AllowedAsync(user);
         await using var c = await db.OpenConnectionAsync();
@@ -80,8 +85,9 @@ public static class AdminUiEndpoints
         return Results.Ok(rows);
     }
 
-    private static async Task<IResult> UpdateStation(Guid id, StationUpdate body, ClaimsPrincipal user, NpgsqlDataSource db, Topaz.Central.Processing.RollupRefresher rollups)
+    private static async Task<IResult> UpdateStation(Guid id, StationUpdate body, ClaimsPrincipal user, UiDb db, StationScope scope, Topaz.Central.Processing.RollupRefresher rollups)
     {
+        if (!await scope.CanSeeAsync(user, id)) return Results.NotFound();
         await using var c = await db.OpenConnectionAsync();
         if (body.TimeZone is { Length: > 0 } tz && !await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = @tz)", new { tz }))
             return Results.Problem(statusCode: 400, title: $"Неизвестный часовой пояс {tz}");
@@ -101,27 +107,47 @@ public static class AdminUiEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> ListUsers(NpgsqlDataSource db)
+    private static async Task<IResult> ListUsers(ClaimsPrincipal user, UiDb db)
     {
         await using var c = await db.OpenConnectionAsync();
         var rows = await c.QueryAsync("""
-            SELECT u.id, u.login, u.name, u.role, u.is_active, u.created_at, u.last_login_at, u.locked_until,
+            SELECT u.id, u.login, u.name, u.role, u.is_active, u.created_at, u.last_login_at, u.locked_until, u.organization_id, o.name AS organization,
                    COALESCE(array_agg(us.station_id) FILTER (WHERE us.station_id IS NOT NULL), '{}') AS stations
-            FROM users u LEFT JOIN user_stations us ON us.user_id = u.id
-            GROUP BY u.id ORDER BY u.login
-            """);
+            FROM users u LEFT JOIN user_stations us ON us.user_id = u.id LEFT JOIN organizations o ON o.id = u.organization_id
+            WHERE @super OR u.organization_id = @org
+            GROUP BY u.id, o.name ORDER BY o.name NULLS FIRST, u.login
+            """, new { super = user.IsInRole(Roles.Superadmin), org = user.OrganizationId() });
         return Results.Ok(rows);
     }
 
-    private static async Task<IResult> CreateUser(UserCreate body, ClaimsPrincipal user, UserService users, NpgsqlDataSource db)
+    /// <summary>Who may give which role: an owner only within the own organization and never a superadmin.</summary>
+    private static string? CheckRole(ClaimsPrincipal user, string role) =>
+        !Roles.All.Contains(role) ? "Роль: superadmin, owner, manager или viewer"
+        : role == Roles.Superadmin && !user.IsInRole(Roles.Superadmin) ? "Назначить суперадминистратора может только суперадминистратор"
+        : null;
+
+    /// <summary>Stations given to a user must belong to that user's organization.</summary>
+    private static async Task<bool> StationsBelongAsync(NpgsqlConnection c, Guid[]? stations, Guid? org) =>
+        stations is not { Length: > 0 } || org is not null && await c.ExecuteScalarAsync<int>(
+            "SELECT count(*) FROM stations WHERE id = ANY(@stations) AND organization_id = @org", new { stations, org }) == stations.Distinct().Count();
+
+    private static async Task<IResult> CreateUser(UserCreate body, ClaimsPrincipal user, UserService users, UiDb db)
     {
         if (string.IsNullOrWhiteSpace(body.Login) || body.Login.Trim().Length > 64) return Results.Problem(statusCode: 400, title: "Логин: от 1 до 64 символов");
-        if (!Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: superadmin, owner, manager или viewer");
+        if (CheckRole(user, body.Role) is { } roleError) return Results.Problem(statusCode: 400, title: roleError);
         if (UserService.ValidatePassword(body.Password) is { } err) return Results.Problem(statusCode: 400, title: err);
+        var org = body.Role == Roles.Superadmin ? null : user.IsInRole(Roles.Superadmin) ? body.OrganizationId ?? user.OrganizationId() : user.OrganizationId();
+        if (body.Role != Roles.Superadmin && org is null) return Results.Problem(statusCode: 400, title: "Укажите организацию");
+        await using (var c = await db.System.OpenConnectionAsync())
+        {
+            if (org is not null && !await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM organizations WHERE id = @org)", new { org }))
+                return Results.Problem(statusCode: 400, title: "Организация не найдена");
+            if (!await StationsBelongAsync(c, body.Stations, org)) return Results.Problem(statusCode: 400, title: "АЗС должны принадлежать организации пользователя");
+        }
         try
         {
-            var id = await users.CreateAsync(body.Login, string.IsNullOrWhiteSpace(body.Name) ? body.Login : body.Name, body.Role, body.Password, body.Stations);
-            await Audit.WriteAsync(db, user, "user_created", "user:" + id, new { body.Login, body.Role, body.Stations });
+            var id = await users.CreateAsync(body.Login, string.IsNullOrWhiteSpace(body.Name) ? body.Login : body.Name, body.Role, body.Password, body.Stations, org);
+            await Audit.WriteAsync(db.System, user.UserId(), user.Identity?.Name, "user_created", "user:" + id, new { body.Login, body.Role, body.Stations }, org);
             return Results.Ok(new { id });
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
@@ -130,40 +156,47 @@ public static class AdminUiEndpoints
         }
     }
 
-    private static async Task<IResult> UpdateUser(Guid id, UserUpdate body, ClaimsPrincipal user, UserService users, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> UpdateUser(Guid id, UserUpdate body, ClaimsPrincipal user, UserService users, StationScope scope, UiDb db)
     {
-        if (body.Role is not null && !Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: superadmin, owner, manager или viewer");
+        if (body.Role is not null && CheckRole(user, body.Role) is { } roleError) return Results.Problem(statusCode: 400, title: roleError);
         if (body.Password is not null && UserService.ValidatePassword(body.Password) is { } err) return Results.Problem(statusCode: 400, title: err);
         if (id == user.UserId() && body.IsActive == false) return Results.Problem(statusCode: 400, title: "Нельзя отключить себя");
 
-        await using var c = await db.OpenConnectionAsync();
+        var super = user.IsInRole(Roles.Superadmin);
+        await using var c = await db.System.OpenConnectionAsync();
         await using var tx = await c.BeginTransactionAsync();
-        // There must always be an active superadmin: nobody else can connect stations or manage users.
-        var losesSuper = body.IsActive == false || (body.Role is not null && body.Role != Roles.Superadmin);
-        if (losesSuper && await c.ExecuteScalarAsync<bool>("""
-                SELECT role = 'superadmin' AND is_active
-                   AND NOT EXISTS (SELECT 1 FROM users o WHERE o.role = 'superadmin' AND o.is_active AND o.id <> @id)
-                FROM users WHERE id = @id FOR UPDATE
-                """, new { id }, tx))
+        var target = await c.QuerySingleOrDefaultAsync<(string Role, Guid? Org)?>("SELECT role, organization_id FROM users WHERE id = @id FOR UPDATE", new { id }, tx);
+        // An owner sees only the own organization's users, and never superadmins.
+        if (target is null || (!super && (target.Value.Org != user.OrganizationId() || target.Value.Role == Roles.Superadmin))) return Results.NotFound();
+        var newRole = body.Role ?? target.Value.Role;
+        var newOrg = newRole == Roles.Superadmin ? null : super ? body.OrganizationId ?? target.Value.Org ?? user.OrganizationId() : target.Value.Org;
+        if (newRole != Roles.Superadmin && newOrg is null) return Results.Problem(statusCode: 400, title: "Укажите организацию");
+        if (!await StationsBelongAsync(c, body.Stations, newOrg)) return Results.Problem(statusCode: 400, title: "АЗС должны принадлежать организации пользователя");
+
+        // There must always be an active superadmin: nobody else can connect stations or manage organizations.
+        var losesSuper = target.Value.Role == Roles.Superadmin && (body.IsActive == false || newRole != Roles.Superadmin);
+        if (losesSuper && !await c.ExecuteScalarAsync<bool>(
+                "SELECT EXISTS (SELECT 1 FROM users o WHERE o.role = 'superadmin' AND o.is_active AND o.id <> @id)", new { id }, tx))
             return Results.Problem(statusCode: 400, title: "Это последний суперадминистратор: сначала назначьте другого");
-        var n = await c.ExecuteAsync("""
-            UPDATE users SET name = COALESCE(@Name, name), role = COALESCE(@Role, role), is_active = COALESCE(@IsActive, is_active),
+
+        await c.ExecuteAsync("""
+            UPDATE users SET name = COALESCE(@Name, name), role = @newRole, organization_id = @newOrg, is_active = COALESCE(@IsActive, is_active),
                 password_hash = COALESCE(@hash, password_hash), failed_logins = CASE WHEN @hash IS NULL THEN failed_logins ELSE 0 END,
                 locked_until = CASE WHEN @hash IS NULL THEN locked_until ELSE NULL END,
                 security_stamp = @stamp
             WHERE id = @id
-            """, new { id, body.Name, body.Role, body.IsActive, hash = body.Password is null ? null : UserService.HashPassword(body.Password), stamp = Guid.NewGuid() }, tx);
-        if (n == 0) return Results.NotFound();
-        if (body.Stations is not null)
+            """, new { id, body.Name, newRole, newOrg, body.IsActive, hash = body.Password is null ? null : UserService.HashPassword(body.Password), stamp = Guid.NewGuid() }, tx);
+        if (body.Stations is not null || newOrg != target.Value.Org)
         {
             await c.ExecuteAsync("DELETE FROM user_stations WHERE user_id = @id", new { id }, tx);
-            foreach (var s in body.Stations.Distinct())
-                await c.ExecuteAsync("INSERT INTO user_stations (user_id, station_id) SELECT @id, @s WHERE EXISTS (SELECT 1 FROM stations WHERE id = @s)", new { id, s }, tx);
+            foreach (var s in (body.Stations ?? []).Distinct())
+                await c.ExecuteAsync("INSERT INTO user_stations (user_id, station_id) VALUES (@id, @s)", new { id, s }, tx);
         }
         await tx.CommitAsync();
         users.Forget(id);
         scope.Forget(id);
-        await Audit.WriteAsync(db, user, "user_updated", "user:" + id, new { body.Name, body.Role, body.IsActive, body.Stations, password_changed = body.Password is not null });
+        await Audit.WriteAsync(db.System, user.UserId(), user.Identity?.Name, "user_updated", "user:" + id,
+            new { body.Name, body.Role, body.IsActive, body.Stations, organization_id = newOrg, password_changed = body.Password is not null }, newOrg);
         return Results.NoContent();
     }
 }

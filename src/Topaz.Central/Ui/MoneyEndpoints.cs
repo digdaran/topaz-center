@@ -32,7 +32,7 @@ public static partial class MoneyEndpoints
 
     // ---------------------------------------------------------------- finance
 
-    private static async Task<IResult> Finance(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Finance(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -115,7 +115,7 @@ public static partial class MoneyEndpoints
 
     // ---------------------------------------------------------------- fuel costs
 
-    private static async Task<IResult> FuelCosts(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> FuelCosts(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -150,7 +150,7 @@ public static partial class MoneyEndpoints
         return Results.Ok(new { receipts, costs, fuels });
     }
 
-    private static async Task<IResult> AddFuelCost(FuelCostBody body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, RollupRefresher rollups)
+    private static async Task<IResult> AddFuelCost(FuelCostBody body, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         if (!await scope.CanSeeAsync(user, body.StationId)) return Results.Forbid();
         if (body.PricePerLiter is <= 0 or > 10_000) return Results.Problem(statusCode: 400, title: "Цена за литр должна быть больше 0");
@@ -183,7 +183,7 @@ public static partial class MoneyEndpoints
         return Results.Ok(new { stations = targets.Count });
     }
 
-    private static async Task<IResult> DeleteFuelCost(long id, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, RollupRefresher rollups)
+    private static async Task<IResult> DeleteFuelCost(long id, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         await using var c = await db.OpenConnectionAsync();
         var station = await c.QuerySingleOrDefaultAsync<Guid?>("SELECT station_id FROM fuel_costs WHERE id = @id", new { id });
@@ -197,7 +197,7 @@ public static partial class MoneyEndpoints
 
     // ---------------------------------------------------------------- item costs
 
-    private static async Task<IResult> ItemCosts(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> ItemCosts(HttpContext ctx, StationScope scope, UiDb db)
     {
         var st = await scope.AllowedAsync(ctx.User);
         await using var c = await db.OpenConnectionAsync();
@@ -212,22 +212,22 @@ public static partial class MoneyEndpoints
                 WHERE l.station_id = ANY(@st) AND r.doc_at > now() - interval '60 days' GROUP BY 1),
             cost AS (
                 SELECT DISTINCT ON (item_key) item_key, id AS cost_id, cost, valid_from, station_id AS cost_station
-                FROM item_costs WHERE station_id IS NULL OR station_id = ANY(@st)
+                FROM item_costs WHERE (station_id IS NULL AND organization_id = @org) OR station_id = ANY(@st)
                 ORDER BY item_key, valid_from DESC, (station_id IS NULL))
             SELECT keys.*, price.retail_price, cost.cost_id, cost.cost, cost.valid_from, cost.cost_station,
                    round((price.retail_price - cost.cost) / NULLIF(cost.cost, 0), 4) AS markup
             FROM keys LEFT JOIN price USING (item_key) LEFT JOIN cost USING (item_key)
             ORDER BY keys.group_name NULLS LAST, keys.name
-            """, new { st });
+            """, new { st, org = ctx.User.OrganizationId() });
         var history = await c.QueryAsync("""
             SELECT ic.id, ic.item_key, ic.station_id, sn.station, ic.valid_from, ic.cost, ic.comment, ic.created_by, ic.created_at
             FROM item_costs ic LEFT JOIN v_station_names sn ON sn.station_id = ic.station_id
-            WHERE ic.station_id IS NULL OR ic.station_id = ANY(@st) ORDER BY ic.created_at DESC LIMIT 500
-            """, new { st });
+            WHERE (ic.station_id IS NULL AND ic.organization_id = @org) OR ic.station_id = ANY(@st) ORDER BY ic.created_at DESC LIMIT 500
+            """, new { st, org = ctx.User.OrganizationId() });
         return Results.Ok(new { items, history });
     }
 
-    private static async Task<IResult> AddItemCost(ItemCostBody body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, RollupRefresher rollups)
+    private static async Task<IResult> AddItemCost(ItemCostBody body, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         if (body.StationId is null ? !user.IsInRole(Roles.Owner) : !await scope.CanSeeAsync(user, body.StationId.Value))
             return Results.Problem(statusCode: 403, title: "Цену для всех АЗС может задать только владелец");
@@ -246,7 +246,7 @@ public static partial class MoneyEndpoints
     /// CSV ("штрихкод или название; цена[; дата]", separator ; or tab, decimal comma or point) → item costs.
     /// Rows are matched to item keys by barcode, else by normalized name; unmatched rows are reported back.
     /// </summary>
-    private static async Task<IResult> ImportItemCosts(ItemCostImport body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, RollupRefresher rollups)
+    private static async Task<IResult> ImportItemCosts(ItemCostImport body, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         if (body.StationId is null ? !user.IsInRole(Roles.Owner) : !await scope.CanSeeAsync(user, body.StationId.Value))
             return Results.Problem(statusCode: 403, title: "Цены для всех АЗС может загрузить только владелец");
@@ -293,23 +293,26 @@ public static partial class MoneyEndpoints
         DateTimeOffset from, string? comment, ClaimsPrincipal user, Guid[] allowed)
     {
         foreach (var (key, cost) in rows)
-            await c.ExecuteAsync("INSERT INTO item_costs (station_id, item_key, valid_from, cost, comment, created_by) VALUES (@station, @key, @from, @cost, @comment, @by)",
-                new { station, key, from = from.ToUniversalTime(), cost, comment, by = user.Identity?.Name }, tx);
-        // Margins of every affected station are recomputed (all of them for an "all stations" price).
+            await c.ExecuteAsync("""
+                INSERT INTO item_costs (station_id, item_key, valid_from, cost, comment, created_by, organization_id)
+                VALUES (@station, @key, @from, @cost, @comment, @by, @org)
+                """, new { station, key, from = from.ToUniversalTime(), cost, comment, by = user.Identity?.Name, org = user.OrganizationId() }, tx);
+        // Margins of every affected station are recomputed (all stations of the organization for an "all stations" price).
         await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) SELECT s, 'all' FROM unnest(@ids) AS s",
             new { ids = station is { } s ? new[] { s } : allowed }, tx);
     }
 
-    private static async Task<IResult> DeleteItemCost(long id, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, RollupRefresher rollups)
+    private static async Task<IResult> DeleteItemCost(long id, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         await using var c = await db.OpenConnectionAsync();
-        var row = await c.QuerySingleOrDefaultAsync<(long Id, Guid? Station)?>("SELECT id, station_id FROM item_costs WHERE id = @id", new { id });
-        if (row is null) return Results.NotFound();
-        if (row.Value.Station is null ? !user.IsInRole(Roles.Owner) : !await scope.CanSeeAsync(user, row.Value.Station.Value)) return Results.Forbid();
+        var found = (await c.QueryAsync<(long Id, Guid? Station, Guid Org)>("SELECT id, station_id, organization_id FROM item_costs WHERE id = @id", new { id })).ToList();
+        if (found.Count == 0 || found[0].Org != user.OrganizationId()) return Results.NotFound();
+        var row = found[0];
+        if (row.Station is null ? !user.IsInRole(Roles.Owner) : !await scope.CanSeeAsync(user, row.Station.Value)) return Results.NotFound();
         var allowed = await scope.AllowedAsync(user);
         await c.ExecuteAsync("DELETE FROM item_costs WHERE id = @id", new { id });
         await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) SELECT s, 'all' FROM unnest(@ids) AS s",
-            new { ids = row.Value.Station is { } s ? new[] { s } : allowed });
+            new { ids = row.Station is { } s ? new[] { s } : allowed });
         rollups.Notify();
         await Audit.WriteAsync(db, user, "item_cost_deleted", $"item_cost:{id}", null);
         return Results.NoContent();
@@ -318,7 +321,7 @@ public static partial class MoneyEndpoints
     // ---------------------------------------------------------------- plans
 
     /// <summary>Plans of a month with facts to date, a forecast to the month end and the daily cumulative track.</summary>
-    private static async Task<IResult> Plans(HttpContext ctx, StationScope scope, NpgsqlDataSource db, string? month)
+    private static async Task<IResult> Plans(HttpContext ctx, StationScope scope, UiDb db, string? month)
     {
         var allowed = await scope.AllowedAsync(ctx.User);
         var m = DateTime.TryParseExact((month ?? "") + "-01", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var mm)
@@ -383,7 +386,7 @@ public static partial class MoneyEndpoints
         return Results.Ok(new { month = m.ToString("yyyy-MM"), rows });
     }
 
-    private static async Task<IResult> SetPlan(PlanBody body, ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> SetPlan(PlanBody body, ClaimsPrincipal user, StationScope scope, UiDb db)
     {
         if (!await scope.CanSeeAsync(user, body.StationId)) return Results.Forbid();
         if (body.Metric is not ("fuel_liters" or "fuel_revenue" or "shop_revenue")) return Results.Problem(statusCode: 400, title: "Неизвестный показатель плана");

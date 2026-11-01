@@ -118,7 +118,8 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
             -- latest cost in effect at the sale; a station-specific price wins over an "all stations" one of the same date
             LEFT JOIN LATERAL (
                 SELECT ic.cost FROM item_costs ic
-                WHERE ic.item_key = k.item_key AND (ic.station_id = l.station_id OR ic.station_id IS NULL) AND ic.valid_from <= l.doc_at
+                WHERE ic.item_key = k.item_key AND ic.valid_from <= l.doc_at
+                  AND (ic.station_id = l.station_id OR (ic.station_id IS NULL AND ic.organization_id = (SELECT organization_id FROM stations WHERE id = l.station_id)))
                 ORDER BY ic.valid_from DESC, (ic.station_id IS NULL) LIMIT 1) c ON true
             WHERE {where.Replace("station_id", "l.station_id").Replace("local_date", "l.local_date")}{bound.Replace("doc_at", "l.doc_at")} AND l.local_date IS NOT NULL
             GROUP BY 1, 2, 3, 4

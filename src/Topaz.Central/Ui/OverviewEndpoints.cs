@@ -108,7 +108,7 @@ public static class OverviewEndpoints
         ui.MapGet("/analytics/stations", StationComparison);
     }
 
-    private static async Task<IResult> Overview(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Overview(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -174,7 +174,7 @@ public static class OverviewEndpoints
         });
     }
 
-    private static async Task<IResult> StationComparison(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> StationComparison(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;

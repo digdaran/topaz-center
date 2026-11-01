@@ -8,7 +8,7 @@ import { versionAtLeast } from '../lib/version';
 
 interface UpdStation {
   id: string; name: string; agent_version: string | null; agent_rid: string | null; update_group: 'pilot' | 'normal' | 'excluded'; update_now: boolean;
-  last_seen_at: string | null; report_version: string | null; report_status: string | null; report_error: string | null; report_at: string | null;
+  last_seen_at: string | null; report_version: string | null; report_status: string | null; report_error: string | null; report_at: string | null; organization: string | null;
 }
 interface UpdState {
   settings: { mode: 'auto' | 'off'; paused: boolean; pilot_delay_hours: number; release_now_version: string | null; updated_by: string | null; updated_at: string };
@@ -95,6 +95,7 @@ export default function AgentUpdates() {
           <Table<UpdStation> size="small" rowKey="id" dataSource={data.stations} pagination={false} scroll={{ x: 900 }}
             columns={[
               { title: 'АЗС', dataIndex: 'name' },
+              { title: 'Организация', dataIndex: 'organization', render: (v) => v ?? '—' },
               {
                 title: 'Версия агента', dataIndex: 'agent_version', render: (v: string | null, r) => (
                   <>{v ?? '—'} {versionAtLeast(v, data.latest) ? <Tag color="green">актуальная</Tag> : null}

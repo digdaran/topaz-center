@@ -23,7 +23,7 @@ public static partial class AdminEndpoints
         // Automation (scripts, demo data): approve a connection request with the admin token; the code is still required.
         admin.MapPost("/admin/registrations/{id:guid}/approve", async (Guid id, Topaz.Central.Ui.ApproveBody body, Registrations regs) =>
         {
-            var (result, stationId) = await regs.ApproveAsync(id, body.Code, body.StationId, body.StationName, "admin-api");
+            var (result, stationId) = await regs.ApproveAsync(id, body.Code, body.StationId, body.StationName, "admin-api", body.OrganizationId);
             return result == Registrations.Decision.Ok ? Results.Ok(new { station_id = stationId }) : Results.Problem(statusCode: 400, title: result.ToString());
         });
         admin.MapPost("/admin/stations/{id:guid}/reset", (Guid id, NpgsqlDataSource db, StationAuthenticator auth) => SetStatus(id, "reenroll", db, auth));

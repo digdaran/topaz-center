@@ -5,7 +5,7 @@ using Topaz.Central.Auth;
 
 namespace Topaz.Central.Ui;
 
-public sealed record ApproveBody(string? Code, Guid? StationId, string? StationName);
+public sealed record ApproveBody(string? Code, Guid? StationId, string? StationName, Guid? OrganizationId = null);
 public sealed record RejectBody(bool? BlockIp, string? Note);
 public sealed record StationAccessBody(string? Action);
 
@@ -14,15 +14,19 @@ public static class RegistrationUiEndpoints
 {
     public static void MapUiRegistrations(this RouteGroupBuilder ui)
     {
-        ui.MapGet("/registrations", List).RequireAuthorization(Policies.Owner);
+        // Requests belong to no organization yet (and show IPs and Topaz data): the superadmin's only.
+        ui.MapGet("/registrations", List).RequireAuthorization(Policies.Super);
         var super = ui.MapGroup("").RequireAuthorization(Policies.Super);
         super.MapPost("/registrations/{id:guid}/approve", Approve);
         super.MapPost("/registrations/{id:guid}/reject", Reject);
         super.MapPost("/stations/{id:guid}/access", Access);
     }
 
-    public static Task<int> PendingCountAsync(NpgsqlConnection c) =>
-        c.ExecuteScalarAsync<int>("SELECT count(*) FROM station_registrations WHERE status = 'pending'");
+    public static async Task<int> PendingCountAsync(NpgsqlDataSource db)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        return await c.ExecuteScalarAsync<int>("SELECT count(*) FROM station_registrations WHERE status = 'pending'");
+    }
 
     private static async Task<IResult> List(ClaimsPrincipal user, NpgsqlDataSource db)
     {
@@ -46,18 +50,20 @@ public static class RegistrationUiEndpoints
     private static async Task<IResult> Approve(Guid id, ApproveBody body, ClaimsPrincipal user, Registrations regs, NpgsqlDataSource db)
     {
         var by = user.Identity?.Name ?? "?";
-        var (result, stationId) = await regs.ApproveAsync(id, body.Code, body.StationId, body.StationName, by);
+        var (result, stationId) = await regs.ApproveAsync(id, body.Code, body.StationId, body.StationName, by, body.OrganizationId);
         switch (result)
         {
             case Registrations.Decision.Ok:
-                await Audit.WriteAsync(db, user, "station_registration_approved", "registration:" + id,
-                    new { station_id = stationId, existing = body.StationId is not null, body.StationName });
+                await Audit.WriteAsync(db, user.UserId(), user.Identity?.Name, "station_registration_approved", "registration:" + id,
+                    new { station_id = stationId, existing = body.StationId is not null, body.StationName }, await OrganizationOfAsync(db, stationId));
                 return Results.Ok(new { station_id = stationId });
             case Registrations.Decision.WrongCode:
                 await Audit.WriteAsync(db, user, "station_registration_code_mismatch", "registration:" + id, null);
                 return Results.Problem(statusCode: 400, title: "Код подтверждения не совпадает. Уточните код у того, кто устанавливал агент на АЗС.");
             case Registrations.Decision.NameTaken:
                 return Results.Problem(statusCode: 409, title: "АЗС с таким названием уже есть. Выберите «Существующая АЗС» или укажите другое название.");
+            case Registrations.Decision.NoOrganization:
+                return Results.Problem(statusCode: 400, title: "Выберите организацию, к которой относится АЗС");
             case Registrations.Decision.NoStation:
                 return Results.Problem(statusCode: 400, title: "Выбранная АЗС не найдена");
             case Registrations.Decision.NotPending:
@@ -67,12 +73,18 @@ public static class RegistrationUiEndpoints
         }
     }
 
+    private static async Task<Guid?> OrganizationOfAsync(NpgsqlDataSource db, Guid? stationId)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        return await c.ExecuteScalarAsync<Guid?>("SELECT organization_id FROM stations WHERE id = @stationId", new { stationId });
+    }
+
     private static async Task<IResult> Reject(Guid id, RejectBody body, ClaimsPrincipal user, Registrations regs, NpgsqlDataSource db)
     {
         var result = await regs.RejectAsync(id, body.BlockIp == true, body.Note, user.Identity?.Name ?? "?");
         if (result == Registrations.Decision.NotFound) return Results.NotFound();
         if (result == Registrations.Decision.NotPending) return Results.Problem(statusCode: 409, title: "Заявка уже обработана");
-        await Audit.WriteAsync(db, user, "station_registration_rejected", "registration:" + id, new { block_ip = body.BlockIp == true, body.Note });
+        await Audit.WritePlatformAsync(db, user, "station_registration_rejected", "registration:" + id, new { block_ip = body.BlockIp == true, body.Note });
         return Results.NoContent();
     }
 
@@ -81,7 +93,7 @@ public static class RegistrationUiEndpoints
         if (body.Action is not ("block" or "unblock" or "reissue")) return Results.Problem(statusCode: 400, title: "action: block | unblock | reissue");
         if (!await regs.SetStationAccessAsync(id, body.Action))
             return body.Action == "unblock" ? Results.Problem(statusCode: 409, title: "У АЗС нет действующего доступа: перевыпустите его") : Results.NotFound();
-        await Audit.WriteAsync(db, user, "station_access_" + body.Action, "station:" + id, null);
+        await Audit.WriteAsync(db, user.UserId(), user.Identity?.Name, "station_access_" + body.Action, "station:" + id, null, await OrganizationOfAsync(db, id));
         return Results.NoContent();
     }
 }

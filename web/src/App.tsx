@@ -3,8 +3,8 @@ import {
   ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
-import { api, isOwner, useMeta } from './api/client';
+import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
+import { api, isOwner, isSuper, Me, useMeta } from './api/client';
 import { lazy, ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
@@ -62,7 +62,7 @@ function Shell({ children }: { children: ReactNode }) {
   const alerts = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: { new: number; critical: number } }>('/alerts/summary'), refetchInterval: 60_000 });
   const meta = useMeta();
   const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
-  const requests = isOwner(me) ? meta.data?.pending_registrations ?? 0 : 0;
+  const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
   const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
     key: n.key, icon: n.icon,
     label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
@@ -93,6 +93,7 @@ function Shell({ children }: { children: ReactNode }) {
         <Layout.Header style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 12, background: 'transparent', height: 56 }}>
           {!desktop && <Button icon={<MenuOutlined />} onClick={() => setDrawer(true)} aria-label="Меню" />}
           {!desktop && <Typography.Text strong>Topaz Center</Typography.Text>}
+          <OrganizationBadge me={me} compact={!desktop} />
           <div style={{ flex: 1 }} />
           <Button
             type="text"
@@ -118,6 +119,23 @@ function Shell({ children }: { children: ReactNode }) {
         {menu}
       </Drawer>
     </Layout>
+  );
+}
+
+/**
+ * Whose data is on screen: a superadmin picks the organization (one at a time; each switch is audited),
+ * everyone else just sees the name of their own.
+ */
+function OrganizationBadge({ me, compact }: { me: Me; compact: boolean }) {
+  if (!isSuper(me)) return me.organization ? <Tag style={{ marginInlineStart: 4 }}>{me.organization}</Tag> : null;
+  const switchTo = async (id: string) => {
+    await api('/session/organization', { method: 'POST', body: { id } });
+    window.location.assign(window.location.pathname); // fresh data and filters of the other organization
+  };
+  return (
+    <Select size="small" value={me.organization_id ?? undefined} placeholder="Организация" onChange={switchTo}
+      style={{ minWidth: compact ? 120 : 220 }} popupMatchSelectWidth={false} showSearch optionFilterProp="label"
+      options={(me.organizations ?? []).map((o) => ({ value: o.id, label: o.is_active ? o.name : `${o.name} (отключена)` }))} />
   );
 }
 

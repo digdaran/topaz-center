@@ -13,14 +13,14 @@ public static class SalesAnalyticsEndpoints
         ui.MapGet("/analytics/items", Items);
     }
 
-    private static async Task<(UiFilter?, IResult?, NpgsqlConnection?)> Open(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<(UiFilter?, IResult?, NpgsqlConnection?)> Open(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);
         return error is not null ? (null, error, null) : (f, null, await db.OpenConnectionAsync(ctx.RequestAborted));
     }
 
     /// <summary>Runs a query on its own pooled connection so the queries of one page execute in parallel.</summary>
-    internal sealed class Par(NpgsqlDataSource db, CancellationToken ct)
+    internal sealed class Par(UiDb db, CancellationToken ct)
     {
         public async Task<List<dynamic>> Q(string sql, object args)
         {
@@ -39,7 +39,7 @@ public static class SalesAnalyticsEndpoints
 
     private sealed record DailyPrice(Guid StationId, string Station, string FuelType, DateTime Day, decimal Liters, decimal Price);
 
-    private static async Task<IResult> Fuel(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Fuel(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -161,7 +161,7 @@ public static class SalesAnalyticsEndpoints
 
     private sealed record DayValue(DateTime Day, decimal Liters, decimal Revenue, long Orders);
 
-    private static async Task<IResult> Demand(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Demand(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
@@ -237,7 +237,7 @@ public static class SalesAnalyticsEndpoints
     private sealed record ItemRow(string ItemKey, string Name, string? GroupName, decimal Quantity, decimal Revenue, long Receipts, DateTime? LastSale);
     private sealed record StockRow(Guid StationId, string Station, string ItemKey, string Name, string? GroupName, decimal Stock, decimal Sold28, DateTime? LastSale, decimal? Price);
 
-    private static async Task<IResult> Items(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task<IResult> Items(HttpContext ctx, StationScope scope, UiDb db)
     {
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;

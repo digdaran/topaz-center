@@ -26,6 +26,7 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/shifts', title: 'Смены' },
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },
+  { path: '/settings/organizations', title: 'Настройки', wait: 'Добавить организацию' },
   { path: '/settings/users', title: 'Настройки' },
   { path: '/settings/fuels', title: 'Настройки', wait: 'Подтвердить все предложения' },
   { path: '/settings/fuels?view=reference', title: 'Настройки', wait: 'Добавить вид' },
@@ -128,4 +129,41 @@ test('superadmin sees connection requests', async ({ page }, info) => {
   await expect(page.getByText('Решения за 30 дней')).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_station_requests.png`, fullPage: true });
+});
+
+test('an owner of another organization sees none of the stations; the superadmin switches between them', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'creates an organization; once is enough');
+  const headers = { 'X-Topaz-Ui': '1' };
+  expect((await request.post('/api/v1/ui/auth/login', { headers, data: { login, password } })).ok()).toBeTruthy();
+  const main = await (await request.get('/api/v1/ui/meta')).json();
+  expect(main.stations.length).toBeGreaterThan(0);
+  const orgs = await (await request.get('/api/v1/ui/organizations')).json();
+  let other = orgs.find((o: { name: string }) => o.name === 'E2E Другой хозяин');
+  if (!other) {
+    const r = await request.post('/api/v1/ui/organizations', { headers, data: { name: 'E2E Другой хозяин' } });
+    expect(r.ok()).toBeTruthy();
+    other = await r.json();
+  }
+  await request.post('/api/v1/ui/users', {
+    headers, data: { login: 'e2e-other-owner', name: 'Другой хозяин', role: 'owner', password: 'other-password-1', organization_id: other.id },
+  });
+
+  await signIn(page, 'e2e-other-owner', 'other-password-1');
+  await page.goto('/stations');
+  await expect(page.getByText('E2E Другой хозяин').first()).toBeVisible();
+  for (const s of main.stations) await expect(page.getByText(s.name, { exact: true })).toHaveCount(0);
+  const meta = await (await page.request.get('/api/v1/ui/meta')).json();
+  expect(meta.stations).toEqual([]);
+
+  // superadmin: switcher in the header
+  await page.context().clearCookies();
+  await signIn(page);
+  await page.goto('/stations');
+  await expect(page.getByText(main.stations[0].name).first()).toBeVisible();
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_org_switcher.png` });
+  const back = await page.request.post('/api/v1/ui/session/organization', { headers, data: { id: other.id } });
+  expect(back.ok()).toBeTruthy();
+  expect((await (await page.request.get('/api/v1/ui/meta')).json()).stations).toEqual([]);
+  const home = orgs.find((o: { stations: number }) => o.stations > 0) ?? orgs[0];
+  expect((await page.request.post('/api/v1/ui/session/organization', { headers, data: { id: home.id } })).ok()).toBeTruthy();
 });

@@ -77,7 +77,7 @@ public static class DataEndpoints
         ui.MapGet("/data/{kind}", Query);
     }
 
-    private static async Task Query(string kind, HttpContext ctx, StationScope scope, NpgsqlDataSource db)
+    private static async Task Query(string kind, HttpContext ctx, StationScope scope, UiDb db)
     {
         if (!Kinds.TryGetValue(kind, out var k)) { ctx.Response.StatusCode = 404; return; }
         var (f, error) = await UiFilter.ParseAsync(ctx, scope);

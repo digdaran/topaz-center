@@ -75,21 +75,23 @@ public sealed class RegistrationTests(CentralFixture fx) : IClassFixture<Central
         Assert.Equal((HttpStatusCode.Accepted, RegistrationStatus.Pending), (status, body!.Status));
         Assert.Equal(HttpStatusCode.Gone, (await ClaimAsync(agent, id, RegistrationCode.NewSecret())).Status); // someone else's secret
 
-        // Owners see the request (and a counter) but cannot decide; managers do not see it.
-        var list = (await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/registrations"))!;
+        // Requests belong to no organization yet: only the superadmin sees them (owners and managers do not).
+        var list = (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/registrations"))!;
         var req = list["pending"]!.AsArray().Single(p => p!["id"]!.GetValue<Guid>() == id)!;
         Assert.Equal(("TOPAZ-PC", "203.0.113.10"), (req["machine_name"]!.GetValue<string>(), req["ip"]!.GetValue<string>()));
         Assert.Contains("Иванов", req["topaz_info"]!.GetValue<string>());
-        Assert.False(list["can_decide"]!.GetValue<bool>());
-        Assert.True((await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["pending_registrations"]!.GetValue<int>() >= 1);
+        Assert.True(list["can_decide"]!.GetValue<bool>());
+        Assert.True((await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["pending_registrations"]!.GetValue<int>() >= 1);
+        Assert.Equal(0, (await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["pending_registrations"]!.GetValue<int>());
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.GetAsync("/api/v1/ui/registrations")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync($"/api/v1/ui/registrations/{id}/approve", new { code })).StatusCode);
         var manager = await UiAsync("reg-manager", Roles.Manager);
         Assert.Equal(HttpStatusCode.Forbidden, (await manager.GetAsync("/api/v1/ui/registrations")).StatusCode);
 
-        // Event in «Контроль» (no station yet), visible to owners.
+        // Event in «Контроль» (no station yet): the superadmin's, not an owner's.
         await fx.Factory!.Services.GetRequiredService<AnomalyDetector>().RunAsync(CancellationToken.None);
-        var alerts = await owner.GetStringAsync("/api/v1/ui/alerts?status=open");
-        Assert.Contains("АЗС ожидает подключения: «АЗС-Новая»", alerts);
+        Assert.Contains("АЗС ожидает подключения: «АЗС-Новая»", await super.GetStringAsync("/api/v1/ui/alerts?status=open"));
+        Assert.DoesNotContain("АЗС-Новая", await owner.GetStringAsync("/api/v1/ui/alerts?status=open"));
 
         // Wrong code is refused (and audited); the right one, typed sloppily, is accepted.
         Assert.Equal(HttpStatusCode.BadRequest, (await super.PostAsJsonAsync($"/api/v1/ui/registrations/{id}/approve", new { code = "AAAA-AAAA" })).StatusCode);
@@ -166,9 +168,12 @@ public sealed class RegistrationTests(CentralFixture fx) : IClassFixture<Central
         var owner = await UiAsync("reg-owner3", Roles.Owner);
         Assert.Equal("superadmin", (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/auth/me"))!["role"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.OK, (await super.GetAsync("/api/v1/ui/analytics/overview")).StatusCode); // owner rights too
-        foreach (var path in new[] { "/api/v1/ui/users", "/api/v1/ui/audit", "/api/v1/ui/agent-updates" })
+        // Owners manage the users of their own organization, but never superadmins; platform pages stay closed.
+        foreach (var path in new[] { "/api/v1/ui/agent-updates", "/api/v1/ui/organizations", "/api/v1/ui/registrations" })
             Assert.Equal(HttpStatusCode.Forbidden, (await owner.GetAsync(path)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync("/api/v1/ui/users", new { login = "x1", name = "x", role = "superadmin", password = Password })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync("/api/v1/ui/users")).StatusCode);
+        Assert.DoesNotContain("reg-super3", await owner.GetStringAsync("/api/v1/ui/users"));
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.PostAsJsonAsync("/api/v1/ui/users", new { login = "x1", name = "x", role = "superadmin", password = Password })).StatusCode);
 
         // Demoting the only other superadmins is fine, but the last active one cannot be demoted or disabled.
         var users = (await super.GetFromJsonAsync<JsonArray>("/api/v1/ui/users"))!;

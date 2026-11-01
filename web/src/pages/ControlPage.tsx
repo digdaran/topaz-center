@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, isOwner, useFiltered } from '../api/client';
+import { api, isOwner, isSuper, useFiltered } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
 import { PageTitle, QueryState } from '../components/ui';
@@ -81,6 +81,14 @@ function Rules() {
       message.error((e as Error).message);
     }
   };
+  const reset = async (r: R) => {
+    try {
+      await api(`/alert-rules/${r.code}`, { method: 'DELETE' });
+      qc.invalidateQueries({ queryKey: ['alert-rules'] });
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
   const run = async () => {
     const r = await api<{ found: number }>('/alerts/run', { method: 'POST' });
     message.success(`Проверка выполнена, новых событий: ${r.found}`);
@@ -88,15 +96,26 @@ function Rules() {
   };
   return (
     <>
-      <Typography.Paragraph type="secondary">Правила проверяются каждые 5 минут по данным за последние 30 дней. Одно событие на объект (смену, рукав, приём) не повторяется.</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">
+        Правила проверяются каждые 5 минут по данным за последние 30 дней. Одно событие на объект (смену, рукав, приём) не повторяется.
+        Изменённые значения действуют только для АЗС вашей организации; «Сбросить» возвращает общие значения по умолчанию.
+      </Typography.Paragraph>
       <Button icon={<ReloadOutlined />} onClick={run} style={{ marginBottom: 12 }}>Проверить сейчас</Button>
       <Table size="small" rowKey="code" loading={isLoading} dataSource={data} pagination={false} scroll={{ x: 900 }}
         columns={[
           { title: 'Вкл.', dataIndex: 'enabled', width: 60, render: (v: boolean, r) => <Switch size="small" checked={v} onChange={(c) => save(r, { enabled: c })} /> },
-          { title: 'Правило', dataIndex: 'title', render: (v, r) => <><b>{v}</b><div style={{ fontSize: 13, opacity: 0.75 }}>{r.description}</div></> },
+          {
+            title: 'Правило', dataIndex: 'title', render: (v, r) => (
+              <>
+                <b>{v}</b> {r.platform && <Tag color="purple">платформа</Tag>}
+                {r.overridden && <Tag color="blue">своё значение</Tag>}
+                <div style={{ fontSize: 13, opacity: 0.75 }}>{r.description}</div>
+              </>
+            ),
+          },
           {
             title: 'Порог', dataIndex: 'threshold', width: 150, render: (v: number | null, r) => (v == null ? '—' : (
-              <InputNumber size="small" defaultValue={Number(v)} min={0} addonAfter={r.unit} style={{ width: 130 }} onBlur={(e) => { const n = Number(e.target.value.replace(',', '.')); if (n !== Number(v)) save(r, { threshold: n }); }} />
+              <InputNumber key={`${r.code}:${v}`} size="small" defaultValue={Number(v)} min={0} addonAfter={r.unit} style={{ width: 130 }} onBlur={(e) => { const n = Number(e.target.value.replace(',', '.')); if (n !== Number(v)) save(r, { threshold: n }); }} />
             )),
           },
           {
@@ -104,12 +123,19 @@ function Rules() {
               <Select size="small" value={v} style={{ width: 130 }} onChange={(s) => save(r, { severity: s })} options={Object.entries(SEVERITY).map(([k, x]) => ({ value: k, label: x.label }))} />
             ),
           },
+          {
+            title: '', key: 'reset', width: 110, render: (_, r) => (r.overridden && !r.platform ? (
+              <Button size="small" type="link" onClick={() => reset(r)}
+                title={`По умолчанию: ${r.default_enabled ? 'вкл.' : 'выкл.'}${r.default_threshold == null ? '' : `, ${Number(r.default_threshold)} ${r.unit ?? ''}`}, ${SEVERITY[r.default_severity]?.label ?? r.default_severity}`}>Сбросить</Button>
+            ) : null),
+          },
         ]} />
     </>
   );
 }
 
 function Notifications() {
+  const me = useMe();
   const qc = useQueryClient();
   const { message } = App.useApp();
   const { data, isLoading } = useQuery({ queryKey: ['channels'], queryFn: () => api<{ token_configured: boolean; channels: R[] }>('/notifications') });
@@ -146,7 +172,7 @@ function Notifications() {
       <Button type="primary" onClick={() => { setOpen(true); form.setFieldsValue({ min_severity: 'warning', daily_digest: true }); }} style={{ marginBottom: 12 }}>Добавить чат</Button>
       <Table size="small" rowKey="id" loading={isLoading} dataSource={data?.channels} pagination={false}
         columns={[
-          { title: 'Чат', dataIndex: 'title', render: (v, r) => <>{v ?? '—'} <Typography.Text type="secondary">{r.target}</Typography.Text></> },
+          { title: 'Чат', dataIndex: 'title', render: (v, r) => <>{v ?? '—'} <Typography.Text type="secondary">{r.target}</Typography.Text> {r.platform && <Tag color="purple">платформа</Tag>}</> },
           { title: 'Важность от', dataIndex: 'min_severity', render: (v: string) => <Tag color={SEVERITY[v]?.color}>{SEVERITY[v]?.label}</Tag> },
           { title: 'Сводка в 9:00', dataIndex: 'daily_digest', render: (v: boolean) => (v ? 'да' : 'нет') },
           {
@@ -166,6 +192,12 @@ function Notifications() {
             <Select options={Object.entries(SEVERITY).map(([k, v]) => ({ value: k, label: v.label }))} />
           </Form.Item>
           <Form.Item name="daily_digest" label="Утренняя сводка" valuePropName="checked"><Switch /></Form.Item>
+          {isSuper(me) && (
+            <Form.Item name="platform" label="Чат платформы" valuePropName="checked"
+              extra="Заявки на подключение АЗС и ошибки обновления агентов. Иначе чат получает события АЗС организации, выбранной в шапке.">
+              <Switch />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </>

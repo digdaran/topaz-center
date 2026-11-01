@@ -40,6 +40,9 @@ public sealed class UserRecord
     public bool IsActive { get; set; }
     public int FailedLogins { get; set; }
     public DateTime? LockedUntil { get; set; }
+    /// <summary>Null for a superadmin.</summary>
+    public Guid? OrganizationId { get; set; }
+    public bool OrganizationActive { get; set; } = true;
 }
 
 /// <summary>User storage, password hashing (PBKDF2 via ASP.NET Identity) and login checks.</summary>
@@ -52,9 +55,10 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
     private static readonly PasswordHasher<UserRecord> Hasher = new();
 
     private const string SelectUser = """
-        SELECT id, login, name, role, password_hash AS PasswordHash, security_stamp AS SecurityStamp,
-               is_active AS IsActive, failed_logins AS FailedLogins, locked_until AS LockedUntil
-        FROM users
+        SELECT u.id, u.login, u.name, u.role, u.password_hash AS PasswordHash, u.security_stamp AS SecurityStamp,
+               u.is_active AS IsActive, u.failed_logins AS FailedLogins, u.locked_until AS LockedUntil,
+               u.organization_id AS OrganizationId, COALESCE(o.is_active, true) AS OrganizationActive
+        FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
         """;
 
     public static string? ValidatePassword(string? password) =>
@@ -65,7 +69,7 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
     public async Task<UserRecord?> FindByIdAsync(Guid id)
     {
         await using var c = await db.OpenConnectionAsync();
-        return await c.QuerySingleOrDefaultAsync<UserRecord>(SelectUser + " WHERE id = @id", new { id });
+        return await c.QuerySingleOrDefaultAsync<UserRecord>(SelectUser + " WHERE u.id = @id", new { id });
     }
 
     /// <summary>Cached lookup used on every request to re-validate the session cookie.</summary>
@@ -83,8 +87,8 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
     public async Task<(LoginResult Result, UserRecord? User)> CheckLoginAsync(string login, string password)
     {
         await using var c = await db.OpenConnectionAsync();
-        var user = await c.QuerySingleOrDefaultAsync<UserRecord>(SelectUser + " WHERE login_normalized = @l", new { l = Normalize(login) });
-        if (user is null || !user.IsActive)
+        var user = await c.QuerySingleOrDefaultAsync<UserRecord>(SelectUser + " WHERE u.login_normalized = @l", new { l = Normalize(login) });
+        if (user is null || !user.IsActive || !user.OrganizationActive)
         {
             Hasher.VerifyHashedPassword(new UserRecord(), DummyHash, password); // same timing as a real check
             return (LoginResult.Invalid, null);
@@ -110,17 +114,25 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
         return (LoginResult.Ok, user);
     }
 
-    public async Task<Guid> CreateAsync(string login, string name, string role, string password, IEnumerable<Guid>? stations = null)
+    public async Task<Guid> CreateAsync(string login, string name, string role, string password, IEnumerable<Guid>? stations = null, Guid? organizationId = null)
     {
         if (!Roles.All.Contains(role)) throw new ArgumentException("Unknown role " + role);
+        if (role != Roles.Superadmin && organizationId is null)
+        {
+            // Without an explicit organization (CLI, tests): the only/first one.
+            await using var oc = await db.OpenConnectionAsync();
+            organizationId = await oc.ExecuteScalarAsync<Guid?>("SELECT id FROM organizations ORDER BY created_at, name LIMIT 1")
+                             ?? throw new ArgumentException("Create an organization first");
+        }
+        if (role == Roles.Superadmin) organizationId = null;
         if (ValidatePassword(password) is { } error) throw new ArgumentException(error);
         var id = Guid.NewGuid();
         await using var c = await db.OpenConnectionAsync();
         await using var tx = await c.BeginTransactionAsync();
         await c.ExecuteAsync("""
-            INSERT INTO users (id, login, login_normalized, name, role, password_hash, security_stamp)
-            VALUES (@id, @login, @norm, @name, @role, @hash, @stamp)
-            """, new { id, login = login.Trim(), norm = Normalize(login), name = name.Trim(), role, hash = HashPassword(password), stamp = Guid.NewGuid() }, tx);
+            INSERT INTO users (id, login, login_normalized, name, role, password_hash, security_stamp, organization_id)
+            VALUES (@id, @login, @norm, @name, @role, @hash, @stamp, @organizationId)
+            """, new { id, login = login.Trim(), norm = Normalize(login), name = name.Trim(), role, hash = HashPassword(password), stamp = Guid.NewGuid(), organizationId }, tx);
         foreach (var s in stations ?? [])
             await c.ExecuteAsync("INSERT INTO user_stations (user_id, station_id) VALUES (@id, @s)", new { id, s }, tx);
         await tx.CommitAsync();
@@ -131,7 +143,8 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
 
     private static readonly string DummyHash = HashPassword(Guid.NewGuid().ToString());
 
-    public static ClaimsPrincipal Principal(UserRecord u) => new(new ClaimsIdentity(
+    /// <summary>Session identity; a superadmin carries the organization selected in the header.</summary>
+    public static ClaimsPrincipal Principal(UserRecord u, Guid? selectedOrganization = null) => new(new ClaimsIdentity(
     [
         new Claim(ClaimTypes.NameIdentifier, u.Id.ToString()),
         new Claim(ClaimTypes.Name, u.Login),
@@ -140,6 +153,7 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
         // A superadmin is also an owner, so every owner check covers it.
         .. (u.Role == Roles.Superadmin ? [new Claim(ClaimTypes.Role, Roles.Owner)] : Array.Empty<Claim>()),
         new Claim("stamp", u.SecurityStamp.ToString()),
+        .. ((u.OrganizationId ?? selectedOrganization) is { } org ? [new Claim(OrganizationClaims.Claim, org.ToString())] : Array.Empty<Claim>()),
     ], CookieAuthenticationDefaults.AuthenticationScheme));
 }
 
@@ -175,7 +189,7 @@ public static class UiAuthSetup
                     var users = ctx.HttpContext.RequestServices.GetRequiredService<UserService>();
                     var id = Guid.TryParse(ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var g) ? g : Guid.Empty;
                     var user = id == Guid.Empty ? null : await users.FindCachedAsync(id);
-                    if (user is null || !user.IsActive || user.SecurityStamp.ToString() != ctx.Principal!.FindFirstValue("stamp"))
+                    if (user is null || !user.IsActive || !user.OrganizationActive || user.SecurityStamp.ToString() != ctx.Principal!.FindFirstValue("stamp"))
                     {
                         ctx.RejectPrincipal();
                         await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -202,27 +216,30 @@ public static class UiAuthSetup
     }
 }
 
-/// <summary>Which stations the current user may see. Every UI query is restricted through this.</summary>
+/// <summary>
+/// Which stations the current user may see — always within one organization (the user's own; for a superadmin the one
+/// selected in the header). Every UI query is restricted through this; the UI pool's row level security repeats it.
+/// </summary>
 public sealed class StationScope(NpgsqlDataSource db, IMemoryCache cache)
 {
     public async Task<Guid[]> AllowedAsync(ClaimsPrincipal user)
     {
+        if (user.OrganizationId() is not { } org) return [];
         var uid = user.UserId();
-        var owner = user.IsInRole(Roles.Owner);
-        if (owner)
+        if (user.IsInRole(Roles.Owner))
         {
-            // Not cached: a newly enrolled station must show up for the owner immediately (one tiny query).
+            // Not cached: a newly connected station must show up for the owner immediately (one tiny query).
             await using var oc = await db.OpenConnectionAsync();
-            return (await oc.QueryAsync<Guid>("SELECT id FROM stations")).ToArray(); // blocked ones too: their history stays visible
+            return (await oc.QueryAsync<Guid>("SELECT id FROM stations WHERE organization_id = @org", new { org })).ToArray(); // blocked ones too: history stays visible
         }
-        return (await cache.GetOrCreateAsync($"scope:{uid}:{owner}", async e =>
+        return (await cache.GetOrCreateAsync($"scope:{uid}:{org}", async e =>
         {
             e.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(20);
             await using var c = await db.OpenConnectionAsync();
-            var ids = owner
-                ? await c.QueryAsync<Guid>("SELECT id FROM stations WHERE status <> 'revoked'")
-                : await c.QueryAsync<Guid>("SELECT us.station_id FROM user_stations us JOIN stations s ON s.id = us.station_id WHERE us.user_id = @uid AND s.status <> 'revoked'", new { uid });
-            return ids.ToArray();
+            return (await c.QueryAsync<Guid>("""
+                SELECT us.station_id FROM user_stations us JOIN stations s ON s.id = us.station_id
+                WHERE us.user_id = @uid AND s.organization_id = @org AND s.status <> 'revoked'
+                """, new { uid, org })).ToArray();
         }))!;
     }
 
@@ -230,7 +247,7 @@ public sealed class StationScope(NpgsqlDataSource db, IMemoryCache cache)
 
     public void Forget(Guid userId)
     {
-        cache.Remove($"scope:{userId}:True");
-        cache.Remove($"scope:{userId}:False");
+        // Keys include the organization; a moved user also gets a new security stamp (new session).
+        if (cache is MemoryCache mc) mc.Compact(1.0);
     }
 }

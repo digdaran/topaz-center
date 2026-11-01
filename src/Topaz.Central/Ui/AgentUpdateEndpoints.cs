@@ -30,10 +30,11 @@ public static class AgentUpdateEndpoints
         var latest = releases.All.Select(p => p.Version).OrderByDescending(v => v, Comparer<string>.Create(SemVer.Compare)).FirstOrDefault();
         var stations = (await c.QueryAsync("""
             SELECT s.id, COALESCE(NULLIF(s.display_name, ''), s.name) AS name, s.agent_version, s.agent_rid, s.update_group, s.update_now, s.last_seen_at,
-                   u.version AS report_version, u.status AS report_status, u.error AS report_error, u.at AS report_at
+                   u.version AS report_version, u.status AS report_status, u.error AS report_error, u.at AS report_at, o.name AS organization
             FROM stations s
+            LEFT JOIN organizations o ON o.id = s.organization_id
             LEFT JOIN LATERAL (SELECT * FROM agent_update_reports r WHERE r.station_id = s.id ORDER BY r.at DESC LIMIT 1) u ON true
-            WHERE s.status = 'active' ORDER BY name
+            WHERE s.status = 'active' ORDER BY o.name, name
             """)).ToList();
         var onLatest = latest is null ? 0 : stations.Count(s => SemVer.Compare((string?)s.agent_version, latest) >= 0);
         var firstSeen = latest is null ? null : known.Where(k => (string)k.version == latest).Select(k => (DateTime?)k.first_seen_at).Min();
@@ -59,7 +60,7 @@ public static class AgentUpdateEndpoints
                 pilot_delay_hours = COALESCE(@PilotDelayHours, pilot_delay_hours), updated_by = @by, updated_at = now()
             WHERE id = 1
             """, new { body.Mode, body.Paused, body.PilotDelayHours, by = user.Identity?.Name });
-        await Audit.WriteAsync(db, user, "agent_updates_settings", "agent_updates", body);
+        await Audit.WritePlatformAsync(db, user, "agent_updates_settings", "agent_updates", body);
         return Results.NoContent();
     }
 
@@ -71,7 +72,7 @@ public static class AgentUpdateEndpoints
         await using var c = await db.OpenConnectionAsync();
         await c.ExecuteAsync("UPDATE agent_update_settings SET release_now_version = @latest, updated_by = @by, updated_at = now() WHERE id = 1",
             new { latest, by = user.Identity?.Name });
-        await Audit.WriteAsync(db, user, "agent_updates_release_now", "agent_updates", new { version = latest });
+        await Audit.WritePlatformAsync(db, user, "agent_updates_release_now", "agent_updates", new { version = latest });
         return Results.Ok(new { version = latest });
     }
 
@@ -82,7 +83,7 @@ public static class AgentUpdateEndpoints
         var n = await c.ExecuteAsync("UPDATE stations SET update_group = COALESCE(@UpdateGroup, update_group), update_now = COALESCE(@UpdateNow, update_now) WHERE id = @id",
             new { id, body.UpdateGroup, body.UpdateNow });
         if (n == 0) return Results.NotFound();
-        await Audit.WriteAsync(db, user, "station_update_settings", "station:" + id, body);
+        await Audit.WritePlatformAsync(db, user, "station_update_settings", "station:" + id, body);
         return Results.NoContent();
     }
 }

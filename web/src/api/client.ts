@@ -63,6 +63,11 @@ export interface Me {
   role: 'superadmin' | 'owner' | 'manager' | 'viewer';
   sees_money: boolean;
   station_count: number;
+  /** The organization the user works in (a superadmin: the one selected in the header). */
+  organization_id: string | null;
+  organization: string | null;
+  /** Superadmin only: all organizations for the header switch. */
+  organizations: { id: string; name: string; is_active: boolean }[] | null;
 }
 
 /** Owner rights (a superadmin has them too). */

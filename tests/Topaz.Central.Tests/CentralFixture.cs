@@ -67,7 +67,7 @@ public sealed class CentralFixture : IAsyncLifetime
     }
 
     /// <summary>Connects a station the way production does: request → superadmin approval with the code → claim.</summary>
-    public async Task<EnrollResponse> EnrollAsync(string name)
+    public async Task<EnrollResponse> EnrollAsync(string name, Guid? organizationId = null)
     {
         var secret = RegistrationCode.NewSecret();
         var created = await Client().PostAsJsonAsync("/api/v1/registrations",
@@ -75,7 +75,7 @@ public sealed class CentralFixture : IAsyncLifetime
         created.EnsureSuccessStatusCode();
         var reg = (await created.Content.ReadFromJsonAsync<RegistrationResponse>(Protocol.Json))!;
         var (result, _) = await Factory!.Services.GetRequiredService<Topaz.Central.Auth.Registrations>()
-            .ApproveAsync(reg.RegistrationId, reg.VerificationCode, null, null, "test");
+            .ApproveAsync(reg.RegistrationId, reg.VerificationCode, null, null, "test", organizationId);
         if (result != Topaz.Central.Auth.Registrations.Decision.Ok) throw new InvalidOperationException("approval failed: " + result);
         var claim = await Client().PostAsJsonAsync("/api/v1/registrations/claim", new RegistrationClaimRequest { RegistrationId = reg.RegistrationId, Secret = secret }, Protocol.Json);
         claim.EnsureSuccessStatusCode();

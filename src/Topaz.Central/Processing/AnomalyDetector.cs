@@ -61,8 +61,8 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
             // PC health alerts close once the problem is gone (fresh data only: a silent station keeps its alert).
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
-                FROM stations s, v_station_disk d, alert_rules r
-                WHERE a.station_id = s.id AND d.station_id = s.id AND r.code = a.rule_code AND a.status <> 'closed'
+                FROM stations s, v_station_disk d, v_station_rules r
+                WHERE a.station_id = s.id AND d.station_id = s.id AND r.station_id = s.id AND r.code = a.rule_code AND a.status <> 'closed'
                   AND s.host_checked_at > now() - interval '15 minutes'
                   AND ((a.rule_code = 'clock_skew' AND abs(COALESCE(s.clock_skew_seconds, 0)) <= r.threshold * 60)
                     OR (a.rule_code = 'disk_low' AND COALESCE(d.db_disk_free, d.sys_disk_free, 0) >= r.threshold * 1073741824
@@ -87,7 +87,8 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
     }
 
     private const string Insert = "INSERT INTO alerts (station_id, rule_code, dedupe_key, severity, title, details, value, session_id, occurred_at) ";
-    private const string Rule = "JOIN alert_rules r ON r.code = '{0}' AND r.enabled";
+    /// <summary>The rule as the station's organization set it (v_station_rules: override or default). {1}: alias with station_id.</summary>
+    private const string Rule = "JOIN v_station_rules r ON r.code = '{0}' AND r.enabled AND r.station_id = {1}.station_id";
     private const string Recent = "s.started_at > now() - interval '30 days'";
 
     private static readonly string[] RuleSql =
@@ -102,7 +103,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                      lag(end_counter) OVER (PARTITION BY station_id, hose_id ORDER BY session_id) AS prev_end
               FROM hose_shift_counters) h
         JOIN shifts s ON s.station_id = h.station_id AND s.session_id = h.session_id
-        {string.Format(Rule, "counter_gap")}
+        {string.Format(Rule, "counter_gap", "h")}
         WHERE h.start_counter - h.prev_end > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -116,7 +117,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         JOIN shifts s ON s.station_id = h.station_id AND s.session_id = h.session_id AND s.ended_at IS NOT NULL
         LEFT JOIN (SELECT station_id, session_id, hose_id, sum(volume) AS liters FROM fuel_sales GROUP BY 1, 2, 3) o
                ON o.station_id = h.station_id AND o.session_id = h.session_id AND o.hose_id = h.hose_id
-        {string.Format(Rule, "counter_mismatch")}
+        {string.Format(Rule, "counter_mismatch", "h")}
         WHERE abs(h.end_counter - h.start_counter - COALESCE(o.liters, 0)) > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -127,7 +128,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                format('Смена №%s, оператор %s.', s.session_num, s.user_name), round(100.0 * x.aborted / x.total, 1), x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, count(*) FILTER (WHERE volume = 0) AS aborted, count(*) AS total FROM fuel_sales GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
-        {string.Format(Rule, "aborted_share")}
+        {string.Format(Rule, "aborted_share", "x")}
         WHERE x.aborted >= 5 AND 100.0 * x.aborted / x.total > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -138,7 +139,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                x.liters, x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, sum(volume) AS liters, count(*) AS ops FROM fuel_sales WHERE payment_kind = 'none' AND volume > 0 GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
-        {string.Format(Rule, "service_volume")}
+        {string.Format(Rule, "service_volume", "x")}
         WHERE x.liters > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -149,7 +150,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                round(100 * x.discounts / x.revenue, 2), x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, sum(amount_discount) AS discounts, sum(amount) AS revenue FROM fuel_sales GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
-        {string.Format(Rule, "discount_share")}
+        {string.Format(Rule, "discount_share", "x")}
         WHERE x.revenue > 0 AND 100 * x.discounts / x.revenue > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -158,11 +159,11 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         SELECT x.station_id, 'price_mismatch', x.session_id::text, r.severity,
                'Цена заказа ≠ цене ТРК: ' || x.orders || ' отпуск(ов)', format('Смена №%s: например, %s ₽ при цене на колонке %s ₽.', s.session_num, fmt_num(x.price), fmt_num(x.price_pump)),
                x.orders, x.session_id, s.started_at
-        FROM (SELECT station_id, session_id, count(*) AS orders, min(price) AS price, min(price_pump) AS price_pump
-              FROM fuel_sales f, alert_rules rr WHERE rr.code = 'price_mismatch' AND f.price_pump > 0 AND f.volume > 0 AND abs(f.price - f.price_pump) > rr.threshold
+        FROM (SELECT f.station_id, f.session_id, count(*) AS orders, min(f.price) AS price, min(f.price_pump) AS price_pump
+              FROM fuel_sales f JOIN v_station_rules rr ON rr.station_id = f.station_id WHERE rr.code = 'price_mismatch' AND f.price_pump > 0 AND f.volume > 0 AND abs(f.price - f.price_pump) > rr.threshold
               GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id
-        {string.Format(Rule, "price_mismatch")}
+        {string.Format(Rule, "price_mismatch", "x")}
         WHERE {Recent}
         ON CONFLICT DO NOTHING
         """,
@@ -174,7 +175,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                format('Документ %s, машина %s: по документу %s л, принято %s л.', f.doc_number, f.car_number, fmt_num(f.doc_volume), fmt_num(COALESCE(f.measured_volume, f.doc_volume + f.discrepancy))),
                round(f.doc_volume - COALESCE(f.measured_volume, f.doc_volume + f.discrepancy), 2), f.session_id, f.received_at
         FROM fuel_receipts f
-        JOIN alert_rules r ON r.code = 'receipt_discrepancy' AND r.enabled
+        JOIN v_station_rules r ON r.code = 'receipt_discrepancy' AND r.enabled AND r.station_id = f.station_id
         WHERE f.received_at > now() - interval '30 days'
           AND (f.doc_volume < 0 OR (f.doc_volume > 0 AND 100 * (f.doc_volume - COALESCE(f.measured_volume, f.doc_volume + f.discrepancy)) / f.doc_volume > r.threshold))
         ON CONFLICT DO NOTHING
@@ -184,7 +185,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         SELECT s.station_id, 'shift_too_long', s.session_id::text, r.severity,
                'Смена №' || s.session_num || ' открыта ' || round(extract(epoch FROM now() - s.started_at) / 3600) || ' ч',
                'Оператор ' || s.user_name || '. Проверьте, закрыта ли смена в Топазе.', round(extract(epoch FROM now() - s.started_at) / 3600, 1), s.session_id, s.started_at
-        FROM shifts s JOIN alert_rules r ON r.code = 'shift_too_long' AND r.enabled
+        FROM shifts s JOIN v_station_rules r ON r.code = 'shift_too_long' AND r.enabled AND r.station_id = s.station_id
         WHERE s.ended_at IS NULL AND s.started_at < now() - make_interval(hours => r.threshold::int)
         ON CONFLICT DO NOTHING
         """,
@@ -196,7 +197,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         JOIN (SELECT station_id, item_id, sum(quantity) AS sold FROM agg_shop_daily WHERE local_date >= current_date - 28 GROUP BY 1, 2) s
           ON s.station_id = m.station_id AND s.item_id = m.item_id
         LEFT JOIN v_item_keys k ON k.station_id = m.station_id AND k.item_id = m.item_id
-        JOIN alert_rules r ON r.code = 'goods_out' AND r.enabled
+        JOIN v_station_rules r ON r.code = 'goods_out' AND r.enabled AND r.station_id = m.station_id
         WHERE m.stock <= 0 AND s.sold > 0
         ON CONFLICT DO NOTHING
         """,
@@ -206,7 +207,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                'АЗС не на связи ' || COALESCE(round(extract(epoch FROM v.silent_for) / 60) || ' мин', '(ни разу)'),
                'Последняя связь: ' || COALESCE(to_char(v.last_seen_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') || ' МСК', 'нет') || '. Данные копятся на АЗС и придут после восстановления связи.',
                round(extract(epoch FROM v.silent_for) / 60), NULL, v.last_seen_at
-        FROM v_station_status v JOIN alert_rules r ON r.code = 'station_offline' AND r.enabled
+        FROM v_station_status v JOIN v_station_rules r ON r.code = 'station_offline' AND r.enabled AND r.station_id = v.id
         WHERE v.status = 'active' AND v.silent_for > make_interval(mins => r.threshold::int)
         ON CONFLICT DO NOTHING
         """,
@@ -224,7 +225,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                  'Освободите место: старые резервные копии и журналы Топаза, временные файлы Windows.'),
                round(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / 1073741824.0, 2), NULL, now()
         FROM stations s JOIN v_station_disk d ON d.station_id = s.id
-        JOIN alert_rules r ON r.code = 'disk_low' AND r.enabled
+        JOIN v_station_rules r ON r.code = 'disk_low' AND r.enabled AND r.station_id = s.id
         WHERE s.status = 'active' AND s.host_checked_at > now() - interval '1 day'
           AND least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) < r.threshold * 1073741824
         ON CONFLICT DO NOTHING
@@ -236,7 +237,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                'Время на ПК: ' || COALESCE(s.last_heartbeat->'host'->>'local_clock', '?') || ', часовой пояс Windows: ' || COALESCE(s.last_heartbeat->'host'->>'windows_time_zone', '?')
                    || ', пояс АЗС на сервере: ' || s.time_zone || '. Топаз записывает время операций по этим часам — исправьте время или пояс на ПК.',
                round(s.clock_skew_seconds / 60.0, 1), NULL, now()
-        FROM stations s JOIN alert_rules r ON r.code = 'clock_skew' AND r.enabled
+        FROM stations s JOIN v_station_rules r ON r.code = 'clock_skew' AND r.enabled AND r.station_id = s.id
         WHERE s.status = 'active' AND s.host_checked_at > now() - interval '1 day' AND abs(s.clock_skew_seconds) > r.threshold * 60
         ON CONFLICT DO NOTHING
         """,
@@ -265,7 +266,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         FROM v_station_fuels f
         JOIN fuel_types ft ON ft.code = f.suggested_type
         JOIN stations s ON s.id = f.station_id AND s.status = 'active'
-        JOIN alert_rules r ON r.code = 'fuel_unmapped' AND r.enabled
+        JOIN v_station_rules r ON r.code = 'fuel_unmapped' AND r.enabled AND r.station_id = f.station_id
         WHERE f.needs_confirmation
         GROUP BY f.station_id, r.severity
         ON CONFLICT DO NOTHING
@@ -279,7 +280,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                NULL, NULL, u.at
         FROM agent_update_reports u
         JOIN stations s ON s.id = u.station_id
-        JOIN alert_rules r ON r.code = 'agent_update_failed' AND r.enabled
+        JOIN v_station_rules r ON r.code = 'agent_update_failed' AND r.enabled AND r.station_id = u.station_id
         WHERE u.status = 'failed' AND u.at > now() - interval '30 days'
         ON CONFLICT DO NOTHING
         """,
@@ -288,7 +289,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         SELECT v.id, 'data_rejected', current_date::text, r.severity, 'Данные АЗС не принимаются',
                format('Отклонено агентом: %s, не обработано сервером: %s. См. «АЗС» и /api/v1/admin/batches.', COALESCE(v.agent_queue_dead, 0), v.server_failed),
                COALESCE(v.agent_queue_dead, 0) + v.server_failed, NULL, now()
-        FROM v_station_status v JOIN alert_rules r ON r.code = 'data_rejected' AND r.enabled
+        FROM v_station_status v JOIN v_station_rules r ON r.code = 'data_rejected' AND r.enabled AND r.station_id = v.id
         WHERE COALESCE(v.agent_queue_dead, 0) > 0 OR v.server_failed > 0
         ON CONFLICT DO NOTHING
         """,
@@ -296,14 +297,16 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
 
     private static async Task<int> LowFuelAsync(NpgsqlConnection c, CancellationToken ct)
     {
-        if (!await c.ExecuteScalarAsync<bool>("SELECT enabled FROM alert_rules WHERE code = 'low_fuel'")) return 0;
-        var stations = (await c.QueryAsync<Guid>("SELECT id FROM stations WHERE status = 'active'")).ToArray();
+        // Stations whose organization keeps the rule on.
+        var stations = (await c.QueryAsync<Guid>(
+            "SELECT s.id FROM stations s JOIN v_station_rules r ON r.station_id = s.id AND r.code = 'low_fuel' AND r.enabled WHERE s.status = 'active'")).ToArray();
+        if (stations.Length == 0) return 0;
         var n = 0;
         foreach (var t in (await TankPlanner.ComputeAsync(c, stations)).Where(t => t.Status == "critical"))
         {
             n += await c.ExecuteAsync(new CommandDefinition(Insert + """
                 SELECT @StationId, 'low_fuel', @key, r.severity, @title, @details, @value, @SessionId, now()
-                FROM alert_rules r WHERE r.code = 'low_fuel'
+                FROM v_station_rules r WHERE r.code = 'low_fuel' AND r.station_id = @StationId
                 ON CONFLICT DO NOTHING
                 """, new
             {
@@ -324,19 +327,26 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
 
     // ---------------------------------------------------------------- notifications
 
-    private sealed record Channel(long Id, string Target, string MinSeverity, bool DailyDigest, DateTime? LastDigest);
-    private sealed record Pending(long Id, string Station, string Severity, string Title, string? Details, DateTime? OccurredAt);
+    private sealed record Channel(long Id, string Target, string MinSeverity, bool DailyDigest, DateTime? LastDigest, Guid? OrganizationId);
+    private sealed record Pending(long Id, string Station, string Severity, string Title, string? Details, DateTime? OccurredAt, string RuleCode, Guid? OrganizationId);
+
+    /// <summary>Platform events (connection requests, agent updates) go to the superadmin's chats only.</summary>
+    private static bool IsPlatform(Pending p) => p.OrganizationId is null || p.RuleCode is "agent_update_failed" or "station_registration";
+
+    /// <summary>A chat of an organization hears only about its stations; a platform chat (no organization) about platform events.</summary>
+    private static bool Routes(Channel ch, Pending p) => ch.OrganizationId is { } org ? !IsPlatform(p) && p.OrganizationId == org : IsPlatform(p);
 
     private async Task NotifyAsync(NpgsqlConnection c, CancellationToken ct)
     {
         var token = options.Value.TelegramBotToken;
         var pending = (await c.QueryAsync<Pending>("""
-            SELECT a.id, COALESCE(sn.station, 'Новая АЗС') AS station, a.severity, a.title, a.details, a.occurred_at AS OccurredAt
-            FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id
+            SELECT a.id, COALESCE(sn.station, 'Новая АЗС') AS station, a.severity, a.title, a.details, a.occurred_at AS OccurredAt,
+                   a.rule_code AS RuleCode, st.organization_id AS OrganizationId
+            FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id LEFT JOIN stations st ON st.id = a.station_id
             WHERE a.notified_at IS NULL ORDER BY a.id
             """)).ToList();
         var channels = (await c.QueryAsync<Channel>(
-            "SELECT id, target, min_severity AS MinSeverity, daily_digest AS DailyDigest, last_digest AS LastDigest FROM notification_channels WHERE enabled")).ToList();
+            "SELECT id, target, min_severity AS MinSeverity, daily_digest AS DailyDigest, last_digest AS LastDigest, organization_id AS OrganizationId FROM notification_channels WHERE enabled")).ToList();
 
         var canSend = !string.IsNullOrWhiteSpace(token) && channels.Count > 0;
         if (canSend)
@@ -346,7 +356,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
             await DigestAsync(c, token!, channels, ct);
             foreach (var ch in channels)
             {
-                var mine = fresh.Where(p => SeverityRank[p.Severity] >= SeverityRank[ch.MinSeverity]).ToList();
+                var mine = fresh.Where(p => Routes(ch, p) && SeverityRank[p.Severity] >= SeverityRank[ch.MinSeverity]).ToList();
                 if (mine.Count > 0) await SendAsync(token!, ch.Target, Format(mine), ct);
             }
         }
@@ -375,10 +385,16 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         if (msk.Hour < 9) return;
         foreach (var ch in channels.Where(ch => ch.DailyDigest && (ch.LastDigest is null || ch.LastDigest.Value.Date < msk.Date)))
         {
-            var counts = (await c.QueryAsync<(string Severity, long Count)>(
-                "SELECT severity, count(*) FROM alerts WHERE detected_at > now() - interval '24 hours' GROUP BY 1")).ToDictionary(x => x.Severity, x => x.Count);
-            var stations = await c.QuerySingleAsync<(long Total, long Silent)>(
-                "SELECT count(*), count(*) FILTER (WHERE silent_for > interval '15 minutes' OR silent_for IS NULL) FROM v_station_status WHERE status = 'active'");
+            // The organization's own stations; a platform chat gets the whole picture (counts only, no data).
+            var org = ch.OrganizationId;
+            var counts = (await c.QueryAsync<(string Severity, long Count)>("""
+                SELECT a.severity, count(*) FROM alerts a LEFT JOIN stations s ON s.id = a.station_id
+                WHERE a.detected_at > now() - interval '24 hours' AND (@org::uuid IS NULL OR s.organization_id = @org) GROUP BY 1
+                """, new { org })).ToDictionary(x => x.Severity, x => x.Count);
+            var stations = await c.QuerySingleAsync<(long Total, long Silent)>("""
+                SELECT count(*), count(*) FILTER (WHERE v.silent_for > interval '15 minutes' OR v.silent_for IS NULL)
+                FROM v_station_status v JOIN stations s ON s.id = v.id WHERE v.status = 'active' AND (@org::uuid IS NULL OR s.organization_id = @org)
+                """, new { org });
             var text = $"<b>Topaz Center: сводка за сутки</b>\nСобытий: 🔴 {counts.GetValueOrDefault("critical")} · 🟠 {counts.GetValueOrDefault("warning")} · 🔵 {counts.GetValueOrDefault("info")}\n" +
                        $"АЗС на связи: {stations.Total - stations.Silent} из {stations.Total}";
             if (await SendAsync(token, ch.Target, text, ct))

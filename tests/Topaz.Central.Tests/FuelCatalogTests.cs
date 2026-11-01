@@ -132,7 +132,7 @@ public sealed class FuelCatalogTests(CentralFixture fx) : IClassFixture<CentralF
     public async Task Reference_types_rename_hide_and_delete_rules()
     {
         var s = await StationAsync("АЗС-fc-R", (1, "ДТ летнее"));
-        var owner = await LoginAsync("fc-owner2", Roles.Owner);
+        var owner = await LoginAsync("fc-owner2", Roles.Superadmin); // the shared reference list is the superadmin's
 
         var add = await owner.PostAsJsonAsync("/api/v1/ui/catalog/fuel-types", new { name = "ДТ зимнее" });
         var code = (await add.Content.ReadFromJsonAsync<JsonObject>())!["code"]!.GetValue<string>();
@@ -155,6 +155,10 @@ public sealed class FuelCatalogTests(CentralFixture fx) : IClassFixture<CentralF
 
         // Only the owner edits the reference and the mappings; others read within their stations.
         var other = await StationAsync("АЗС-fc-hidden", (1, "Аи92"));
+        // An owner confirms the own stations' mapping, but the shared reference list is not theirs to change.
+        var anOwner = await LoginAsync("fc-plain-owner", Roles.Owner);
+        Assert.Equal(HttpStatusCode.Forbidden, (await anOwner.PostAsJsonAsync("/api/v1/ui/catalog/fuel-types", new { name = "x" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await anOwner.DeleteAsync("/api/v1/ui/catalog/fuel-types/CNG")).StatusCode);
         foreach (var role in new[] { Roles.Manager, Roles.Viewer })
         {
             var u = await LoginAsync("fc-" + role, role, s);
