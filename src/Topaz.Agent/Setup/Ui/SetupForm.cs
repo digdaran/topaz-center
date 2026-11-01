@@ -20,7 +20,7 @@ public sealed class SetupForm : Form
     private readonly IMachine _machine;
     private SetupPlan _plan;
     private readonly Label _title = new() { AutoSize = true, Font = new Font("Segoe UI", 14f, FontStyle.Bold), ForeColor = Color.White };
-    private readonly Label _subtitle = new() { AutoSize = true, Font = new Font("Segoe UI", 9.5f), ForeColor = Color.FromArgb(0xdd, 0xe8, 0xff) };
+    private readonly Label _subtitle = new() { AutoSize = true, MaximumSize = new Size(550, 0), Font = new Font("Segoe UI", 9.5f), ForeColor = Color.FromArgb(0xdd, 0xe8, 0xff) };
     private readonly Panel _body = new() { Dock = DockStyle.Fill, Padding = new Padding(24, 16, 24, 8), AutoScroll = true };
     private readonly Button _primary = new() { AutoSize = true, MinimumSize = new Size(120, 34) };
     private readonly Button _secondary = new() { AutoSize = true, MinimumSize = new Size(100, 34) };
@@ -46,11 +46,11 @@ public sealed class SetupForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(600, 500);
+        ClientSize = new Size(600, 600); // room for «Дополнительно» without scrolling
         BackColor = Color.White;
         try { Icon = Icon.ExtractAssociatedIcon(SetupApp.CurrentExe); } catch (Exception) { /* default icon */ }
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Accent, Padding = new Padding(24, 14, 24, 10) };
+        var header = new Panel { Dock = DockStyle.Top, Height = 96, BackColor = Accent, Padding = new Padding(24, 14, 24, 10) };
         var headerText = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Accent };
         headerText.Controls.AddRange([_title, _subtitle]);
         header.Controls.Add(headerText);
