@@ -52,40 +52,6 @@ public sealed class ApiTests(CentralFixture fx) : IClassFixture<CentralFixture>
     }
 
     [PostgresFact]
-    public async Task Enrollment_flow_protects_existing_stations()
-    {
-        var bad = await fx.Client().PostAsJsonAsync("/api/v1/enroll", new EnrollRequest { StationName = "АЗС-7", EnrollmentKey = "wrong" }, Protocol.Json);
-        Assert.Equal(HttpStatusCode.Forbidden, bad.StatusCode);
-
-        var first = await fx.EnrollAsync("АЗС-7");
-        Assert.StartsWith("tpz_", first.Token);
-
-        // Same name (any case) cannot be taken over while the station is active.
-        var again = await fx.Client().PostAsJsonAsync("/api/v1/enroll", new EnrollRequest { StationName = " азс-7 ", EnrollmentKey = CentralFixture.EnrollKey }, Protocol.Json);
-        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
-
-        // Admin resets the station (agent reinstalled) → re-enrollment gives a new token, the old one stops working.
-        Assert.Equal(HttpStatusCode.Unauthorized, (await fx.Client().PostAsync($"/api/v1/admin/stations/{first.StationId}/reset", null)).StatusCode);
-        var reset = await fx.Client(CentralFixture.AdminToken).PostAsync($"/api/v1/admin/stations/{first.StationId}/reset", null);
-        Assert.Equal(HttpStatusCode.OK, reset.StatusCode);
-        var second = await fx.EnrollAsync("АЗС-7");
-        Assert.Equal(first.StationId, second.StationId);
-        Assert.NotEqual(first.Token, second.Token);
-
-        var stations = await fx.Client(CentralFixture.AdminToken).GetStringAsync("/api/v1/admin/stations");
-        Assert.Contains("АЗС-7", stations);
-
-        var hb = new HeartbeatRequest { AgentVersion = "t", QueuePending = 3, TopazDbOk = true };
-        Assert.Equal(HttpStatusCode.Unauthorized, (await fx.Client(first.Token).PostAsJsonAsync("/api/v1/heartbeat", hb, Protocol.Json)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await fx.Client(second.Token).PostAsJsonAsync("/api/v1/heartbeat", hb, Protocol.Json)).StatusCode);
-        Assert.Equal(3, await fx.QueryAsync<int>("SELECT agent_queue_pending FROM v_station_status WHERE id = @id", new { id = second.StationId }));
-        var failed = await fx.Client(CentralFixture.AdminToken).GetAsync("/api/v1/admin/batches?status=failed");
-        Assert.Equal(HttpStatusCode.OK, failed.StatusCode);
-        var datasets = await fx.Client(CentralFixture.AdminToken).GetAsync("/api/v1/export/datasets");
-        Assert.Equal(HttpStatusCode.OK, datasets.StatusCode);
-    }
-
-    [PostgresFact]
     public async Task Batches_are_idempotent()
     {
         var st = await fx.EnrollAsync("АЗС-idem");

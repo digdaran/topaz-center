@@ -7,6 +7,7 @@ import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from 
 import { bucketLabel, compact, dateTime, int, liters, money, pct } from '../lib/format';
 import { LatestAlerts } from './ControlPage';
 import { UnmappedFuelsBanner } from './FuelCatalog';
+import { PendingStationsBanner } from './StationRequests';
 
 export interface Kpi {
   fuel_revenue: number; liters: number; orders: number; aborted: number; service_liters: number; cashless: number; mixed: number;
@@ -80,6 +81,7 @@ export default function OverviewPage() {
                 ))}
               />
             )}
+            <PendingStationsBanner />
             <UnmappedFuelsBanner />
             <Row gutter={[12, 12]}>
               {kpis!.map((k) => (

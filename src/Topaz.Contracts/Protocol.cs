@@ -80,6 +80,99 @@ public sealed class EnrollResponse
     public string Token { get; set; } = "";
 }
 
+/// <summary>
+/// New agent asks to be connected (no credentials yet). The agent keeps a random secret and sends only its hash;
+/// an administrator approves the request in the UI after comparing the verification code shown on the station.
+/// </summary>
+public sealed class RegistrationRequest
+{
+    public string StationName { get; set; } = "";
+    /// <summary>Lowercase hex SHA-256 of the agent's secret (UTF-8). See <see cref="RegistrationCode"/>.</summary>
+    public string ClaimHash { get; set; } = "";
+    public string? MachineName { get; set; }
+    public string? AgentVersion { get; set; }
+    public string? Os { get; set; }
+    public string? Rid { get; set; }
+    /// <summary>The station this agent was connected as before (reinstall, access re-issued).</summary>
+    public Guid? PreviousStationId { get; set; }
+    public TopazInfo? Topaz { get; set; }
+}
+
+/// <summary>Facts from the Topaz DB that help an administrator recognise the station.</summary>
+public sealed class TopazInfo
+{
+    public long? LastSessionId { get; set; }
+    public long? LastSessionNum { get; set; }
+    public DateTimeOffset? LastSessionStart { get; set; }
+    public string? LastSessionOperator { get; set; }
+    public DateTimeOffset? FirstSessionStart { get; set; }
+    public List<string>? Fuels { get; set; }
+    public string? ServerVersion { get; set; }
+}
+
+public sealed class RegistrationResponse
+{
+    public Guid RegistrationId { get; set; }
+    public string VerificationCode { get; set; } = "";
+    public int PollSeconds { get; set; } = 60;
+}
+
+public sealed class RegistrationClaimRequest
+{
+    public Guid RegistrationId { get; set; }
+    public string Secret { get; set; } = "";
+}
+
+public static class RegistrationStatus
+{
+    public const string Pending = "pending";
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+    public const string Blocked = "blocked";
+}
+
+/// <summary>202 pending; 200 approved (with a fresh token every time until the token is first used); 403 rejected/blocked; 410 unknown or expired.</summary>
+public sealed class RegistrationClaimResponse
+{
+    public string Status { get; set; } = "";
+    public Guid? StationId { get; set; }
+    public string? StationName { get; set; }
+    public string? Token { get; set; }
+    public int? RetryAfterSeconds { get; set; }
+}
+
+/// <summary>Secret, claim hash and the human verification code (same on the agent and the server).</summary>
+public static class RegistrationCode
+{
+    private const string Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32: no I, L, O, U
+
+    public static string NewSecret() =>
+        Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    public static string ClaimHash(string secret) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret))).ToLowerInvariant();
+
+    /// <summary>"K7Q4-9MXD": 40 bits derived from the claim hash, so the server can show it without knowing the secret.</summary>
+    public static string Verification(string claimHash)
+    {
+        var h = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("topaz-registration-code:" + claimHash.ToLowerInvariant()));
+        ulong bits = 0;
+        for (var i = 0; i < 5; i++) bits = (bits << 8) | h[i];
+        var c = new char[8];
+        for (var i = 7; i >= 0; i--) { c[i] = Alphabet[(int)(bits & 31)]; bits >>= 5; }
+        return new string(c, 0, 4) + "-" + new string(c, 4, 4);
+    }
+
+    /// <summary>Lenient comparison of what an administrator typed: case, spaces, dashes, O/0 and I/L/1 confusions.</summary>
+    public static bool Matches(string expected, string? typed)
+    {
+        static string Norm(string? s) => new((s ?? "").ToUpperInvariant().Where(char.IsLetterOrDigit)
+            .Select(ch => ch switch { 'O' => '0', 'I' or 'L' => '1', _ => ch }).ToArray());
+        var a = Norm(expected);
+        return a.Length == 8 && a == Norm(typed);
+    }
+}
+
 public sealed class HeartbeatRequest
 {
     public string AgentVersion { get; set; } = "";

@@ -4,7 +4,7 @@ import { Alert, App, Button, Flex, Input, Modal, Popconfirm, Select, Space, Swit
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMe } from '../auth/auth';
-import { api, useMeta } from '../api/client';
+import { api, isOwner, useMeta } from '../api/client';
 import { dateTime } from '../lib/format';
 
 interface FuelType { code: string; name: string; sort: number; is_active: boolean; confirmed: number; suggested: number; in_use: boolean }
@@ -173,7 +173,7 @@ function Reference() {
 export function UnmappedFuelsBanner() {
   const me = useMe();
   const n = useMeta().data?.unmapped_fuels ?? 0;
-  if (me.role !== 'owner' || n === 0) return null;
+  if (!isOwner(me) || n === 0) return null;
   return (
     <Alert type="info" showIcon style={{ marginBottom: 12 }}
       message={<>Топливо АЗС ждёт сопоставления со справочником: {n}. Пока отчёты используют предложенные виды. <Link to="/settings/fuels">Сопоставить</Link></>} />

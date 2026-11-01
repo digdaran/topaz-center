@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { App, Badge, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { api, useMeta } from '../api/client';
+import { api, isOwner, isSuper, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { PageTitle } from '../components/ui';
 import { FuelCatalog } from './FuelCatalog';
@@ -12,9 +12,10 @@ import { dateTime } from '../lib/format';
 interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[] }
 interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string }
 
-const ROLE_LABEL: Record<string, string> = { owner: 'Владелец', manager: 'Управляющий', viewer: 'Просмотр' };
+const ROLE_LABEL: Record<string, string> = { superadmin: 'Суперадминистратор', owner: 'Владелец', manager: 'Управляющий', viewer: 'Просмотр' };
 const ROLE_HELP: Record<string, string> = {
-  owner: 'все АЗС, деньги, пользователи и настройки',
+  superadmin: 'всё, что владелец, плюс подключение АЗС, обновление агентов, пользователи и журнал действий',
+  owner: 'все АЗС, деньги, справочники, правила контроля и уведомления',
   manager: 'назначенные АЗС, аналитика с маржой, ввод себестоимости и планов',
   viewer: 'назначенные АЗС, только просмотр, без себестоимости и маржи',
 };
@@ -59,7 +60,7 @@ function Users() {
           { title: 'Логин', dataIndex: 'login' },
           { title: 'Имя', dataIndex: 'name' },
           { title: 'Роль', dataIndex: 'role', render: (v) => ROLE_LABEL[v] },
-          { title: 'АЗС', dataIndex: 'stations', render: (v: string[], r) => (r.role === 'owner' ? 'все' : v.length ? v.map((s) => <Tag key={s}>{stationName(s)}</Tag>) : <Tag color="orange">не назначены</Tag>) },
+          { title: 'АЗС', dataIndex: 'stations', render: (v: string[], r) => (r.role === 'owner' || r.role === 'superadmin' ? 'все' : v.length ? v.map((s) => <Tag key={s}>{stationName(s)}</Tag>) : <Tag color="orange">не назначены</Tag>) },
           { title: 'Статус', key: 's', render: (_, r) => (!r.is_active ? <Tag>отключён</Tag> : r.locked_until && new Date(r.locked_until) > new Date() ? <Tag color="red">заблокирован</Tag> : <Tag color="green">активен</Tag>) },
           { title: 'Последний вход', dataIndex: 'last_login_at', render: (v) => dateTime(v) },
         ]}
@@ -71,7 +72,7 @@ function Users() {
           <Form.Item name="role" label="Роль" extra={role && ROLE_HELP[role]}>
             <Select disabled={edit !== 'new' && (edit as UserRow)?.id === me.id} options={Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label }))} />
           </Form.Item>
-          {role !== 'owner' && (
+          {role !== 'owner' && role !== 'superadmin' && (
             <Form.Item name="stations" label="Доступ к АЗС">
               <Select mode="multiple" optionFilterProp="label" options={meta.data?.stations.map((s) => ({ value: s.id, label: s.name }))} />
             </Form.Item>
@@ -135,14 +136,12 @@ export default function SettingsPage() {
   const me = useMe();
   const navigate = useNavigate();
   const location = useLocation();
-  const tab = location.pathname.split('/')[2] ?? (me.role === 'owner' ? 'users' : 'profile');
+  const tab = location.pathname.split('/')[2] ?? (isSuper(me) ? 'users' : isOwner(me) ? 'fuels' : 'profile');
   const unmapped = useMeta().data?.unmapped_fuels ?? 0;
   const items = [
-    ...(me.role === 'owner' ? [
-      { key: 'users', label: 'Пользователи', children: <Users /> },
-      { key: 'fuels', label: <>Виды топлива {unmapped > 0 && <Badge count={unmapped} color="orange" size="small" />}</>, children: <FuelCatalog /> },
-      { key: 'audit', label: 'Журнал действий', children: <AuditLog /> },
-    ] : []),
+    ...(isSuper(me) ? [{ key: 'users', label: 'Пользователи', children: <Users /> }] : []),
+    ...(isOwner(me) ? [{ key: 'fuels', label: <>Виды топлива {unmapped > 0 && <Badge count={unmapped} color="orange" size="small" />}</>, children: <FuelCatalog /> }] : []),
+    ...(isSuper(me) ? [{ key: 'audit', label: 'Журнал действий', children: <AuditLog /> }] : []),
     { key: 'profile', label: 'Мой пароль', children: <Profile /> },
   ];
   return (

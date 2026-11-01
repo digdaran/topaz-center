@@ -1,10 +1,12 @@
-import { EditOutlined } from '@ant-design/icons';
+import { EditOutlined, MoreOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Badge, Button, Form, Input, Modal, Progress, Select, Table, Tabs, Tag, Tooltip } from 'antd';
+import { App, Badge, Button, Dropdown, Form, Input, Modal, Progress, Select, Table, Tabs, Tag, Tooltip } from 'antd';
 import StationCompare from './StationCompare';
 import AgentUpdates from './AgentUpdates';
+import StationRequests from './StationRequests';
 import { useState } from 'react';
-import { api } from '../api/client';
+import { api, isOwner, isSuper, useMeta } from '../api/client';
+import { useSearchParams } from 'react-router-dom';
 import { useMe } from '../auth/auth';
 import { PageTitle, QueryState } from '../components/ui';
 import { dateTime, dec, int } from '../lib/format';
@@ -65,7 +67,9 @@ const ZONES = ['Europe/Kaliningrad', 'Europe/Moscow', 'Europe/Samara', 'Asia/Yek
   'Asia/Irkutsk', 'Asia/Yakutsk', 'Asia/Vladivostok', 'Asia/Magadan', 'Asia/Kamchatka', 'Europe/Minsk', 'Asia/Almaty', 'Asia/Tashkent'];
 
 function status(r: StationRow) {
-  if (r.status !== 'active') return <Badge status="default" text={r.status === 'revoked' ? 'заблокирована' : 'ждёт переустановки'} />;
+  if (r.status !== 'active') return r.status === 'revoked'
+    ? <Badge status="error" text="заблокирована" />
+    : <Tooltip title="Доступ перевыпущен: агент пришлёт новую заявку, её нужно одобрить во вкладке «Подключение»."><Badge status="warning" text="ждёт новой заявки" /></Tooltip>;
   if (r.silent_seconds === null) return <Badge status="default" text="не выходила на связь" />;
   if (r.silent_seconds > 900) return <Badge status="error" text={`нет связи ${Math.round(r.silent_seconds / 60)} мин`} />;
   if (r.topaz_db_ok === false) return <Tooltip title={r.last_collect_error}><Badge status="error" text="нет доступа к базе Топаза" /></Tooltip>;
@@ -82,6 +86,31 @@ export default function StationsPage() {
   const { message } = App.useApp();
   const { data, error, isLoading } = useQuery({ queryKey: ['stations'], queryFn: () => api<StationRow[]>('/stations'), refetchInterval: 30_000 });
   const [edit, setEdit] = useState<StationRow | null>(null);
+  const meta = useMeta();
+  const [params, setParams] = useSearchParams();
+  const requests = isOwner(me) ? meta.data?.pending_registrations ?? 0 : 0;
+  const tab = params.get('tab') ?? (requests > 0 ? 'connect' : 'compare');
+  const { modal } = App.useApp();
+
+  const access = (r: StationRow, action: 'block' | 'unblock' | 'reissue') => {
+    const text = {
+      block: { title: `Заблокировать «${r.name}»?`, content: 'Агент сразу потеряет доступ к серверу (данные будут копиться на АЗС). История АЗС сохранится, разблокировать можно в любой момент.' },
+      unblock: { title: `Разблокировать «${r.name}»?`, content: 'Агент снова сможет отправлять данные со своим прежним доступом.' },
+      reissue: { title: `Перевыпустить доступ «${r.name}»?`, content: 'Текущий доступ агента перестанет действовать. Агент пришлёт новую заявку с новым кодом — её нужно будет одобрить как «существующая АЗС». Используйте при переносе на другой ПК или подозрении на утечку.' },
+    }[action];
+    modal.confirm({
+      ...text, okText: 'Да', cancelText: 'Отмена', okButtonProps: { danger: action !== 'unblock' },
+      onOk: async () => {
+        try {
+          await api(`/stations/${r.id}/access`, { method: 'POST', body: { action } });
+          message.success('Готово');
+          qc.invalidateQueries();
+        } catch (e) {
+          message.error((e as Error).message);
+        }
+      },
+    });
+  };
   const [form] = Form.useForm();
 
   const save = async () => {
@@ -99,7 +128,7 @@ export default function StationsPage() {
   return (
     <>
       <PageTitle title="АЗС" />
-      <Tabs destroyInactiveTabPane items={[
+      <Tabs destroyInactiveTabPane activeKey={tab} onChange={(k) => { const p = new URLSearchParams(params); p.set('tab', k); setParams(p, { replace: true }); }} items={[
         { key: 'compare', label: 'Сравнение', children: <StationCompare /> },
         { key: 'status', label: 'Состояние и настройки', children: (
       <QueryState error={error} loading={isLoading}>
@@ -120,12 +149,29 @@ export default function StationsPage() {
             { title: 'Регион / группа', key: 'rg', render: (_, r) => [r.region, r.group_name].filter(Boolean).join(' / ') || '—' },
             { title: 'Часовой пояс', dataIndex: 'time_zone', key: 'tz' },
             { title: 'Агент', key: 'ag', render: (_, r) => <>{r.agent_version ?? '—'}<div style={{ opacity: 0.6, fontSize: 12 }}>{r.machine_name} · Firebird {r.topaz_db_version ?? '?'}</div></> },
-            ...(me.role === 'owner' ? [{ title: '', key: 'e', width: 48, render: (_: unknown, r: StationRow) => <Button type="text" icon={<EditOutlined />} onClick={() => { setEdit(r); form.setFieldsValue(r); }} /> }] : []),
+            ...(isOwner(me) ? [{
+              title: '', key: 'e', width: 88, render: (_: unknown, r: StationRow) => (
+                <>
+                  <Button type="text" icon={<EditOutlined />} aria-label="настройки АЗС" onClick={() => { setEdit(r); form.setFieldsValue(r); }} />
+                  {isSuper(me) && (
+                    <Dropdown trigger={['click']} menu={{
+                      items: [
+                        r.status === 'revoked'
+                          ? { key: 'unblock', label: 'Разблокировать', onClick: () => access(r, 'unblock') }
+                          : { key: 'block', label: 'Заблокировать', danger: true, onClick: () => access(r, 'block') },
+                        { key: 'reissue', label: 'Перевыпустить доступ', onClick: () => access(r, 'reissue') },
+                      ],
+                    }}><Button type="text" icon={<MoreOutlined />} aria-label="доступ АЗС" /></Dropdown>
+                  )}
+                </>
+              ),
+            }] : []),
           ]}
         />
       </QueryState>
         ) },
-        ...(me.role === 'owner' ? [{ key: 'updates', label: 'Обновление агентов', children: <AgentUpdates /> }] : []),
+        ...(isOwner(me) ? [{ key: 'connect', label: <>Подключение {requests > 0 && <Badge count={requests} size="small" />}</>, children: <StationRequests /> }] : []),
+        ...(isSuper(me) ? [{ key: 'updates', label: 'Обновление агентов', children: <AgentUpdates /> }] : []),
       ]} />
       <Modal open={!!edit} title={`АЗС: ${edit?.topaz_name}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>
         <Form form={form} layout="vertical">

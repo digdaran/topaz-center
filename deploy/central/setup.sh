@@ -56,7 +56,6 @@ else
   set_env DOMAIN "$DOMAIN"
   set_env ACME_EMAIL "$EMAIL"
   set_env POSTGRES_PASSWORD "$(openssl rand -hex 24)"
-  set_env TOPAZ_ENROLLMENT_KEY "$(openssl rand -hex 16)"
   set_env TOPAZ_ADMIN_TOKEN "$(openssl rand -hex 32)"
   set_env TOPAZ_BOOTSTRAP_OWNER_LOGIN admin
   set_env TOPAZ_BOOTSTRAP_OWNER_PASSWORD "$P1"
@@ -97,8 +96,8 @@ echo
 if (( ok )); then
   say "Готово: https://$DOMAIN/"
   (( NEW )) && echo "Вход: admin и пароль, который вы ввели. После первого входа можно удалить TOPAZ_BOOTSTRAP_OWNER_PASSWORD из .env."
-  echo "Ключ для установки агентов на АЗС (-EnrollmentKey):"
-  grep -E '^TOPAZ_ENROLLMENT_KEY=' .env | cut -d= -f2- | tr -d "'"
+  echo "Агенты на АЗС ставятся без ключа: после установки АЗС появится в «АЗС → Подключение»,"
+  echo "одобрите её, сверив код подтверждения с тем, кто устанавливал агент."
 else
   warn "сервис пока не отвечает по HTTPS. Последние строки логов:"
   "${DC[@]}" logs --tail 30 caddy central || true

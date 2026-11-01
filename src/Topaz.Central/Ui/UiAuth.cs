@@ -10,10 +10,12 @@ namespace Topaz.Central.Ui;
 
 public static class Roles
 {
+    /// <summary>Everything an owner can do, plus connecting stations, agent updates, users and the audit log.</summary>
+    public const string Superadmin = "superadmin";
     public const string Owner = "owner";
     public const string Manager = "manager";
     public const string Viewer = "viewer";
-    public static readonly string[] All = [Owner, Manager, Viewer];
+    public static readonly string[] All = [Superadmin, Owner, Manager, Viewer];
 
     /// <summary>Owners and managers see costs and margins; viewers do not.</summary>
     public static bool SeesMoney(ClaimsPrincipal u) => u.IsInRole(Owner) || u.IsInRole(Manager);
@@ -22,7 +24,8 @@ public static class Roles
 public static class Policies
 {
     public const string Ui = "ui";
-    public const string Owner = "ui-owner";
+    public const string Super = "ui-super";
+    public const string Owner = "ui-owner"; // owner or superadmin
     public const string Manager = "ui-manager"; // owner or manager
 }
 
@@ -134,6 +137,8 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
         new Claim(ClaimTypes.Name, u.Login),
         new Claim("display_name", u.Name),
         new Claim(ClaimTypes.Role, u.Role),
+        // A superadmin is also an owner, so every owner check covers it.
+        .. (u.Role == Roles.Superadmin ? [new Claim(ClaimTypes.Role, Roles.Owner)] : Array.Empty<Claim>()),
         new Claim("stamp", u.SecurityStamp.ToString()),
     ], CookieAuthenticationDefaults.AuthenticationScheme));
 }
@@ -179,6 +184,7 @@ public static class UiAuthSetup
             });
         services.AddAuthorizationBuilder()
             .AddPolicy(Policies.Ui, p => p.RequireAuthenticatedUser())
+            .AddPolicy(Policies.Super, p => p.RequireRole(Roles.Superadmin))
             .AddPolicy(Policies.Owner, p => p.RequireRole(Roles.Owner))
             .AddPolicy(Policies.Manager, p => p.RequireRole(Roles.Owner, Roles.Manager));
     }
@@ -207,7 +213,7 @@ public sealed class StationScope(NpgsqlDataSource db, IMemoryCache cache)
         {
             // Not cached: a newly enrolled station must show up for the owner immediately (one tiny query).
             await using var oc = await db.OpenConnectionAsync();
-            return (await oc.QueryAsync<Guid>("SELECT id FROM stations WHERE status <> 'revoked'")).ToArray();
+            return (await oc.QueryAsync<Guid>("SELECT id FROM stations")).ToArray(); // blocked ones too: their history stays visible
         }
         return (await cache.GetOrCreateAsync($"scope:{uid}:{owner}", async e =>
         {

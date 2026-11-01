@@ -1,9 +1,11 @@
 namespace Topaz.Central;
 
-/// <summary>Bound from section "Topaz"; in Docker via env, e.g. Topaz__EnrollmentKey.</summary>
+/// <summary>Bound from section "Topaz"; in Docker via env, e.g. Topaz__AdminToken.</summary>
 public sealed class CentralOptions
 {
-    /// <summary>Shared install key agents present once to obtain their own token.</summary>
+    /// <summary>Connection requests accepted per IP address and hour (unauthenticated endpoint).</summary>
+    public int RegistrationsPerHourPerIp { get; set; } = 10;
+    /// <summary>Obsolete (shared install key, removed in 1.3): only read to warn that it can be deleted.</summary>
     public string? EnrollmentKey { get; set; }
     /// <summary>Bearer token for /api/v1/admin and /api/v1/export.</summary>
     public string? AdminToken { get; set; }

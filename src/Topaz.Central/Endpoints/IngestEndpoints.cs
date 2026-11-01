@@ -13,13 +13,17 @@ namespace Topaz.Central.Endpoints;
 
 public static class IngestEndpoints
 {
-    private sealed record ExistingStation(Guid Id, string Status);
-
     public static void MapIngest(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup(Protocol.ApiPrefix);
 
-        api.MapPost("/enroll", Enroll).RequireRateLimiting("enroll");
+        // Shared-key enrollment is gone: new agents send a connection request that a superadmin approves.
+        api.MapPost("/enroll", () => Results.Problem(statusCode: 410, title: "Enrollment by key is disabled",
+            detail: "Update the agent to 1.3.0 or newer: it sends a connection request that an administrator approves."));
+        api.MapPost("/registrations", async (RegistrationRequest body, HttpContext ctx, Registrations regs) =>
+            ToResult(await regs.CreateAsync(body, ClientIp(ctx)))).RequireRateLimiting("registration");
+        api.MapPost("/registrations/claim", async (RegistrationClaimRequest body, HttpContext ctx, Registrations regs) =>
+            ToResult(await regs.ClaimAsync(body, ClientIp(ctx)))).RequireRateLimiting("registration-claim");
 
         var station = api.MapGroup("").AddEndpointFilter<StationAuthFilter>().RequireRateLimiting("station");
         station.MapPost("/batches", ReceiveBatch);
@@ -58,63 +62,11 @@ public static class IngestEndpoints
         return Results.File(Path.Combine(p.Directory, file), contentType, enableRangeProcessing: true);
     }
 
-    /// <summary>
-    /// First contact of a newly installed agent: station name + shared install key → personal token.
-    /// A station that already has an active token cannot be taken over; an admin must reset it first.
-    /// </summary>
-    internal static async Task<IResult> Enroll(EnrollRequest body, HttpContext ctx, NpgsqlDataSource db,
-        IOptions<CentralOptions> options, ILogger<EnrollRequest> log)
-    {
-        if (string.IsNullOrEmpty(options.Value.EnrollmentKey))
-            return Results.Problem(statusCode: 503, title: "Enrollment is disabled (Topaz__EnrollmentKey not set)");
-        if (!Tokens.FixedTimeEquals(options.Value.EnrollmentKey, body.EnrollmentKey))
-        {
-            log.LogWarning("Enrollment with a wrong key for station {Station} from {Ip}", body.StationName, ctx.Connection.RemoteIpAddress);
-            return Results.Problem(statusCode: 403, title: "Invalid enrollment key");
-        }
-        var name = body.StationName?.Trim() ?? "";
-        if (name.Length is 0 or > 100)
-            return Results.ValidationProblem(new Dictionary<string, string[]> { ["station_name"] = ["Station name must be 1..100 characters."] });
+    private static IResult ToResult(Registrations.Outcome o) => Results.Json(o.Body, Protocol.Json, statusCode: o.Status);
 
-        var normalized = name.ToLowerInvariant();
-        var token = Tokens.NewStationToken();
-        var hash = Tokens.Hash(token);
-        var ip = ctx.Connection.RemoteIpAddress?.ToString();
-
-        await using var conn = await db.OpenConnectionAsync(ctx.RequestAborted);
-        await using var tx = await conn.BeginTransactionAsync(ctx.RequestAborted);
-        var existing = await conn.QuerySingleOrDefaultAsync<ExistingStation>(
-            "SELECT id, status FROM stations WHERE name_normalized = @normalized FOR UPDATE", new { normalized }, tx);
-
-        Guid id;
-        if (existing is null)
-        {
-            id = Guid.NewGuid();
-            await conn.ExecuteAsync("""
-                INSERT INTO stations (id, name, name_normalized, token_hash, token_issued_at, status, machine_name, agent_version, last_ip, last_seen_at)
-                VALUES (@id, @name, @normalized, @hash, now(), 'active', @machine, @version, @ip, now())
-                """, new { id, name, normalized, hash, machine = body.MachineName, version = body.AgentVersion, ip }, tx);
-            log.LogInformation("Station {Station} enrolled ({Id}) from {Ip}", name, id, ip);
-        }
-        else if (existing.Status == "reenroll")
-        {
-            id = existing.Id;
-            await conn.ExecuteAsync("""
-                UPDATE stations SET token_hash = @hash, token_issued_at = now(), status = 'active',
-                    machine_name = @machine, agent_version = @version, last_ip = @ip, last_seen_at = now()
-                WHERE id = @id
-                """, new { id, hash, machine = body.MachineName, version = body.AgentVersion, ip }, tx);
-            log.LogInformation("Station {Station} re-enrolled ({Id}) from {Ip}", name, id, ip);
-        }
-        else
-        {
-            return Results.Problem(statusCode: 409,
-                title: existing.Status == "revoked" ? "Station is revoked" : "Station is already enrolled",
-                detail: "An administrator must reset the station (POST /api/v1/admin/stations/{id}/reset) before a new agent can enroll.");
-        }
-        await tx.CommitAsync(ctx.RequestAborted);
-        return Results.Ok(new EnrollResponse { StationId = id, StationName = name, Token = token });
-    }
+    /// <summary>Caller address as people read it ("203.0.113.5", not "::ffff:203.0.113.5").</summary>
+    internal static string? ClientIp(HttpContext ctx) =>
+        ctx.Connection.RemoteIpAddress is { } a ? (a.IsIPv4MappedToIPv6 ? a.MapToIPv4() : a).ToString() : null;
 
     /// <summary>
     /// Stores the batch as received and acknowledges it; normalization happens asynchronously.

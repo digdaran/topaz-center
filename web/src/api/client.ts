@@ -60,10 +60,15 @@ export interface Me {
   id: string;
   login: string;
   name: string;
-  role: 'owner' | 'manager' | 'viewer';
+  role: 'superadmin' | 'owner' | 'manager' | 'viewer';
   sees_money: boolean;
   station_count: number;
 }
+
+/** Owner rights (a superadmin has them too). */
+export const isOwner = (me: { role: string }) => me.role === 'owner' || me.role === 'superadmin';
+/** Station connection, agent updates, users and the audit log. */
+export const isSuper = (me: { role: string }) => me.role === 'superadmin';
 
 export interface StationMeta {
   id: string;
@@ -82,6 +87,8 @@ export interface Meta {
   fuel_types: FuelTypeMeta[];
   /** station fuels waiting for a confirmed reference type */
   unmapped_fuels: number;
+  /** connection requests of new agents (owners and superadmins) */
+  pending_registrations: number;
   item_groups: string[];
   payment_modes: string[];
   data_range: { first_sale: string | null; last_sale: string | null };

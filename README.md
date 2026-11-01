@@ -43,15 +43,16 @@ dotnet test --filter "FullyQualifiedName~Batches_are_idempotent" # один те
 ```bash
 # сервер
 ConnectionStrings__Postgres="Host=localhost;Database=topaz;Username=postgres;Password=dev" \
-Topaz__EnrollmentKey=dev-key Topaz__AdminToken=dev-admin-token-0123456789abcdef \
+Topaz__AdminToken=dev-admin-token-0123456789abcdef Topaz__BootstrapOwnerLogin=admin Topaz__BootstrapOwnerPassword=dev-password-1 \
 ASPNETCORE_URLS=http://localhost:8080 dotnet run --project src/Topaz.Central
 
 # агент
 TOPAZ_AGENT_Firebird__DataSource=localhost TOPAZ_AGENT_Firebird__Database=/firebird/data/topaz.fdb \
 TOPAZ_AGENT_Firebird__Password=dev TOPAZ_AGENT_Station__Name="АЗС-тест" TOPAZ_AGENT_Station__TimeZone=Europe/Moscow \
 TOPAZ_AGENT_Server__Url=http://localhost:8080 TOPAZ_AGENT_Server__AllowInsecureHttp=true \
-TOPAZ_AGENT_Server__EnrollmentKey=dev-key TOPAZ_AGENT_StateDirectory=./.agent-state \
+TOPAZ_AGENT_StateDirectory=./.agent-state \
 dotnet run --project src/Topaz.Agent
+# агент пришлёт заявку и напишет код подтверждения: одобрите её в http://localhost:8080 → АЗС → Подключение
 ```
 
 Файлы баз Топаза (`*.fdb`) в git не попадают: в них реальные данные АЗС.
@@ -61,7 +62,7 @@ dotnet run --project src/Topaz.Agent
 ```bash
 cd web && npm ci && npm run dev          # http://localhost:5173, /api проксируется на :8080
 npm run lint && npm test                 # типы, eslint, vitest
-dotnet run --project tools/DemoData -- --server http://localhost:8080 --enroll-key dev-key --stations 5 --days 180
+dotnet run --project tools/DemoData -- --server http://localhost:8080 --admin-token dev-admin-token-0123456789abcdef --stations 5 --days 180
 E2E_BASE_URL=http://localhost:8080 E2E_LOGIN=admin E2E_PASSWORD=... npx playwright test
 ```
 

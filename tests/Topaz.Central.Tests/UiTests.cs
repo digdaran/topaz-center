@@ -172,10 +172,10 @@ public sealed class UiTests(CentralFixture fx) : IClassFixture<CentralFixture>
     }
 
     [PostgresFact]
-    public async Task Owner_manages_users_and_changes_apply_immediately()
+    public async Task Superadmin_manages_users_and_changes_apply_immediately()
     {
         var station = await StationAsync("АЗС-ui-users", "Europe/Moscow");
-        var owner = await LoginAsync("owner-u", Roles.Owner);
+        var owner = await LoginAsync("owner-u", Roles.Superadmin); // users and the audit log are superadmin-only
 
         Assert.Equal(HttpStatusCode.BadRequest, (await owner.PostAsJsonAsync("/api/v1/ui/users", new { login = "short", name = "s", role = "viewer", password = "123" })).StatusCode);
         var created = await owner.PostAsJsonAsync("/api/v1/ui/users", new { login = "viewer-v", name = "Смотритель", role = "viewer", password = Password, stations = new[] { station } });

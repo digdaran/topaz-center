@@ -31,7 +31,6 @@ services:
         condition: service_healthy
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Database=topaz;Username=topaz;Password=${POSTGRES_PASSWORD};Maximum Pool Size=50"
-      Topaz__EnrollmentKey: ${TOPAZ_ENROLLMENT_KEY:?set TOPAZ_ENROLLMENT_KEY in .env}
       Topaz__AdminToken: ${TOPAZ_ADMIN_TOKEN:?set TOPAZ_ADMIN_TOKEN in .env}
       Topaz__RawRetentionDays: ${TOPAZ_RAW_RETENTION_DAYS:-90}
       Topaz__StationSilentMinutes: ${TOPAZ_STATION_SILENT_MINUTES:-15}

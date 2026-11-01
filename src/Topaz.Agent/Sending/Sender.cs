@@ -28,14 +28,12 @@ public sealed class Sender(
     StateStore state,
     CentralClient client,
     TokenStore tokens,
+    Connection connection,
     AgentOptions options,
     AgentStatus status,
     TimeProvider clock,
     ILogger<Sender> log)
 {
-    private DateTimeOffset _enrollNotBefore = DateTimeOffset.MinValue;
-    private int _enrollAttempts;
-
     /// <summary>Performs at most one network operation. Returns how long the caller may sleep.</summary>
     public async Task<(SendStep Step, TimeSpan Delay)> StepAsync(CancellationToken ct)
     {
@@ -43,9 +41,10 @@ public sealed class Sender(
         var token = tokens.GetToken();
         if (token is null)
         {
-            if (now < _enrollNotBefore) return (SendStep.Waiting, _enrollNotBefore - now);
-            token = await EnrollAsync(ct);
-            if (token is null) return (SendStep.Waiting, _enrollNotBefore - clock.GetUtcNow());
+            // Not connected yet: the connection request waits for an administrator; data keeps queuing locally.
+            var (approved, _, wait) = await connection.StepAsync(ct);
+            if (approved is null) return (SendStep.Waiting, wait > TimeSpan.Zero ? wait : TimeSpan.FromSeconds(1));
+            token = approved;
         }
 
         var batch = state.PeekPending();
@@ -63,8 +62,8 @@ public sealed class Sender(
                 return (SendStep.Sent, TimeSpan.Zero);
 
             case SendOutcome.Unauthorized:
-                // Token revoked or station reset by the administrator: obtain a new token, keep the queue.
-                log.LogWarning("Server rejected the station token ({Error}); re-enrolling", result.Error);
+                // Access blocked or re-issued by the administrator: ask to be connected again (same station id), keep the queue.
+                log.LogWarning("Server rejected the station token ({Error}); sending a new connection request", result.Error);
                 tokens.Clear();
                 state.Defer(batch.Seq, now, result.Error ?? "unauthorized", countAttempt: false);
                 status.LastSendError = result.Error;
@@ -86,40 +85,5 @@ public sealed class Sender(
                     batch.Seq, batch.Attempts + 1, result.Error, delay.TotalSeconds);
                 return (SendStep.Failed, delay);
         }
-    }
-
-    private async Task<string?> EnrollAsync(CancellationToken ct)
-    {
-        var key = options.Server.EnrollmentKey;
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            log.LogError("No station token and no enrollment key (TOPAZ_AGENT_Server__EnrollmentKey). Data is collected but not sent.");
-            _enrollNotBefore = clock.GetUtcNow().AddMinutes(5);
-            return null;
-        }
-        var (response, result) = await client.EnrollAsync(new EnrollRequest
-        {
-            StationName = options.Station.Name.Trim(),
-            EnrollmentKey = key,
-            MachineName = Environment.MachineName,
-            AgentVersion = AgentInfo.Version,
-        }, ct);
-
-        if (response is not null)
-        {
-            tokens.Save(response.StationId, response.Token);
-            _enrollAttempts = 0;
-            log.LogInformation("Enrolled as station '{Name}' ({Id})", response.StationName, response.StationId);
-            return response.Token;
-        }
-
-        _enrollAttempts++;
-        var delay = result.Outcome == SendOutcome.Retry
-            ? Backoff.Next(_enrollAttempts, TimeSpan.FromSeconds(options.Server.RetryBaseSeconds), TimeSpan.FromSeconds(options.Server.RetryMaxSeconds))
-            : TimeSpan.FromMinutes(15); // wrong key / name taken: needs a human, don't hammer the server
-        _enrollNotBefore = clock.GetUtcNow() + delay;
-        status.LastSendError = "enroll: " + result.Error;
-        log.LogError("Enrollment failed: {Error}. Next try in {Delay:F0}s", result.Error, delay.TotalSeconds);
-        return null;
     }
 }

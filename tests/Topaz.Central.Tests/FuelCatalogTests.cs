@@ -72,7 +72,7 @@ public sealed class FuelCatalogTests(CentralFixture fx) : IClassFixture<CentralF
     public async Task New_fuels_are_suggested_learned_from_other_stations_and_confirmed()
     {
         var a = await StationAsync("АЗС-fc-A", (1, "Аи-95 Ultimate"), (2, "Аи92"));
-        var owner = await LoginAsync("fc-owner", Roles.Owner);
+        var owner = await LoginAsync("fc-owner", Roles.Superadmin); // reads the audit log
 
         // Suggestion by name, not confirmed yet; reports already use it. The "<не выбрано>" placeholder needs nothing.
         var cat = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/catalog/fuels?station={a}"))!;

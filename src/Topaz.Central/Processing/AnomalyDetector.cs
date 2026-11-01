@@ -17,6 +17,13 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
     public static readonly Dictionary<string, int> SeverityRank = new() { ["info"] = 1, ["warning"] = 2, ["critical"] = 3 };
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
+    /// <summary>Runs a detection round soon (e.g. a station asked to be connected: notify without waiting 5 minutes).</summary>
+    public void Wake() => _ = Task.Run(async () =>
+    {
+        try { await RunAsync(CancellationToken.None); }
+        catch (Exception ex) { log.LogError(ex, "Anomaly detection failed"); }
+    });
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try { await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken); } catch (OperationCanceledException) { return; }
@@ -42,6 +49,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         {
             await using var c = await db.OpenConnectionAsync(ct);
             var found = 0;
+            await Topaz.Central.Auth.Registrations.MaintainAsync(c);
             foreach (var sql in RuleSql)
                 found += await c.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct, commandTimeout: 300));
             found += await LowFuelAsync(c, ct);
@@ -59,6 +67,11 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                   AND ((a.rule_code = 'clock_skew' AND abs(COALESCE(s.clock_skew_seconds, 0)) <= r.threshold * 60)
                     OR (a.rule_code = 'disk_low' AND COALESCE(d.db_disk_free, d.sys_disk_free, 0) >= r.threshold * 1073741824
                                                  AND COALESCE(d.sys_disk_free, d.db_disk_free, 0) >= r.threshold * 1073741824))
+                """);
+            // A connection request alert closes once the request is decided (or expired).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM station_registrations g
+                WHERE a.rule_code = 'station_registration' AND a.status <> 'closed' AND g.id = a.registration_id AND g.status <> 'pending'
                 """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
@@ -227,6 +240,21 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         WHERE s.status = 'active' AND s.host_checked_at > now() - interval '1 day' AND abs(s.clock_skew_seconds) > r.threshold * 60
         ON CONFLICT DO NOTHING
         """,
+        // A new agent asks to be connected (no station yet: owners and superadmins see it).
+        """
+        INSERT INTO alerts (station_id, registration_id, rule_code, dedupe_key, severity, title, details, value, session_id, occurred_at)
+        SELECT NULL, g.id, 'station_registration', g.id::text, r.severity,
+               'АЗС ожидает подключения: «' || g.station_name || '»',
+               concat_ws(', ', 'ПК ' || g.machine_name, 'IP ' || g.ip, 'агент ' || g.agent_version)
+                   || CASE WHEN p.id IS NOT NULL THEN '. Повторное подключение АЗС «' || COALESCE(NULLIF(p.display_name, ''), p.name) || '»' ELSE '' END
+                   || '. Одобрите в «АЗС → Подключение», сверив код подтверждения с тем, кто устанавливал агент.',
+               NULL, NULL, g.created_at
+        FROM station_registrations g
+        LEFT JOIN stations p ON p.id = g.previous_station_id
+        JOIN alert_rules r ON r.code = 'station_registration' AND r.enabled
+        WHERE g.status = 'pending'
+        ON CONFLICT DO NOTHING
+        """,
         // Station fuels without a confirmed reference type (one alert per set of such fuels; closes automatically).
         Insert + """
         SELECT f.station_id, 'fuel_unmapped', string_agg(f.fuel_id::text, ',' ORDER BY f.fuel_id), r.severity,
@@ -303,8 +331,8 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
     {
         var token = options.Value.TelegramBotToken;
         var pending = (await c.QueryAsync<Pending>("""
-            SELECT a.id, sn.station, a.severity, a.title, a.details, a.occurred_at AS OccurredAt
-            FROM alerts a JOIN v_station_names sn ON sn.station_id = a.station_id
+            SELECT a.id, COALESCE(sn.station, 'Новая АЗС') AS station, a.severity, a.title, a.details, a.occurred_at AS OccurredAt
+            FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id
             WHERE a.notified_at IS NULL ORDER BY a.id
             """)).ToList();
         var channels = (await c.QueryAsync<Channel>(

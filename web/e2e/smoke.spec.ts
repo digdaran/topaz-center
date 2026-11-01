@@ -121,3 +121,11 @@ test('station list shows the PC health column', async ({ page }, info) => {
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_stations_status.png`, fullPage: true });
 });
+
+test('superadmin sees connection requests', async ({ page }, info) => {
+  await signIn(page);
+  await page.goto('/stations?tab=connect');
+  await expect(page.getByText('Решения за 30 дней')).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_station_requests.png`, fullPage: true });
+});

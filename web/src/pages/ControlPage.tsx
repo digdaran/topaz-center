@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, useFiltered } from '../api/client';
+import { api, isOwner, useFiltered } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
 import { PageTitle, QueryState } from '../components/ui';
@@ -49,6 +49,7 @@ function Alerts() {
                   {r.details && <div style={{ opacity: 0.75, fontSize: 13 }}>{r.details}</div>}
                   {r.session_id != null && <Link to={`/shifts/${r.station_id}/${r.session_id}${location.search}`}>карточка смены</Link>}
                   {r.rule_code === 'fuel_unmapped' && <Link to={`/settings/fuels?station=${r.station_id}`}>сопоставить топливо</Link>}
+                  {r.rule_code === 'station_registration' && <Link to="/stations?tab=connect">открыть заявку</Link>}
                 </>
               ),
             },
@@ -178,7 +179,7 @@ export default function ControlPage() {
       <PageTitle title="Контроль" />
       <Tabs destroyInactiveTabPane items={[
         { key: 'alerts', label: 'События', children: <Alerts /> },
-        ...(me.role === 'owner' ? [
+        ...(isOwner(me) ? [
           { key: 'rules', label: 'Правила', children: <Rules /> },
           { key: 'notify', label: 'Уведомления в Telegram', children: <Notifications /> },
         ] : []),

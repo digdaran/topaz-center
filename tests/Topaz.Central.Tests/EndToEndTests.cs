@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Topaz.Agent.Collection;
 using Topaz.Agent.Configuration;
@@ -39,12 +40,12 @@ public sealed class EndToEndTests(CentralFixture fx) : IClassFixture<CentralFixt
     }
 
     [PostgresFact]
-    public async Task Agent_enrolls_collects_and_delivers_through_outage()
+    public async Task Agent_asks_to_connect_collects_and_delivers_through_outage_after_approval()
     {
         var dir = Path.Combine(Path.GetTempPath(), "topaz-e2e-" + Guid.NewGuid().ToString("N"));
         var options = new AgentOptions
         {
-            Server = new ServerOptions { Url = "http://localhost", AllowInsecureHttp = true, EnrollmentKey = CentralFixture.EnrollKey, RetryBaseSeconds = 1, RetryMaxSeconds = 2 },
+            Server = new ServerOptions { Url = "http://localhost", AllowInsecureHttp = true, RetryBaseSeconds = 1, RetryMaxSeconds = 2 },
             Station = new StationOptions { Name = "АЗС-e2e" },
         };
         var catalog = new DatasetCatalog { Datasets = { new DatasetDefinition { Table = "flOrders", Kind = DatasetKind.Session, Key = ["OrderID"] } } };
@@ -58,11 +59,12 @@ public sealed class EndToEndTests(CentralFixture fx) : IClassFixture<CentralFixt
         var handler = new SwitchableHandler(fx.Factory!.Server.CreateHandler(), () => online);
         var client = new CentralClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost") }, options);
         var tokens = new TokenStore(state);
-        var sender = new Sender(state, client, tokens, options, status, TimeProvider.System, NullLogger<Sender>.Instance);
+        var connection = new Connection(state, client, tokens, options, status, topaz, catalog, TimeProvider.System, NullLogger<Connection>.Instance);
+        var sender = new Sender(state, client, tokens, connection, options, status, TimeProvider.System, NullLogger<Sender>.Instance);
 
         await collector.RunCycleAsync(default);
         var (step, _) = await sender.StepAsync(default);
-        Assert.Equal(SendStep.Waiting, step); // cannot even enroll while offline
+        Assert.Equal(SendStep.Waiting, step); // cannot even send the connection request while offline
         Assert.Equal(1, state.GetQueueStats().Pending);
 
         // Topaz keeps changing while offline.
@@ -71,6 +73,16 @@ public sealed class EndToEndTests(CentralFixture fx) : IClassFixture<CentralFixt
         Assert.Equal(2, state.GetQueueStats().Pending);
 
         online = true;
+        var (_, view, _) = await connection.StepAsync(default, ignoreSchedule: true); // request sent, waiting
+        Assert.Equal(ConnectionState.Pending, view.State);
+        Assert.Equal(2, state.GetQueueStats().Pending);                           // nothing leaves before approval
+
+        // The superadmin approves with the code the agent shows (check / install.ps1).
+        var regId = Guid.Parse(state.GetKv("registration_id")!);
+        var (decision, _) = await fx.Factory.Services.GetRequiredService<Topaz.Central.Auth.Registrations>().ApproveAsync(regId, view.Code, null, null, "e2e");
+        Assert.Equal(Topaz.Central.Auth.Registrations.Decision.Ok, decision);
+        Assert.Equal(ConnectionState.Connected, (await connection.StepAsync(default, ignoreSchedule: true)).View.State);
+
         for (var i = 0; i < 20 && state.GetQueueStats().Pending > 0; i++)
         {
             var (_, delay) = await sender.StepAsync(default);

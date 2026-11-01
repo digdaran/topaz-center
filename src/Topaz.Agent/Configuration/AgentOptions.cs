@@ -4,7 +4,7 @@ namespace Topaz.Agent.Configuration;
 
 /// <summary>
 /// Agent settings. Bound from appsettings.json (next to the exe) and environment variables
-/// with the TOPAZ_AGENT_ prefix, e.g. TOPAZ_AGENT_Firebird__Password, TOPAZ_AGENT_Server__EnrollmentKey.
+/// with the TOPAZ_AGENT_ prefix, e.g. TOPAZ_AGENT_Firebird__Password, TOPAZ_AGENT_Server__Url.
 /// </summary>
 public sealed class AgentOptions
 {
@@ -76,8 +76,6 @@ public sealed class UpdateOptions
 public sealed class ServerOptions
 {
     public string Url { get; set; } = "";
-    /// <summary>Shared install key, used only once to obtain the station token. Pass via env, not the file.</summary>
-    public string? EnrollmentKey { get; set; }
     public bool AllowInsecureHttp { get; set; }
     public int TimeoutSeconds { get; set; } = 60;
     public int HeartbeatSeconds { get; set; } = 60;

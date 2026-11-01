@@ -7,7 +7,7 @@ namespace Topaz.Central.Ui;
 /// First owner: either the CLI
 ///   docker compose exec central dotnet Topaz.Central.dll create-user --login admin --role owner [--name "..."]
 /// (password asked interactively or from env TOPAZ_NEW_PASSWORD), or env Topaz__BootstrapOwnerLogin/Password
-/// which creates an owner only while there are no users at all.
+/// which creates a superadmin only while there are no users at all.
 /// </summary>
 public static class UserCommands
 {
@@ -15,10 +15,10 @@ public static class UserCommands
     {
         string? Arg(string name) { var i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
         var login = Arg("--login");
-        var role = Arg("--role") ?? Roles.Owner;
+        var role = Arg("--role") ?? Roles.Superadmin;
         if (string.IsNullOrWhiteSpace(login))
         {
-            Console.Error.WriteLine("Usage: create-user --login <login> [--role owner|manager|viewer] [--name <name>]");
+            Console.Error.WriteLine("Usage: create-user --login <login> [--role superadmin|owner|manager|viewer] [--name <name>]");
             return 2;
         }
         var password = Environment.GetEnvironmentVariable("TOPAZ_NEW_PASSWORD") ?? ReadPassword($"Password for {login}: ");
@@ -41,7 +41,7 @@ public static class UserCommands
         if (string.IsNullOrWhiteSpace(options.BootstrapOwnerLogin) || string.IsNullOrEmpty(options.BootstrapOwnerPassword)) return;
         await using var c = await sp.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
         if (await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM users)")) return;
-        await sp.GetRequiredService<UserService>().CreateAsync(options.BootstrapOwnerLogin, options.BootstrapOwnerLogin, Roles.Owner, options.BootstrapOwnerPassword);
+        await sp.GetRequiredService<UserService>().CreateAsync(options.BootstrapOwnerLogin, options.BootstrapOwnerLogin, Roles.Superadmin, options.BootstrapOwnerPassword);
         log.LogWarning("Bootstrap owner {Login} created. Remove Topaz__BootstrapOwnerPassword from the environment.", options.BootstrapOwnerLogin);
     }
 

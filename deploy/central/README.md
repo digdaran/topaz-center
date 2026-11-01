@@ -2,7 +2,7 @@
 
 Нужно: Ubuntu 22.04/24.04, Docker Engine 24+ с плагином compose, DNS-запись `A` домена на сервер, открытые порты 80 и 443.
 
-**Быстрый способ** — одна команда. Скрипт спросит только почту для сертификата и пароль владельца (логин `admin`), сам сгенерирует остальные секреты в `.env`, скачает готовый образ, запустит сервис, проверит HTTPS и покажет ключ для установки агентов. Существующий `.env` он не перезаписывает, так что повторный запуск безопасен (так же обновляется версия после `git pull`).
+**Быстрый способ** — одна команда. Скрипт спросит только почту для сертификата и пароль владельца (логин `admin`), сам сгенерирует остальные секреты в `.env`, скачает готовый образ, запустит сервис, и проверит HTTPS. АЗС подключаются без ключей: по заявке, которую одобряет суперадминистратор (раздел «АЗС → Подключение»). Существующий `.env` он не перезаписывает, так что повторный запуск безопасен (так же обновляется версия после `git pull`).
 
 ```bash
 git clone https://github.com/digdaran/topaz-center.git   # если ещё не скачан
@@ -14,9 +14,8 @@ cd ~/topaz-center && git pull && bash deploy/central/setup.sh   # домен п�
 ```bash
 git clone https://github.com/digdaran/topaz-center.git && cd topaz-center/deploy/central
 cp .env.example .env
-# заполните .env: DOMAIN, ACME_EMAIL и три секрета, например:
+# заполните .env: DOMAIN, ACME_EMAIL и два секрета, например:
 #   POSTGRES_PASSWORD=$(openssl rand -base64 32)
-#   TOPAZ_ENROLLMENT_KEY=$(openssl rand -hex 16)
 #   TOPAZ_ADMIN_TOKEN=$(openssl rand -hex 32)
 chmod 600 .env
 docker compose up -d --build          # или CENTRAL_IMAGE=ghcr.io/<owner>/topaz-central:<версия> без --build
@@ -29,7 +28,7 @@ curl https://$DOMAIN/health/live      # 200
 **Веб-интерфейс** открывается по `https://$DOMAIN/`. Первый владелец создаётся из `TOPAZ_BOOTSTRAP_OWNER_LOGIN/PASSWORD` в `.env` (только пока пользователей нет; после первого входа удалите пароль из `.env`) или командой:
 
 ```bash
-docker compose exec -it central dotnet Topaz.Central.dll create-user --login admin --role owner
+docker compose exec -it central dotnet Topaz.Central.dll create-user --login admin --role superadmin
 ```
 
 Для уведомлений в Telegram впишите токен бота в `TOPAZ_TELEGRAM_BOT_TOKEN` и выполните `docker compose up -d`, затем добавьте чаты в разделе «Контроль → Уведомления». Подробности — в [docs/web.md](../../docs/web.md).

@@ -10,7 +10,7 @@
   - defaults: server https://topaz.08u.ru, Firebird password of a standard Topaz install
     (asked again if Firebird rejects it); on update the previous server/DB settings are kept;
   - writes appsettings.json (station name, server, Topaz DB path) - no secrets in it;
-  - stores secrets (Firebird password, enrollment key) as environment variables of the
+  - stores secrets (Firebird password) as environment variables of the
     service only (registry: HKLM\SYSTEM\CurrentControlSet\Services\TopazAgent\Environment);
   - restricts the state folder (%ProgramData%\TopazAgent) to SYSTEM and Administrators;
   - registers the service: automatic (delayed) start, restart on failure;
@@ -18,16 +18,17 @@
   The agent opens no listening ports; it only makes outbound HTTPS requests.
 
 .EXAMPLE
-  .\install.ps1 -StationName "АЗС-5 Северная" -EnrollmentKey <key from server .env>
+  .\install.ps1 -StationName "АЗС-5 Северная"
+  # prints a verification code: give it to the server administrator, who approves the station (АЗС -> Подключение)
 
 .EXAMPLE
-  .\install.ps1 -StationName "АЗС-5 Северная" -EnrollmentKey <key> `
+  .\install.ps1 -StationName "АЗС-5 Северная" `
       -ServerUrl https://other.example.com -DatabasePath "D:\Topaz\TopazAZS.fdb" -FirebirdPassword <password>
 #>
 param(
     [Parameter(Mandatory)] [string] $StationName,
     [string] $ServerUrl,
-    [string] $EnrollmentKey,
+    [string] $EnrollmentKey,   # obsolete since 1.3: stations connect by request; accepted and ignored
     [string] $DatabasePath,
     [string] $FirebirdHost = "127.0.0.1",
     [int] $FirebirdPort = 3050,
@@ -45,6 +46,13 @@ $DefaultServerUrl = "https://topaz.08u.ru"
 $DefaultFirebirdPassword = "electro"
 $source = $PSScriptRoot
 if (-not (Test-Path (Join-Path $source "TopazAgent.exe"))) { throw "TopazAgent.exe not found next to install.ps1" }
+
+function Get-VerificationCode {
+    <# The code "TopazAgent.exe check" prints while the connection request waits for approval. #>
+    param([string[]] $CheckOutput)
+    foreach ($line in $CheckOutput) { if ($line -match 'Verification code: ([0-9A-Z]{4}-[0-9A-Z]{4})') { return $Matches[1] } }
+    return $null
+}
 
 function Get-PreviousSetting {
     <# Reads Section.Key from a previous appsettings.json; $null if absent. #>
@@ -183,7 +191,8 @@ if ($current) { foreach ($line in $current) { $k, $v = $line -split "=", 2; $var
 $pwKey = "TOPAZ_AGENT_Firebird__Password"
 if ($FirebirdPassword) { $vars[$pwKey] = $FirebirdPassword }
 elseif (-not $vars[$pwKey]) { $vars[$pwKey] = $DefaultFirebirdPassword; Write-Host "Firebird password: standard Topaz password" }
-if ($EnrollmentKey) { $vars["TOPAZ_AGENT_Server__EnrollmentKey"] = $EnrollmentKey }
+if ($EnrollmentKey) { Write-Warning "-EnrollmentKey is no longer needed: the station is connected by request approved on the server." }
+$vars.Remove("TOPAZ_AGENT_Server__EnrollmentKey")   # left over from versions before 1.3
 function Save-ServiceEnvironment {
     Set-ItemProperty -Path $envKey -Name Environment -Type MultiString -Value ($vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
 }
@@ -208,4 +217,15 @@ for ($attempt = 1; $attempt -le 4; $attempt++) {
 
 Start-Service $ServiceName
 Write-Host "`nService $ServiceName started. Logs: $stateDir\logs"
+$code = Get-VerificationCode $checkOutput
+if ($code) {
+    Write-Host ""
+    Write-Host "  =====================================================================" -ForegroundColor Yellow
+    Write-Host "   АЗС ожидает подключения на сервере." -ForegroundColor Yellow
+    Write-Host "   Код подтверждения:  $code" -ForegroundColor Yellow
+    Write-Host "   Сообщите этот код администратору сервера: он сверит его и одобрит" -ForegroundColor Yellow
+    Write-Host "   заявку в разделе «АЗС -> Подключение». До одобрения данные копятся" -ForegroundColor Yellow
+    Write-Host "   на этом ПК и потом уйдут на сервер полностью." -ForegroundColor Yellow
+    Write-Host "  =====================================================================" -ForegroundColor Yellow
+}
 if (-not $checkOk) { Write-Warning "Check reported problems (see above). The service retries automatically; fix the cause and watch the logs." }

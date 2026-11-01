@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Dapper;
@@ -42,7 +43,7 @@ public sealed class CentralFixture : IAsyncLifetime
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
         {
             b.UseSetting("ConnectionStrings:Postgres", ConnectionString);
-            b.UseSetting("Topaz:EnrollmentKey", EnrollKey);
+            b.UseSetting("Topaz:RegistrationsPerHourPerIp", "100000");
             b.UseSetting("Topaz:AdminToken", AdminToken);
             b.UseSetting("Topaz:MaxProcessingAttempts", "2");
         });
@@ -65,11 +66,21 @@ public sealed class CentralFixture : IAsyncLifetime
         return client;
     }
 
+    /// <summary>Connects a station the way production does: request → superadmin approval with the code → claim.</summary>
     public async Task<EnrollResponse> EnrollAsync(string name)
     {
-        var r = await Client().PostAsJsonAsync("/api/v1/enroll", new EnrollRequest { StationName = name, EnrollmentKey = EnrollKey }, Protocol.Json);
-        r.EnsureSuccessStatusCode();
-        return (await r.Content.ReadFromJsonAsync<EnrollResponse>(Protocol.Json))!;
+        var secret = RegistrationCode.NewSecret();
+        var created = await Client().PostAsJsonAsync("/api/v1/registrations",
+            new RegistrationRequest { StationName = name, ClaimHash = RegistrationCode.ClaimHash(secret), MachineName = "TEST-PC", AgentVersion = "t" }, Protocol.Json);
+        created.EnsureSuccessStatusCode();
+        var reg = (await created.Content.ReadFromJsonAsync<RegistrationResponse>(Protocol.Json))!;
+        var (result, _) = await Factory!.Services.GetRequiredService<Topaz.Central.Auth.Registrations>()
+            .ApproveAsync(reg.RegistrationId, reg.VerificationCode, null, null, "test");
+        if (result != Topaz.Central.Auth.Registrations.Decision.Ok) throw new InvalidOperationException("approval failed: " + result);
+        var claim = await Client().PostAsJsonAsync("/api/v1/registrations/claim", new RegistrationClaimRequest { RegistrationId = reg.RegistrationId, Secret = secret }, Protocol.Json);
+        claim.EnsureSuccessStatusCode();
+        var c = (await claim.Content.ReadFromJsonAsync<RegistrationClaimResponse>(Protocol.Json))!;
+        return new EnrollResponse { StationId = c.StationId!.Value, StationName = c.StationName!, Token = c.Token! };
     }
 
     public async Task<T> QueryAsync<T>(string sql, object? args = null)

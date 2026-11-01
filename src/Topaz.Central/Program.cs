@@ -33,6 +33,7 @@ builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString)
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<StationAuthenticator>();
 builder.Services.AddSingleton<StationAuthFilter>();
+builder.Services.AddSingleton<Registrations>();
 builder.Services.AddSingleton<AdminAuthFilter>();
 builder.Services.AddSingleton<BatchSignal>();
 builder.Services.AddSingleton<Migrator>();
@@ -78,9 +79,13 @@ builder.Services.AddRateLimiter(o =>
         return ValueTask.CompletedTask;
     };
     // Enrollment: brute-force protection for the install key.
-    o.AddPolicy("enroll", ctx => RateLimitPartition.GetFixedWindowLimiter(
+    // Connection requests are unauthenticated: few per address; polling once a minute is plenty.
+    o.AddPolicy("registration", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = options.RegistrationsPerHourPerIp, Window = TimeSpan.FromHours(1) }));
+    o.AddPolicy("registration-claim", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(10) }));
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1) }));
@@ -96,8 +101,8 @@ var app = builder.Build();
 
 if (string.IsNullOrEmpty(options.AdminToken) || options.AdminToken.Length < 24)
     app.Logger.LogWarning("Topaz__AdminToken is not set or shorter than 24 chars: admin and export API are unusable");
-if (string.IsNullOrEmpty(options.EnrollmentKey))
-    app.Logger.LogWarning("Topaz__EnrollmentKey is not set: new agents cannot enroll");
+if (!string.IsNullOrEmpty(options.EnrollmentKey))
+    app.Logger.LogWarning("Topaz__EnrollmentKey is set but no longer used: stations connect by request (АЗС → Подключение). Remove it from .env");
 
 await app.Services.GetRequiredService<Migrator>().MigrateAsync(CancellationToken.None);
 await app.Services.GetRequiredService<Topaz.Central.Updates.AgentReleases>().ScanAsync(CancellationToken.None);
@@ -149,6 +154,7 @@ ui.MapUiFuelCatalog();
 ui.MapUiMoney();
 ui.MapUiControl();
 ui.MapUiAgentUpdates();
+ui.MapUiRegistrations();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>

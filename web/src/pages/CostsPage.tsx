@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import { api, useFilter, useFiltered, useMeta } from '../api/client';
+import { api, useFilter, useFiltered, useMeta, isOwner } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
 import { numCol, PageTitle, QueryState } from '../components/ui';
@@ -108,7 +108,7 @@ function ItemCosts() {
   const qc = useQueryClient();
   const { message } = App.useApp();
   const { data, error, isLoading } = useQuery({ queryKey: ['item-costs'], queryFn: () => api<{ items: R[]; history: R[] }>('/costs/items') });
-  const [station, setStation] = useState<string | null>(me.role === 'owner' ? null : meta.data?.stations[0]?.id ?? null);
+  const [station, setStation] = useState<string | null>(isOwner(me) ? null : meta.data?.stations[0]?.id ?? null);
   const [importOpen, setImportOpen] = useState(false);
   const [csv, setCsv] = useState('');
   const [result, setResult] = useState<R | null>(null);
@@ -146,7 +146,7 @@ function ItemCosts() {
       <Space wrap style={{ marginBottom: 8 }}>
         <span>Цены для:</span>
         <Select style={{ width: 240 }} value={station ?? 'all'} onChange={(v) => setStation(v === 'all' ? null : v)}
-          options={[...(me.role === 'owner' ? [{ value: 'all', label: 'всех АЗС' }] : []), ...(meta.data?.stations ?? []).map((s) => ({ value: s.id, label: s.name }))]} />
+          options={[...(isOwner(me) ? [{ value: 'all', label: 'всех АЗС' }] : []), ...(meta.data?.stations ?? []).map((s) => ({ value: s.id, label: s.name }))]} />
         <Input.Search allowClear placeholder="Товар или штрихкод" style={{ width: 240 }} onSearch={setSearch} />
         <Button icon={<UploadOutlined />} onClick={() => { setImportOpen(true); setResult(null); setCsv(''); }}>Загрузить из Excel (CSV)</Button>
       </Space>

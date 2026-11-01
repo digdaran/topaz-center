@@ -36,19 +36,27 @@ public sealed class CentralClient(HttpClient http, AgentOptions options)
         return await SendAsync(request, ct);
     }
 
-    public async Task<(EnrollResponse? Response, SendResult Result)> EnrollAsync(EnrollRequest body, CancellationToken ct)
+    /// <summary>Connection request (no credentials). Null status = network problem.</summary>
+    public Task<(int? Status, T? Body, string? Error)> RegisterAsync<T>(RegistrationRequest body, CancellationToken ct) where T : class =>
+        PostJsonAsync<T>("registrations", body, ct);
+
+    public Task<(int? Status, T? Body, string? Error)> ClaimAsync<T>(RegistrationClaimRequest body, CancellationToken ct) where T : class =>
+        PostJsonAsync<T>("registrations/claim", body, ct);
+
+    private async Task<(int? Status, T? Body, string? Error)> PostJsonAsync<T>(string path, object body, CancellationToken ct) where T : class
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, Url("enroll")) { Content = JsonContent.Create(body, options: Protocol.Json) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Url(path)) { Content = JsonContent.Create(body, options: Protocol.Json) };
         try
         {
             using var response = await http.SendAsync(request, ct);
-            if (response.IsSuccessStatusCode)
-                return (await response.Content.ReadFromJsonAsync<EnrollResponse>(Protocol.Json, ct), new SendResult(SendOutcome.Acked));
-            return (null, await Classify(response, ct));
+            T? parsed = null;
+            try { parsed = await response.Content.ReadFromJsonAsync<T>(Protocol.Json, ct); }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException) { /* proxy page or empty body */ }
+            return ((int)response.StatusCode, parsed, response.IsSuccessStatusCode ? null : $"HTTP {(int)response.StatusCode}");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
         {
-            return (null, new SendResult(SendOutcome.Retry, Describe(ex)));
+            return (null, null, Describe(ex));
         }
     }
 

@@ -14,7 +14,7 @@ public static class AgentUpdateEndpoints
 {
     public static void MapUiAgentUpdates(this RouteGroupBuilder ui)
     {
-        var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
+        var owner = ui.MapGroup("").RequireAuthorization(Policies.Super);
         owner.MapGet("/agent-updates", Get);
         owner.MapPut("/agent-updates", Save);
         owner.MapPost("/agent-updates/release-now", ReleaseNow);

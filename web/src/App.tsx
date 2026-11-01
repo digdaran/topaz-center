@@ -4,7 +4,7 @@ import {
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
-import { api, useMeta } from './api/client';
+import { api, isOwner, useMeta } from './api/client';
 import { lazy, ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
@@ -39,14 +39,14 @@ export const NAV: NavItem[] = [
   { key: '/fuel', label: 'Топливо', icon: <FireOutlined /> },
   { key: '/demand', label: 'Спрос', icon: <LineChartOutlined /> },
   { key: '/items', label: 'Товары', icon: <ShoppingOutlined /> },
-  { key: '/finance', label: 'Финансы', icon: <WalletOutlined />, roles: ['owner', 'manager'] },
+  { key: '/finance', label: 'Финансы', icon: <WalletOutlined />, roles: ['superadmin', 'owner', 'manager'] },
   { key: '/plans', label: 'План-факт', icon: <AimOutlined /> },
   { key: '/tanks', label: 'Запасы топлива', icon: <ExperimentOutlined /> },
   { key: '/control', label: 'Контроль', icon: <AlertOutlined /> },
   { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
   { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
   { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
-  { key: '/costs', label: 'Себестоимость', icon: <CalculatorOutlined />, roles: ['owner', 'manager'] },
+  { key: '/costs', label: 'Себестоимость', icon: <CalculatorOutlined />, roles: ['superadmin', 'owner', 'manager'] },
   { key: '/settings', label: 'Настройки', icon: <SettingOutlined /> },
 ];
 
@@ -61,11 +61,14 @@ function Shell({ children }: { children: ReactNode }) {
   const selected = NAV.filter((n) => n.key !== '/' && location.pathname.startsWith(n.key)).map((n) => n.key)[0] ?? '/';
   const alerts = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: { new: number; critical: number } }>('/alerts/summary'), refetchInterval: 60_000 });
   const meta = useMeta();
-  const unmapped = me.role === 'owner' ? meta.data?.unmapped_fuels ?? 0 : 0;
+  const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
+  const requests = isOwner(me) ? meta.data?.pending_registrations ?? 0 : 0;
   const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
     key: n.key, icon: n.icon,
     label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
       ? <Flex justify="space-between" align="center">{n.label}<Badge count={alerts.data!.counts.new} color={alerts.data!.counts.critical > 0 ? 'red' : 'orange'} overflowCount={99} /></Flex>
+      : n.key === '/stations' && requests > 0
+        ? <Flex justify="space-between" align="center">{n.label}<Badge count={requests} color="red" overflowCount={99} title="АЗС ожидают подключения" /></Flex>
       : n.key === '/settings' && unmapped > 0
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={unmapped} color="orange" overflowCount={99} title="Топливо АЗС ждёт сопоставления со справочником" /></Flex>
         : n.label,
@@ -100,7 +103,7 @@ function Shell({ children }: { children: ReactNode }) {
           <Dropdown
             menu={{
               items: [
-                { key: 'role', label: `Роль: ${{ owner: 'владелец', manager: 'управляющий', viewer: 'просмотр' }[me.role]}`, disabled: true },
+                { key: 'role', label: `Роль: ${{ superadmin: 'суперадминистратор', owner: 'владелец', manager: 'управляющий', viewer: 'просмотр' }[me.role]}`, disabled: true },
                 { key: 'profile', label: 'Сменить пароль', icon: <AppstoreOutlined />, onClick: () => navigate('/settings/profile') },
                 { key: 'logout', label: 'Выйти', icon: <LogoutOutlined />, onClick: logout },
               ],

@@ -20,7 +20,7 @@ public sealed class ControlTests(CentralFixture fx) : IClassFixture<CentralFixtu
     private static RecordChange Row(string dataset, string key, JsonObject data) => new() { Dataset = dataset, Key = key, Hash = Hash(dataset + key + data.ToJsonString()), Data = data };
 
     /// <summary>Captures what would go to the Telegram Bot API.</summary>
-    private sealed class FakeTelegram : HttpMessageHandler
+    internal sealed class FakeTelegram : HttpMessageHandler
     {
         public List<(string Url, string Body)> Sent { get; } = new();
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)

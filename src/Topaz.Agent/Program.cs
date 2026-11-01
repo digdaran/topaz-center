@@ -60,6 +60,7 @@ builder.Services.AddSingleton(_ => new StateStore(stateDir));
 builder.Services.AddSingleton<AgentStatus>();
 builder.Services.AddSingleton<HostProbe>();
 builder.Services.AddSingleton<TokenStore>();
+builder.Services.AddSingleton<Connection>();
 builder.Services.AddSingleton<ITopazSource, FirebirdTopazSource>();
 builder.Services.AddSingleton<Collector>();
 builder.Services.AddSingleton<Sender>();
@@ -160,10 +161,24 @@ internal static class Commands
             Console.WriteLine($"[FAIL] Server {options.Server.Url}: {ex.GetBaseException().Message}");
         }
 
+        // Connection: sends the request if needed and shows the verification code for the administrator.
         var tokens = sp.GetRequiredService<TokenStore>();
-        Console.WriteLine(tokens.GetToken() is null
-            ? (string.IsNullOrWhiteSpace(options.Server.EnrollmentKey) ? "[WARN] Not enrolled and no enrollment key set" : "[INFO] Not enrolled yet; will enroll on start")
-            : $"[OK] Enrolled, station id {tokens.StationId}");
+        if (tokens.GetToken() is not null) Console.WriteLine($"[OK] Connected, station id {tokens.StationId}");
+        else
+        {
+            var (_, view, _) = await sp.GetRequiredService<Connection>().StepAsync(CancellationToken.None, ignoreSchedule: true);
+            switch (view.State)
+            {
+                case ConnectionState.Connected: Console.WriteLine($"[OK] Connection approved: {view.Detail}"); break;
+                case ConnectionState.Pending:
+                    Console.WriteLine($"[ACTION] Waiting for approval on the server. Verification code: {view.Code}");
+                    Console.WriteLine("         Give this code to the server administrator (АЗС -> Подключение).");
+                    break;
+                case ConnectionState.Rejected: Console.WriteLine("[FAIL] The connection request was rejected by the server administrator"); ok = false; break;
+                case ConnectionState.Blocked: Console.WriteLine("[FAIL] Connection requests from this address are blocked on the server"); ok = false; break;
+                default: Console.WriteLine($"[WARN] Connection request not sent yet: {view.Detail}"); break;
+            }
+        }
         return ok ? 0 : 1;
     }
 

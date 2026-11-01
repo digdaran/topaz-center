@@ -19,7 +19,7 @@ public sealed class SenderTests : IDisposable
     private readonly ManualTime _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
     private readonly AgentOptions _options = new()
     {
-        Server = new ServerOptions { Url = "https://central.test", EnrollmentKey = "k", RetryBaseSeconds = 5, RetryMaxSeconds = 900 },
+        Server = new ServerOptions { Url = "https://central.test", RetryBaseSeconds = 5, RetryMaxSeconds = 900 },
         Station = new StationOptions { Name = "АЗС-1" },
     };
     private readonly Sender _sender;
@@ -30,8 +30,9 @@ public sealed class SenderTests : IDisposable
         _state = new StateStore(_dir.Path);
         _tokens = new TokenStore(_state);
         _tokens.Save(Guid.NewGuid(), "tpz_token");
-        _sender = new Sender(_state, new CentralClient(new HttpClient(_http), _options), _tokens, _options, new AgentStatus(), _time,
-            NullLogger<Sender>.Instance);
+        var client = new CentralClient(new HttpClient(_http), _options);
+        var connection = new Connection(_state, client, _tokens, _options, new AgentStatus(), new FakeTopaz(), new DatasetCatalog(), _time, NullLogger<Connection>.Instance);
+        _sender = new Sender(_state, client, _tokens, connection, _options, new AgentStatus(), _time, NullLogger<Sender>.Instance);
     }
 
     private void Queue(params string[] keys)
@@ -136,24 +137,34 @@ public sealed class SenderTests : IDisposable
     }
 
     [Fact]
-    public async Task Revoked_token_triggers_reenrollment_and_queue_is_kept()
+    public async Task Revoked_token_leads_to_a_connection_request_for_the_same_station_and_queue_is_kept()
     {
         Queue("1");
+        var stationId = Guid.Parse(_tokens.StationId!);
+        RegistrationRequest? sent = null;
         _http.Responder = req => req.RequestUri!.AbsolutePath switch
         {
-            "/api/v1/enroll" => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new EnrollResponse { StationId = Guid.NewGuid(), StationName = "АЗС-1", Token = "tpz_new" }, options: Protocol.Json),
-            },
+            "/api/v1/registrations" => Json(HttpStatusCode.Created, RegisterAndRemember(req, r => sent = r)),
+            "/api/v1/registrations/claim" => Json(HttpStatusCode.OK, new RegistrationClaimResponse { Status = "approved", StationId = stationId, StationName = "АЗС-1", Token = "tpz_new" }),
             _ when req.Headers.Authorization!.Parameter == "tpz_token" => new HttpResponseMessage(HttpStatusCode.Unauthorized),
             _ => new HttpResponseMessage(HttpStatusCode.Accepted),
         };
 
-        await _sender.StepAsync(default); // 401 → token cleared
+        await _sender.StepAsync(default); // 401 → token cleared, the batch stays
         Assert.Null(_tokens.GetToken());
-        await _sender.StepAsync(default); // enroll + send
+        await _sender.StepAsync(default); // request (approved at once here) + send
+        Assert.Equal(stationId, sent!.PreviousStationId);   // the administrator sees which station asks again
         Assert.Equal("tpz_new", _tokens.GetToken());
         Assert.Equal(0, _state.GetQueueStats().Pending);
+    }
+
+    private static HttpResponseMessage Json<T>(HttpStatusCode code, T body) => new(code) { Content = JsonContent.Create(body, options: Protocol.Json) };
+
+    private static RegistrationResponse RegisterAndRemember(HttpRequestMessage req, Action<RegistrationRequest> remember)
+    {
+        var r = req.Content!.ReadFromJsonAsync<RegistrationRequest>(Protocol.Json).GetAwaiter().GetResult()!;
+        remember(r);
+        return new RegistrationResponse { RegistrationId = Guid.NewGuid(), VerificationCode = RegistrationCode.Verification(r.ClaimHash) };
     }
 
     [Fact]

@@ -62,7 +62,7 @@ public sealed class AgentUpdateTests(CentralFixture fx) : IClassFixture<CentralF
         AddPackage("1.3.0", "win-x64", signed: false); // unsigned: never offered
         await using var app = App();
         var users = app.Services.GetRequiredService<UserService>();
-        try { await users.CreateAsync("upd-owner", "o", Roles.Owner, Password, []); } catch (Npgsql.PostgresException) { }
+        try { await users.CreateAsync("upd-owner", "o", Roles.Superadmin, Password, []); } catch (Npgsql.PostgresException) { }
         var owner = app.CreateClient();
         owner.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
         (await owner.PostAsJsonAsync("/api/v1/ui/auth/login", new { login = "upd-owner", password = Password })).EnsureSuccessStatusCode();

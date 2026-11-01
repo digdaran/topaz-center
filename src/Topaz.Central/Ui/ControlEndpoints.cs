@@ -93,24 +93,27 @@ public static class ControlEndpoints
         var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
         if (error is not null) return error;
         var f = fp!;
+        // Alerts without a station (connection requests) are for owners and superadmins.
+        var owner = ctx.User.IsInRole(Roles.Owner) && ctx.Request.Query["stations"].Count == 0;
         await using var c = await db.OpenConnectionAsync();
         var rows = await c.QueryAsync("""
-            SELECT a.id, a.station_id, sn.station, a.rule_code, r.title AS rule_title, a.severity, a.title, a.details, a.value, a.session_id,
-                   a.occurred_at, a.detected_at, a.status, a.status_by, sn.time_zone
-            FROM alerts a JOIN v_station_names sn ON sn.station_id = a.station_id JOIN alert_rules r ON r.code = a.rule_code
-            WHERE a.station_id = ANY(@st)
+            SELECT a.id, a.station_id, COALESCE(sn.station, 'Новая АЗС') AS station, a.rule_code, r.title AS rule_title, a.severity, a.title, a.details, a.value,
+                   a.session_id, a.registration_id, a.occurred_at, a.detected_at, a.status, a.status_by, COALESCE(sn.time_zone, 'Europe/Moscow') AS time_zone
+            FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id JOIN alert_rules r ON r.code = a.rule_code
+            WHERE (a.station_id = ANY(@st) OR (a.station_id IS NULL AND @owner))
               AND COALESCE(a.occurred_at, a.detected_at) >= @utcFrom AND COALESCE(a.occurred_at, a.detected_at) < @utcTo
               AND (@status::text IS NULL OR (@status = 'open' AND a.status <> 'closed') OR a.status = @status)
               AND (@severity::text IS NULL OR a.severity = @severity) AND (@rule::text IS NULL OR a.rule_code = @rule)
             ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, COALESCE(a.occurred_at, a.detected_at) DESC
             LIMIT 1000
-            """, new { st = f.Stations, f.UtcFrom, f.UtcTo, status = string.IsNullOrEmpty(status) ? null : status, severity = string.IsNullOrEmpty(severity) ? null : severity, rule = string.IsNullOrEmpty(rule) ? null : rule });
+            """, new { st = f.Stations, f.UtcFrom, f.UtcTo, owner, status = string.IsNullOrEmpty(status) ? null : status, severity = string.IsNullOrEmpty(severity) ? null : severity, rule = string.IsNullOrEmpty(rule) ? null : rule });
         var byRule = await c.QueryAsync("""
             SELECT a.rule_code, r.title, a.severity, count(*) AS total, count(*) FILTER (WHERE a.status = 'new') AS new
             FROM alerts a JOIN alert_rules r ON r.code = a.rule_code
-            WHERE a.station_id = ANY(@st) AND COALESCE(a.occurred_at, a.detected_at) >= @utcFrom AND COALESCE(a.occurred_at, a.detected_at) < @utcTo
+            WHERE (a.station_id = ANY(@st) OR (a.station_id IS NULL AND @owner))
+              AND COALESCE(a.occurred_at, a.detected_at) >= @utcFrom AND COALESCE(a.occurred_at, a.detected_at) < @utcTo
             GROUP BY 1, 2, 3, r.sort ORDER BY r.sort
-            """, f.Args);
+            """, new { st = f.Stations, f.UtcFrom, f.UtcTo, owner });
         return Results.Ok(new { alerts = rows, by_rule = byRule });
     }
 
@@ -118,17 +121,19 @@ public static class ControlEndpoints
     private static async Task<IResult> Summary(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
     {
         var st = await scope.AllowedAsync(user);
+        var owner = user.IsInRole(Roles.Owner);
         await using var c = await db.OpenConnectionAsync();
         var counts = await c.QuerySingleAsync("""
             SELECT count(*) FILTER (WHERE status = 'new') AS new, count(*) FILTER (WHERE status = 'new' AND severity = 'critical') AS critical
-            FROM alerts WHERE station_id = ANY(@st)
-            """, new { st });
+            FROM alerts WHERE station_id = ANY(@st) OR (station_id IS NULL AND @owner)
+            """, new { st, owner });
         var latest = await c.QueryAsync("""
-            SELECT a.id, sn.station, a.severity, a.title, a.session_id, a.station_id, COALESCE(a.occurred_at, a.detected_at) AS at
-            FROM alerts a JOIN v_station_names sn ON sn.station_id = a.station_id
-            WHERE a.station_id = ANY(@st) AND a.status = 'new'
+            SELECT a.id, COALESCE(sn.station, 'Новая АЗС') AS station, a.severity, a.title, a.session_id, a.station_id, a.registration_id,
+                   COALESCE(a.occurred_at, a.detected_at) AS at
+            FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id
+            WHERE (a.station_id = ANY(@st) OR (a.station_id IS NULL AND @owner)) AND a.status = 'new'
             ORDER BY CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, COALESCE(a.occurred_at, a.detected_at) DESC LIMIT 8
-            """, new { st });
+            """, new { st, owner });
         return Results.Ok(new { counts, latest });
     }
 
@@ -136,9 +141,9 @@ public static class ControlEndpoints
     {
         if (body.Status is not ("new" or "seen" or "closed")) return Results.Problem(statusCode: 400, title: "status: new | seen | closed");
         await using var c = await db.OpenConnectionAsync();
-        var station = await c.QuerySingleOrDefaultAsync<Guid?>("SELECT station_id FROM alerts WHERE id = @id", new { id });
-        if (station is null) return Results.NotFound();
-        if (!await scope.CanSeeAsync(user, station.Value)) return Results.Forbid();
+        var found = (await c.QueryAsync<(long Id, Guid? Station)>("SELECT id, station_id FROM alerts WHERE id = @id", new { id })).ToList();
+        if (found.Count == 0) return Results.NotFound();
+        if (found[0].Station is { } station ? !await scope.CanSeeAsync(user, station) : !user.IsInRole(Roles.Owner)) return Results.Forbid();
         await c.ExecuteAsync("UPDATE alerts SET status = @s, status_by = @by WHERE id = @id", new { id, s = body.Status, by = user.Identity?.Name });
         return Results.NoContent();
     }

@@ -46,7 +46,11 @@ public sealed class StationAuthenticator(NpgsqlDataSource db, IMemoryCache cache
         await using var conn = await db.OpenConnectionAsync(ctx.RequestAborted);
         var station = await conn.QuerySingleOrDefaultAsync<StationIdentity>(
             "SELECT id, name FROM stations WHERE token_hash = @hash AND status = 'active'", new { hash });
-        if (station is not null) cache.Set(cacheKey, station, CacheFor);
+        if (station is not null)
+        {
+            await Registrations.MarkClaimedAsync(conn, station.Id); // the token is in use: the request's secret retires
+            cache.Set(cacheKey, station, CacheFor);
+        }
         return station;
     }
 

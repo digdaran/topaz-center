@@ -11,14 +11,14 @@ using Topaz.Contracts;
 // Synthetic Topaz stations for developing and demonstrating the web interface.
 // Rows use real Topaz table/column names and go through the real agent protocol (/enroll + /batches).
 //
-//   dotnet run --project tools/DemoData -- --server http://localhost:8080 --enroll-key KEY [--stations 5] [--days 180] [--seed 1] [--scale 1.0]
+//   dotnet run --project tools/DemoData -- --server http://localhost:8080 --admin-token ADMIN_TOKEN [--stations 5] [--days 180] [--seed 1] [--scale 1.0]
 //
 // Built-in anomalies for the "Контроль" page: a hose counter gap between two shifts, a negative fuel receipt
 // discrepancy, an operator with many aborted fuellings, a never-selling item, items that run out of stock.
 
 string Arg(string name, string fallback) { var i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : fallback; }
 var server = Arg("--server", "http://localhost:8080").TrimEnd('/');
-var key = Arg("--enroll-key", Environment.GetEnvironmentVariable("TOPAZ_ENROLLMENT_KEY") ?? "");
+var key = Arg("--admin-token", Environment.GetEnvironmentVariable("TOPAZ_ADMIN_TOKEN") ?? ""); // approves the demo stations' connection requests
 var stationCount = int.Parse(Arg("--stations", "5"), CultureInfo.InvariantCulture);
 var days = int.Parse(Arg("--days", "180"), CultureInfo.InvariantCulture);
 var seed = int.Parse(Arg("--seed", "1"), CultureInfo.InvariantCulture);
@@ -469,12 +469,26 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
 
 internal static class Sender
 {
-    public static async Task SendAsync(HttpClient http, string enrollKey, string name, string timeZone, List<RecordChange> rows)
+    public static async Task SendAsync(HttpClient http, string adminToken, string name, string timeZone, List<RecordChange> rows)
     {
-        var enroll = await http.PostAsJsonAsync("api/v1/enroll", new EnrollRequest { StationName = name, EnrollmentKey = enrollKey, AgentVersion = "demo" }, Protocol.Json);
-        if (!enroll.IsSuccessStatusCode)
-            throw new InvalidOperationException($"enroll {name}: {(int)enroll.StatusCode} {await enroll.Content.ReadAsStringAsync()} (reset the station or use another --prefix)");
-        var token = (await enroll.Content.ReadFromJsonAsync<EnrollResponse>(Protocol.Json))!.Token;
+        // Connect like a real agent: request → approval (admin API, with the code) → claim the token.
+        var secret = RegistrationCode.NewSecret();
+        var created = await http.PostAsJsonAsync("api/v1/registrations", new RegistrationRequest
+            { StationName = name, ClaimHash = RegistrationCode.ClaimHash(secret), AgentVersion = "demo", MachineName = "DEMO" }, Protocol.Json);
+        if (!created.IsSuccessStatusCode)
+            throw new InvalidOperationException($"connection request {name}: {(int)created.StatusCode} {await created.Content.ReadAsStringAsync()}");
+        var reg = (await created.Content.ReadFromJsonAsync<RegistrationResponse>(Protocol.Json))!;
+        using (var approve = new HttpRequestMessage(HttpMethod.Post, $"api/v1/admin/registrations/{reg.RegistrationId}/approve")
+               { Content = JsonContent.Create(new { code = reg.VerificationCode }) })
+        {
+            approve.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+            var res = await http.SendAsync(approve);
+            if (!res.IsSuccessStatusCode)
+                throw new InvalidOperationException($"approve {name}: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()} (station name taken? use another --prefix)");
+        }
+        var claim = await http.PostAsJsonAsync("api/v1/registrations/claim", new RegistrationClaimRequest { RegistrationId = reg.RegistrationId, Secret = secret }, Protocol.Json);
+        var token = (await claim.Content.ReadFromJsonAsync<RegistrationClaimResponse>(Protocol.Json))!.Token
+                    ?? throw new InvalidOperationException($"claim {name}: {(int)claim.StatusCode}");
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         (await http.PostAsJsonAsync("api/v1/heartbeat", new HeartbeatRequest { AgentVersion = "demo", TimeZone = timeZone, TopazDbOk = true, StartedAt = DateTimeOffset.UtcNow }, Protocol.Json)).EnsureSuccessStatusCode();
 

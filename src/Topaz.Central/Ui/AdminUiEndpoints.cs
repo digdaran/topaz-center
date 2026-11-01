@@ -17,11 +17,11 @@ public static class AdminUiEndpoints
         ui.MapGet("/stations", Stations);
         ui.MapPatch("/stations/{id:guid}", UpdateStation).RequireAuthorization(Policies.Owner);
 
-        var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
-        owner.MapGet("/users", ListUsers);
-        owner.MapPost("/users", CreateUser);
-        owner.MapPatch("/users/{id:guid}", UpdateUser);
-        owner.MapGet("/audit", (NpgsqlDataSource db, int? limit) => QueryList(db,
+        var super = ui.MapGroup("").RequireAuthorization(Policies.Super);
+        super.MapGet("/users", ListUsers);
+        super.MapPost("/users", CreateUser);
+        super.MapPatch("/users/{id:guid}", UpdateUser);
+        super.MapGet("/audit", (NpgsqlDataSource db, int? limit) => QueryList(db,
             "SELECT id, user_login, action, entity, details, at FROM audit_log ORDER BY id DESC LIMIT @limit", new { limit = Math.Clamp(limit ?? 200, 1, 2000) }));
     }
 
@@ -49,7 +49,8 @@ public static class AdminUiEndpoints
             FROM fuel_types ft ORDER BY ft.sort, ft.name
             """, new { st });
         var unmapped = await FuelCatalogEndpoints.UnconfirmedCountAsync(c, st);
-        return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, item_groups = groups, payment_modes = paymentModes, data_range = range });
+        var pendingRegistrations = user.IsInRole(Roles.Owner) ? await RegistrationUiEndpoints.PendingCountAsync(c) : 0;
+        return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, pending_registrations = pendingRegistrations, item_groups = groups, payment_modes = paymentModes, data_range = range });
     }
 
     private static async Task<IResult> Stations(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)
@@ -115,7 +116,7 @@ public static class AdminUiEndpoints
     private static async Task<IResult> CreateUser(UserCreate body, ClaimsPrincipal user, UserService users, NpgsqlDataSource db)
     {
         if (string.IsNullOrWhiteSpace(body.Login) || body.Login.Trim().Length > 64) return Results.Problem(statusCode: 400, title: "Логин: от 1 до 64 символов");
-        if (!Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: owner, manager или viewer");
+        if (!Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: superadmin, owner, manager или viewer");
         if (UserService.ValidatePassword(body.Password) is { } err) return Results.Problem(statusCode: 400, title: err);
         try
         {
@@ -131,13 +132,20 @@ public static class AdminUiEndpoints
 
     private static async Task<IResult> UpdateUser(Guid id, UserUpdate body, ClaimsPrincipal user, UserService users, StationScope scope, NpgsqlDataSource db)
     {
-        if (body.Role is not null && !Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: owner, manager или viewer");
+        if (body.Role is not null && !Roles.All.Contains(body.Role)) return Results.Problem(statusCode: 400, title: "Роль: superadmin, owner, manager или viewer");
         if (body.Password is not null && UserService.ValidatePassword(body.Password) is { } err) return Results.Problem(statusCode: 400, title: err);
-        if (id == user.UserId() && (body.IsActive == false || (body.Role is not null && body.Role != Roles.Owner)))
-            return Results.Problem(statusCode: 400, title: "Нельзя отключить себя или снять с себя роль владельца");
+        if (id == user.UserId() && body.IsActive == false) return Results.Problem(statusCode: 400, title: "Нельзя отключить себя");
 
         await using var c = await db.OpenConnectionAsync();
         await using var tx = await c.BeginTransactionAsync();
+        // There must always be an active superadmin: nobody else can connect stations or manage users.
+        var losesSuper = body.IsActive == false || (body.Role is not null && body.Role != Roles.Superadmin);
+        if (losesSuper && await c.ExecuteScalarAsync<bool>("""
+                SELECT role = 'superadmin' AND is_active
+                   AND NOT EXISTS (SELECT 1 FROM users o WHERE o.role = 'superadmin' AND o.is_active AND o.id <> @id)
+                FROM users WHERE id = @id FOR UPDATE
+                """, new { id }, tx))
+            return Results.Problem(statusCode: 400, title: "Это последний суперадминистратор: сначала назначьте другого");
         var n = await c.ExecuteAsync("""
             UPDATE users SET name = COALESCE(@Name, name), role = COALESCE(@Role, role), is_active = COALESCE(@IsActive, is_active),
                 password_hash = COALESCE(@hash, password_hash), failed_logins = CASE WHEN @hash IS NULL THEN failed_logins ELSE 0 END,
