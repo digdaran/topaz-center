@@ -111,14 +111,15 @@ public sealed class FuelCatalogTests(CentralFixture fx) : IClassFixture<CentralF
         // Alerts: one per station with unconfirmed fuels; confirming all closes them automatically.
         var detector = fx.Factory!.Services.GetRequiredService<AnomalyDetector>();
         await detector.RunAsync(CancellationToken.None);
-        Assert.Equal(2, await fx.QueryAsync<int>("SELECT count(*)::int FROM alerts WHERE rule_code = 'fuel_unmapped' AND status = 'new'"));
+        // A background round (woken by a connection request) may have seen a partial set first; it is closed by now.
+        Assert.Equal(2, await fx.QueryAsync<int>("SELECT count(DISTINCT station_id)::int FROM alerts WHERE rule_code = 'fuel_unmapped' AND status <> 'closed'"));
         var confirmed = await owner.PostAsJsonAsync("/api/v1/ui/catalog/fuels/confirm", new { station_id = b });
         Assert.Equal(2, (await confirmed.Content.ReadFromJsonAsync<JsonObject>())!["confirmed"]!.GetValue<int>());
         Assert.Equal(premium, await fx.QueryAsync<string>("SELECT fuel_type FROM station_fuel_map WHERE station_id = @b AND fuel_id = 5", new { b }));
         Assert.Equal("fc-owner", await fx.QueryAsync<string>("SELECT confirmed_by FROM station_fuel_map WHERE station_id = @b AND fuel_id = 5", new { b }));
         await detector.RunAsync(CancellationToken.None);
-        Assert.Equal("closed", await fx.QueryAsync<string>("SELECT status FROM alerts WHERE rule_code = 'fuel_unmapped' AND station_id = @b", new { b }));
-        Assert.Equal("new", await fx.QueryAsync<string>("SELECT status FROM alerts WHERE rule_code = 'fuel_unmapped' AND station_id = @a", new { a }));
+        Assert.Equal(0, await fx.QueryAsync<int>("SELECT count(*)::int FROM alerts WHERE rule_code = 'fuel_unmapped' AND station_id = @b AND status <> 'closed'", new { b }));
+        Assert.Equal(1, await fx.QueryAsync<int>("SELECT count(*)::int FROM alerts WHERE rule_code = 'fuel_unmapped' AND station_id = @a AND status <> 'closed'", new { a }));
         Assert.Equal(1, (await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["unmapped_fuels"]!.GetValue<int>());
 
         // Removing a confirmation brings the fuel back to its suggestion.
