@@ -322,4 +322,29 @@ public sealed class TenantIsolationTests(CentralFixture fx) : IClassFixture<Cent
         Assert.Equal(HttpStatusCode.Unauthorized, (await ownerB.GetAsync("/api/v1/ui/meta")).StatusCode);
         (await super.PatchAsJsonAsync($"/api/v1/ui/organizations/{b.Org}", new { is_active = true })).EnsureSuccessStatusCode();
     }
+    [PostgresFact]
+    public async Task A_transferred_station_takes_its_history_and_own_costs_to_the_new_organization()
+    {
+        var (_, b, super) = await SetupAsync();
+        var g = await TenantAsync(super, "Гамма", "ISO-Гамма-АЗС");
+        await using (var c = new NpgsqlConnection(fx.ConnectionString))
+            await c.ExecuteAsync("""
+                INSERT INTO item_costs (station_id, item_key, valid_from, cost, created_by, organization_id)
+                VALUES (@s, 'name:чай', '2026-01-01', 20, 'test', @o)
+                """, new { s = g.Station, o = g.Org });
+
+        (await super.PostAsJsonAsync($"/api/v1/ui/stations/{g.Station}/organization", new { organization_id = b.Org })).EnsureSuccessStatusCode();
+        await fx.WaitProcessedAsync(); // margins rebuilt with the new organization's costs
+
+        var ownerB = await LoginAsync(b.OwnerLogin, Roles.Owner, b.Org);
+        var ownerG = await LoginAsync(g.OwnerLogin, Roles.Owner, g.Org);
+        Assert.Contains(g.Station.ToString(), await ownerB.GetStringAsync("/api/v1/ui/meta"));
+        Assert.DoesNotContain(g.Station.ToString(), await ownerG.GetStringAsync("/api/v1/ui/meta"));
+        Assert.Equal(1, await fx.QueryAsync<long>("SELECT count(*) FROM fuel_sales WHERE station_id = @s", new { s = g.Station }));
+        Assert.Equal(b.Org, await fx.QueryAsync<Guid>("SELECT organization_id FROM item_costs WHERE station_id = @s", new { s = g.Station }));
+        Assert.Equal(g.Org, await fx.QueryAsync<Guid>("SELECT organization_id FROM item_costs WHERE station_id IS NULL AND item_key = 'name:кофе Гамма'"));
+
+        // back to its organization: the other tests expect B to own only its own station
+        (await super.PostAsJsonAsync($"/api/v1/ui/stations/{g.Station}/organization", new { organization_id = g.Org })).EnsureSuccessStatusCode();
+    }
 }

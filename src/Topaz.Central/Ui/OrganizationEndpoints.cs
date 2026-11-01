@@ -94,6 +94,9 @@ public static class OrganizationEndpoints
         await c.ExecuteAsync("UPDATE stations SET organization_id = @o WHERE id = @id", new { id, o = body.OrganizationId }, tx);
         await c.ExecuteAsync("DELETE FROM user_stations us USING users u WHERE us.user_id = u.id AND us.station_id = @id AND u.organization_id IS DISTINCT FROM @o",
             new { id, o = body.OrganizationId }, tx);
+        // The station's own costs go with it; margins are recomputed with the new organization's org-wide costs.
+        await c.ExecuteAsync("UPDATE item_costs SET organization_id = @o WHERE station_id = @id", new { id, o = body.OrganizationId }, tx);
+        await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) VALUES (@id, 'all')", new { id }, tx);
         await tx.CommitAsync();
         await Audit.WriteAsync(db, user.UserId(), user.Identity?.Name, "station_moved", "station:" + id, new { from, to = body.OrganizationId }, body.OrganizationId);
         return Results.NoContent();
