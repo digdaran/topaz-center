@@ -7,6 +7,8 @@
   - copies the agent next to this script into -InstallDir;
   - finds the Topaz database if -DatabasePath is not given: the path from a previous install,
     then "Program Files (x86)\TopazAZS-*\TopazAZS.fdb", otherwise asks for it;
+  - defaults: server https://topaz.08u.ru, Firebird password of a standard Topaz install
+    (asked again if Firebird rejects it); on update the previous server/DB settings are kept;
   - writes appsettings.json (station name, server, Topaz DB path) - no secrets in it;
   - stores secrets (Firebird password, enrollment key) as environment variables of the
     service only (registry: HKLM\SYSTEM\CurrentControlSet\Services\TopazAgent\Environment);
@@ -16,16 +18,15 @@
   The agent opens no listening ports; it only makes outbound HTTPS requests.
 
 .EXAMPLE
-  .\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://topaz.example.com `
-      -EnrollmentKey <key from server .env>
+  .\install.ps1 -StationName "АЗС-5 Северная" -EnrollmentKey <key from server .env>
 
 .EXAMPLE
-  .\install.ps1 -StationName "АЗС-5 Северная" -ServerUrl https://topaz.example.com `
-      -EnrollmentKey <key> -DatabasePath "D:\Topaz\TopazAZS.fdb"
+  .\install.ps1 -StationName "АЗС-5 Северная" -EnrollmentKey <key> `
+      -ServerUrl https://other.example.com -DatabasePath "D:\Topaz\TopazAZS.fdb" -FirebirdPassword <password>
 #>
 param(
     [Parameter(Mandatory)] [string] $StationName,
-    [Parameter(Mandatory)] [string] $ServerUrl,
+    [string] $ServerUrl,
     [string] $EnrollmentKey,
     [string] $DatabasePath,
     [string] $FirebirdHost = "127.0.0.1",
@@ -38,8 +39,37 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$DefaultServerUrl = "https://topaz.08u.ru"
+# Password of a standard Topaz install (the same on all our stations). Kept only in the service
+# environment in the registry, never in appsettings.json or logs.
+$DefaultFirebirdPassword = "electro"
 $source = $PSScriptRoot
 if (-not (Test-Path (Join-Path $source "TopazAgent.exe"))) { throw "TopazAgent.exe not found next to install.ps1" }
+
+function Get-PreviousSetting {
+    <# Reads Section.Key from a previous appsettings.json; $null if absent. #>
+    param([string] $SettingsPath, [string] $Section, [string] $Key)
+    if (-not $SettingsPath -or -not (Test-Path $SettingsPath -PathType Leaf)) { return $null }
+    $value = (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).$Section.$Key
+    if ($value) { return [string] $value } else { return $null }
+}
+
+function Resolve-ServerUrl {
+    <# Explicit value > previous install > default; adds https:// when the scheme is missing. #>
+    param([string] $Given, [string] $PreviousSettings, [string] $Default)
+    $url = $Given
+    if (-not $url) { $url = Get-PreviousSetting $PreviousSettings "Server" "Url" }
+    if (-not $url -or $url -like "*topaz.example.com*") { $url = $Default }
+    $url = $url.Trim().TrimEnd("/")
+    if ($url -notmatch "^[a-zA-Z][a-zA-Z0-9+.-]*://") { $url = "https://$url" }
+    return $url
+}
+
+function Test-FirebirdLoginFailure {
+    <# True when "TopazAgent.exe check" output says Firebird rejected the user/password. #>
+    param([string[]] $CheckOutput)
+    return [bool] ($CheckOutput | Where-Object { $_ -like "*FAIL*Topaz DB*" -and ($_ -match "user name and password are not defined|login|password") })
+}
 
 function Resolve-DatabasePath {
     <# Picks the Topaz DB path: explicit value > previous install > standard folders > ask the operator. #>
@@ -51,10 +81,8 @@ function Resolve-DatabasePath {
     )
     if ($Given) { return $Given }
 
-    if ($PreviousSettings -and (Test-Path $PreviousSettings -PathType Leaf)) {
-        $prev = (Get-Content $PreviousSettings -Raw -Encoding UTF8 | ConvertFrom-Json).Firebird.Database
-        if ($prev) { Write-Host "Topaz database (from the previous install): $prev"; return $prev }
-    }
+    $prev = Get-PreviousSetting $PreviousSettings "Firebird" "Database"
+    if ($prev) { Write-Host "Topaz database (from the previous install): $prev"; return $prev }
 
     if ($LocalFirebird) {
         $found = @($SearchRoots | Where-Object { $_ } | Select-Object -Unique |
@@ -90,15 +118,14 @@ function Resolve-DatabasePath {
 }
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$previousSettings = $(if ($existing) { Join-Path $InstallDir "appsettings.json" })
+$ServerUrl = Resolve-ServerUrl -Given $ServerUrl -PreviousSettings $previousSettings -Default $DefaultServerUrl
+Write-Host "Server: $ServerUrl"
 $localFirebird = $FirebirdHost -in @("127.0.0.1", "localhost", "::1", ".", $env:COMPUTERNAME)
 $DatabasePath = Resolve-DatabasePath -Given $DatabasePath `
-    -PreviousSettings $(if ($existing) { Join-Path $InstallDir "appsettings.json" }) `
+    -PreviousSettings $previousSettings `
     -SearchRoots @(${env:ProgramFiles(x86)}, $env:ProgramFiles) -LocalFirebird $localFirebird
 Write-Host "Using Topaz database: $DatabasePath"
-if (-not $FirebirdPassword -and -not $existing) {
-    $sec = Read-Host "Firebird password for $FirebirdUser" -AsSecureString
-    $FirebirdPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
-}
 
 # 1. Stop the running service (update scenario). The local queue is kept in ProgramData.
 if ($existing -and $existing.Status -ne "Stopped") {
@@ -153,16 +180,31 @@ $envKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 $vars = @{}
 $current = (Get-ItemProperty -Path $envKey -Name Environment -ErrorAction SilentlyContinue).Environment
 if ($current) { foreach ($line in $current) { $k, $v = $line -split "=", 2; $vars[$k] = $v } }
-if ($FirebirdPassword) { $vars["TOPAZ_AGENT_Firebird__Password"] = $FirebirdPassword }
+$pwKey = "TOPAZ_AGENT_Firebird__Password"
+if ($FirebirdPassword) { $vars[$pwKey] = $FirebirdPassword }
+elseif (-not $vars[$pwKey]) { $vars[$pwKey] = $DefaultFirebirdPassword; Write-Host "Firebird password: standard Topaz password" }
 if ($EnrollmentKey) { $vars["TOPAZ_AGENT_Server__EnrollmentKey"] = $EnrollmentKey }
-Set-ItemProperty -Path $envKey -Name Environment -Type MultiString -Value ($vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+function Save-ServiceEnvironment {
+    Set-ItemProperty -Path $envKey -Name Environment -Type MultiString -Value ($vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+}
+Save-ServiceEnvironment
 
-# 7. Check (with the same secrets) and start.
-Write-Host "`nChecking configuration..."
-foreach ($kv in $vars.GetEnumerator()) { [Environment]::SetEnvironmentVariable($kv.Key, $kv.Value, "Process") }
-& $exe check
-$checkOk = $LASTEXITCODE -eq 0
-foreach ($kv in $vars.GetEnumerator()) { [Environment]::SetEnvironmentVariable($kv.Key, $null, "Process") }
+# 7. Check (with the same secrets) and start. If Firebird rejects the password, ask for it (3 tries).
+$checkOk = $false
+for ($attempt = 1; $attempt -le 4; $attempt++) {
+    Write-Host "`nChecking configuration..."
+    foreach ($kv in $vars.GetEnumerator()) { [Environment]::SetEnvironmentVariable($kv.Key, $kv.Value, "Process") }
+    $checkOutput = @(& $exe check)
+    $checkOk = $LASTEXITCODE -eq 0
+    foreach ($kv in $vars.GetEnumerator()) { [Environment]::SetEnvironmentVariable($kv.Key, $null, "Process") }
+    $checkOutput | ForEach-Object { Write-Host $_ }
+    if ($checkOk -or $attempt -eq 4 -or -not (Test-FirebirdLoginFailure $checkOutput)) { break }
+    $sec = Read-Host "Firebird не принял пароль. Пароль Firebird для $FirebirdUser" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    if (-not $plain) { break }
+    $vars[$pwKey] = $plain
+    Save-ServiceEnvironment
+}
 
 Start-Service $ServiceName
 Write-Host "`nService $ServiceName started. Logs: $stateDir\logs"

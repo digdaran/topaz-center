@@ -15,11 +15,13 @@ Get-FileHash ..\TopazAgent-*-win-x64.zip -Algorithm SHA256
 # снять пометку «скачано из интернета», иначе PowerShell может не запустить скрипт
 Get-ChildItem -Recurse | Unblock-File
 Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1 -StationName "АЗС-5 Северная" `
-    -ServerUrl https://topaz.example.com `
-    -EnrollmentKey <TOPAZ_ENROLLMENT_KEY с сервера>
-# пароль Firebird будет запрошен (для Топаза обычно это пароль SYSDBA)
+.\install.ps1 -StationName "АЗС-5 Северная" -EnrollmentKey <TOPAZ_ENROLLMENT_KEY с сервера>
 ```
+
+**Значения по умолчанию** (меняются параметрами):
+- сервер — `https://topaz.08u.ru` (`-ServerUrl`; при обновлении сохраняется прежний адрес);
+- пароль Firebird — стандартный пароль Топаза (`-FirebirdPassword`). Если Firebird его не принял, установщик попросит ввести пароль (до 3 попыток). Пароль хранится только в переменных окружения службы, в `appsettings.json` и логи не попадает. Он записан в `install.ps1`, а репозиторий публичный: это допустимо, пока Firebird на АЗС доступен только локально (`127.0.0.1:3050`) — не открывайте порт 3050 наружу;
+- база Топаза — ищется сама (см. ниже).
 
 **Где скрипт ищет базу Топаза** (если не указан `-DatabasePath`):
 1. при обновлении — путь из прежней установки;
@@ -40,7 +42,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 `TopazAgent.exe` не подписан цифровой подписью, поэтому при ручном запуске Windows SmartScreen может показать предупреждение («Подробнее → Выполнить в любом случае»). Службу это не затрагивает.
 
-Дополнительные параметры: `-DatabasePath`, `-FirebirdHost`, `-FirebirdPort`, `-FirebirdUser`, `-TimeZone` (например, `"Ekaterinburg Standard Time"`; по умолчанию берётся пояс Windows).
+Дополнительные параметры: `-ServerUrl`, `-DatabasePath`, `-FirebirdPassword`, `-FirebirdHost`, `-FirebirdPort`, `-FirebirdUser`, `-TimeZone` (например, `"Ekaterinburg Standard Time"`; по умолчанию берётся пояс Windows).
 
 ## Команды
 
