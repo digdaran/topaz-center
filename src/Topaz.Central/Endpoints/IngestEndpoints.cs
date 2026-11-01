@@ -27,6 +27,27 @@ public static class IngestEndpoints
         station.MapGet("/agent/updates/{version}/{rid}/{file}", DownloadUpdate);
     }
 
+    /// <summary>
+    /// Station PC health: clock skew = the PC's local wall clock (what Topaz writes) minus the true time in the
+    /// station's zone, so a wrong Windows time zone shows up too; plus one row per day for disk/DB trends.
+    /// </summary>
+    private static async Task SaveHostAsync(NpgsqlConnection conn, Guid stationId, HostInfo host)
+    {
+        DateTime? local = DateTime.TryParseExact(host.LocalClock, "yyyy-MM-dd'T'HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var l) ? l : null;
+        await conn.ExecuteAsync("""
+            UPDATE stations SET host_checked_at = now(),
+                clock_skew_seconds = CASE WHEN @local::timestamp IS NULL THEN NULL
+                                          ELSE round(extract(epoch FROM @local::timestamp - (now() AT TIME ZONE time_zone))) END
+            WHERE id = @stationId;
+            INSERT INTO station_host_daily (station_id, day, db_size, db_disk_free, db_disk_total, sys_disk_free, sys_disk_total)
+            SELECT @stationId, (now() AT TIME ZONE time_zone)::date, @DbFileBytes, @DbDiskFreeBytes, @DbDiskTotalBytes, @SystemDiskFreeBytes, @SystemDiskTotalBytes
+            FROM stations WHERE id = @stationId
+            ON CONFLICT (station_id, day) DO UPDATE SET db_size = EXCLUDED.db_size, db_disk_free = EXCLUDED.db_disk_free,
+                db_disk_total = EXCLUDED.db_disk_total, sys_disk_free = EXCLUDED.sys_disk_free, sys_disk_total = EXCLUDED.sys_disk_total;
+            """, new { stationId, local, host.DbFileBytes, host.DbDiskFreeBytes, host.DbDiskTotalBytes, host.SystemDiskFreeBytes, host.SystemDiskTotalBytes });
+    }
+
     /// <summary>Files of a signed agent package shipped with this server (manifest, signature, zip).</summary>
     internal static IResult DownloadUpdate(string version, string rid, string file, AgentReleases releases)
     {
@@ -217,6 +238,7 @@ public static class IngestEndpoints
                 """, new { id = station.Id, v = u.Version, status = u.Status, error = u.Error is { Length: > 1000 } e ? e[..1000] : u.Error, at = u.At });
         if (body.Rid is { Length: > 0 and <= 32 } rid)
             await conn.ExecuteAsync("UPDATE stations SET agent_rid = @rid WHERE id = @id", new { id = station.Id, rid });
+        if (body.Host is { } host) await SaveHostAsync(conn, station.Id, host);
         var offer = await UpdatePolicy.DecideAsync(conn, releases, station.Id, body.AgentVersion, body.Rid);
         if (offer is null)
             await conn.ExecuteAsync("UPDATE stations SET update_now = false WHERE id = @id AND update_now", new { id = station.Id }); // done or nothing to install

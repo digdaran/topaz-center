@@ -103,6 +103,27 @@ public sealed class HeartbeatRequest
     public string? Rid { get; set; }
     /// <summary>State of the latest self-update (absent if none happened).</summary>
     public AgentUpdateReport? Update { get; set; }
+    /// <summary>Health of the station PC (agent 1.2.1+): disks, Topaz DB size, clock.</summary>
+    public HostInfo? Host { get; set; }
+}
+
+/// <summary>Station PC facts the agent can see without touching Topaz data. Any field may be null if unknown.</summary>
+public sealed class HostInfo
+{
+    /// <summary>Drive holding the Topaz database (only when Firebird runs on this PC and the path is a local file).</summary>
+    public long? DbDiskFreeBytes { get; set; }
+    public long? DbDiskTotalBytes { get; set; }
+    public long? DbFileBytes { get; set; }
+    /// <summary>Drive with the agent's state and queue (%ProgramData%).</summary>
+    public long? SystemDiskFreeBytes { get; set; }
+    public long? SystemDiskTotalBytes { get; set; }
+    /// <summary>The PC clock: UTC and local wall time ("yyyy-MM-ddTHH:mm:ss", no zone) — Topaz writes the latter.</summary>
+    public DateTimeOffset ClockUtc { get; set; }
+    public string? LocalClock { get; set; }
+    public string? WindowsTimeZone { get; set; }
+    public long? UptimeSeconds { get; set; }
+    public string? Os { get; set; }
+    public long? AgentMemoryBytes { get; set; }
 }
 
 public sealed class HeartbeatResponse

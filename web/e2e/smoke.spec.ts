@@ -112,3 +112,12 @@ test('owner sees the agent update rollout', async ({ page }, info) => {
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_agent_updates.png`, fullPage: true });
 });
+
+test('station list shows the PC health column', async ({ page }, info) => {
+  await signIn(page);
+  await page.goto('/stations');
+  await page.getByRole('tab', { name: 'Состояние и настройки' }).click();
+  await expect(page.getByRole('columnheader', { name: 'ПК АЗС' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_stations_status.png`, fullPage: true });
+});

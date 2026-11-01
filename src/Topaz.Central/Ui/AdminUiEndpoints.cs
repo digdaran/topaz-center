@@ -63,8 +63,17 @@ public static class AdminUiEndpoints
                    v.last_collect_error, v.server_backlog, v.server_failed, s.last_heartbeat->>'topaz_db_version' AS topaz_db_version,
                    (s.last_heartbeat->>'last_session_id')::bigint AS last_session_id, (s.last_heartbeat->>'last_session_open')::boolean AS last_session_open,
                    s.created_at, s.agent_rid, s.update_group,
+                   s.clock_skew_seconds, s.host_checked_at, d.db_disk_free, d.db_disk_total, d.db_size, d.sys_disk_free, d.sys_disk_total,
+                   round(d.db_growth_per_day * 7) AS db_growth_per_week,
+                   CASE WHEN d.free_drop_per_day > 0
+                        THEN ceil(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / d.free_drop_per_day) END AS days_until_full,
+                   (s.last_heartbeat->'host'->>'uptime_seconds')::bigint AS uptime_seconds, s.last_heartbeat->'host'->>'os' AS os,
+                   s.last_heartbeat->'host'->>'windows_time_zone' AS windows_time_zone,
+                   least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free))
+                       < (SELECT threshold FROM alert_rules WHERE code = 'disk_low') * 1073741824 AS disk_low,
+                   abs(s.clock_skew_seconds) > (SELECT threshold FROM alert_rules WHERE code = 'clock_skew') * 60 AS clock_off,
                    (SELECT max(sold_at) FROM fuel_sales fs WHERE fs.station_id = s.id) AS last_sale_at
-            FROM v_station_status v JOIN stations s ON s.id = v.id
+            FROM v_station_status v JOIN stations s ON s.id = v.id LEFT JOIN v_station_disk d ON d.station_id = s.id
             WHERE v.id = ANY(@st) ORDER BY name
             """, new { st });
         return Results.Ok(rows);

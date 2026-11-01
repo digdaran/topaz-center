@@ -50,6 +50,16 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                 UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM v_station_status v
                 WHERE a.rule_code = 'station_offline' AND a.status <> 'closed' AND v.id = a.station_id AND v.silent_for < interval '5 minutes'
                 """);
+            // PC health alerts close once the problem is gone (fresh data only: a silent station keeps its alert).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                FROM stations s, v_station_disk d, alert_rules r
+                WHERE a.station_id = s.id AND d.station_id = s.id AND r.code = a.rule_code AND a.status <> 'closed'
+                  AND s.host_checked_at > now() - interval '15 minutes'
+                  AND ((a.rule_code = 'clock_skew' AND abs(COALESCE(s.clock_skew_seconds, 0)) <= r.threshold * 60)
+                    OR (a.rule_code = 'disk_low' AND COALESCE(d.db_disk_free, d.sys_disk_free, 0) >= r.threshold * 1073741824
+                                                 AND COALESCE(d.sys_disk_free, d.db_disk_free, 0) >= r.threshold * 1073741824))
+                """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
@@ -185,6 +195,36 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                round(extract(epoch FROM v.silent_for) / 60), NULL, v.last_seen_at
         FROM v_station_status v JOIN alert_rules r ON r.code = 'station_offline' AND r.enabled
         WHERE v.status = 'active' AND v.silent_for > make_interval(mins => r.threshold::int)
+        ON CONFLICT DO NOTHING
+        """,
+        // Little free space on the Topaz DB drive or the system drive (one alert per day; closes when space is back).
+        Insert + """
+        SELECT s.id, 'disk_low', current_date::text, r.severity,
+               'Мало места на диске: свободно ' || fmt_num(round(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / 1073741824.0, 1)) || ' ГБ',
+               concat_ws(' ',
+                 CASE WHEN d.db_disk_free IS NOT NULL THEN 'Диск с базой Топаза: свободно ' || fmt_num(round(d.db_disk_free / 1073741824.0, 1)) || ' из ' || fmt_num(round(d.db_disk_total / 1073741824.0)) || ' ГБ.' END,
+                 CASE WHEN d.sys_disk_free IS NOT NULL THEN 'Системный диск: свободно ' || fmt_num(round(d.sys_disk_free / 1073741824.0, 1)) || ' из ' || fmt_num(round(d.sys_disk_total / 1073741824.0)) || ' ГБ.' END,
+                 CASE WHEN d.db_size IS NOT NULL THEN 'База Топаза ' || fmt_num(round(d.db_size / 1048576.0)) || ' МБ'
+                      || COALESCE(', растёт на ' || fmt_num(round(d.db_growth_per_day * 7 / 1048576.0)) || ' МБ в неделю', '') || '.' END,
+                 CASE WHEN d.free_drop_per_day > 0 THEN 'При нынешнем темпе место закончится примерно через '
+                      || ceil(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / d.free_drop_per_day) || ' дн.' END,
+                 'Освободите место: старые резервные копии и журналы Топаза, временные файлы Windows.'),
+               round(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / 1073741824.0, 2), NULL, now()
+        FROM stations s JOIN v_station_disk d ON d.station_id = s.id
+        JOIN alert_rules r ON r.code = 'disk_low' AND r.enabled
+        WHERE s.status = 'active' AND s.host_checked_at > now() - interval '1 day'
+          AND least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) < r.threshold * 1073741824
+        ON CONFLICT DO NOTHING
+        """,
+        // PC clock (with the Windows time zone) differs from the true station time (one alert per day).
+        Insert + """
+        SELECT s.id, 'clock_skew', current_date::text, r.severity,
+               'Часы ПК АЗС ' || CASE WHEN s.clock_skew_seconds > 0 THEN 'спешат' ELSE 'отстают' END || ' на ' || fmt_num(round(abs(s.clock_skew_seconds) / 60.0)) || ' мин',
+               'Время на ПК: ' || COALESCE(s.last_heartbeat->'host'->>'local_clock', '?') || ', часовой пояс Windows: ' || COALESCE(s.last_heartbeat->'host'->>'windows_time_zone', '?')
+                   || ', пояс АЗС на сервере: ' || s.time_zone || '. Топаз записывает время операций по этим часам — исправьте время или пояс на ПК.',
+               round(s.clock_skew_seconds / 60.0, 1), NULL, now()
+        FROM stations s JOIN alert_rules r ON r.code = 'clock_skew' AND r.enabled
+        WHERE s.status = 'active' AND s.host_checked_at > now() - interval '1 day' AND abs(s.clock_skew_seconds) > r.threshold * 60
         ON CONFLICT DO NOTHING
         """,
         // Station fuels without a confirmed reference type (one alert per set of such fuels; closes automatically).

@@ -83,7 +83,8 @@ public sealed class SenderWorker(Sender sender, AgentStatus status, ILogger<Send
 }
 
 public sealed partial class HeartbeatWorker(
-    CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, UpdateCoordinator updates, ILogger<HeartbeatWorker> log)
+    CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, UpdateCoordinator updates, HostProbe host,
+    ILogger<HeartbeatWorker> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -116,6 +117,7 @@ public sealed partial class HeartbeatWorker(
                     TimeZone = IanaTimeZone(options.ResolveTimeZone()),
                     Rid = UpdateVerifier.CurrentRid,
                     Update = updates.Report,
+                    Host = CollectHost(),
                 }, stoppingToken);
                 if (result.Outcome != SendOutcome.Acked)
                     log.LogDebug("Heartbeat not delivered: {Error}", result.Error);
@@ -131,6 +133,12 @@ public sealed partial class HeartbeatWorker(
                 log.LogDebug(ex, "Heartbeat failed");
             }
         } while (await timer.WaitForNextTickAsync(stoppingToken).AsTask().ContinueWith(t => !t.IsCanceled && t.Result, TaskScheduler.Default));
+    }
+
+    private HostInfo? CollectHost()
+    {
+        try { return host.Collect(); }
+        catch (Exception ex) { log.LogDebug(ex, "Host health not collected"); return null; }
     }
 
     /// <summary>Windows zone ids ("Russian Standard Time") are converted to IANA ("Europe/Moscow").</summary>

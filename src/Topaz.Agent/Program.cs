@@ -58,6 +58,7 @@ builder.Services.AddSingleton(_ => DatasetCatalog.Load(datasetsPath));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => new StateStore(stateDir));
 builder.Services.AddSingleton<AgentStatus>();
+builder.Services.AddSingleton<HostProbe>();
 builder.Services.AddSingleton<TokenStore>();
 builder.Services.AddSingleton<ITopazSource, FirebirdTopazSource>();
 builder.Services.AddSingleton<Collector>();
