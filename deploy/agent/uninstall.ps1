@@ -16,7 +16,9 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     sc.exe delete $ServiceName | Out-Null
     Write-Host "Service $ServiceName removed"
 }
+schtasks.exe /Delete /TN TopazAgentUpdate /F 2>$null | Out-Null   # self-update task, if one is left
 if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
+Remove-Item (Join-Path $env:ProgramData "TopazAgent\updates") -Recurse -Force -ErrorAction SilentlyContinue
 if ($RemoveState) {
     Remove-Item (Join-Path $env:ProgramData "TopazAgent") -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Local state removed"

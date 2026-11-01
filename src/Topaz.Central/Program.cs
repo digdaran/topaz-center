@@ -36,6 +36,7 @@ builder.Services.AddSingleton<StationAuthFilter>();
 builder.Services.AddSingleton<AdminAuthFilter>();
 builder.Services.AddSingleton<BatchSignal>();
 builder.Services.AddSingleton<Migrator>();
+builder.Services.AddSingleton<Topaz.Central.Updates.AgentReleases>();
 builder.Services.AddSingleton<RollupRefresher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RollupRefresher>());
 builder.Services.AddHostedService<BatchProcessor>();
@@ -99,6 +100,7 @@ if (string.IsNullOrEmpty(options.EnrollmentKey))
     app.Logger.LogWarning("Topaz__EnrollmentKey is not set: new agents cannot enroll");
 
 await app.Services.GetRequiredService<Migrator>().MigrateAsync(CancellationToken.None);
+await app.Services.GetRequiredService<Topaz.Central.Updates.AgentReleases>().ScanAsync(CancellationToken.None);
 
 if (args.FirstOrDefault() == "create-user")
     return await UserCommands.CreateUserAsync(app.Services, args[1..]);
@@ -146,6 +148,7 @@ ui.MapUiSalesAnalytics();
 ui.MapUiFuelCatalog();
 ui.MapUiMoney();
 ui.MapUiControl();
+ui.MapUiAgentUpdates();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>

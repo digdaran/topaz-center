@@ -102,3 +102,13 @@ test('owner confirms suggested fuel types in one click (then the test undoes it)
   for (const f of all.fuels.filter((x: { confirmed: boolean; confirmed_at: string }) => x.confirmed && new Date(x.confirmed_at) >= new Date(startedAt)))
     expect((await page.request.put(`/api/v1/ui/catalog/fuels/${f.station_id}/${f.fuel_id}`, { headers, data: { fuel_type: null } })).ok()).toBeTruthy();
 });
+
+test('owner sees the agent update rollout', async ({ page }, info) => {
+  await signIn(page);
+  await page.goto('/stations');
+  await page.getByRole('tab', { name: 'Обновление агентов' }).click();
+  await expect(page.getByText('Раскатка')).toBeVisible();
+  await expect(page.getByText('автоматическое обновление')).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_agent_updates.png`, fullPage: true });
+});

@@ -83,3 +83,4 @@ Re-run the reconciliation after changing projections or views.
 - Secrets only via env vars (central `.env`, agent per-service environment in the registry set by `deploy/agent/install.ps1`). Never log row data or tokens.
 - Excluded secret columns (`dcAgents.Password`, `sysUsers.PswHash/Psw/SecurityData`, `dcPaymentModes.Config`) must stay excluded in `datasets.json`; a test asserts this.
 - .NET 8 means the agent does not run on Windows 7 (accepted by the owner).
+- Agent self-update (docs/architecture.md 2.4): agents install only packages whose `manifest.json` is signed with the CI key (`AGENT_SIGNING_KEY` secret; public half in `src/Topaz.Agent/Updating/UpdateKeys.cs`). Never let the server sign packages or make the agent accept unsigned ones. Protocol changes stay additive: old agents keep working with a newer server and vice versa.

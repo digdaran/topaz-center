@@ -52,11 +52,23 @@ public sealed class CentralClient(HttpClient http, AgentOptions options)
         }
     }
 
-    public async Task<SendResult> HeartbeatAsync(string token, HeartbeatRequest body, CancellationToken ct)
+    public async Task<(SendResult Result, HeartbeatResponse? Response)> HeartbeatAsync(string token, HeartbeatRequest body, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, Url("heartbeat")) { Content = JsonContent.Create(body, options: Protocol.Json) };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return await SendAsync(request, ct);
+        try
+        {
+            using var response = await http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return (await Classify(response, ct), null);
+            HeartbeatResponse? parsed = null;
+            try { parsed = await response.Content.ReadFromJsonAsync<HeartbeatResponse>(Protocol.Json, ct); }
+            catch (System.Text.Json.JsonException) { /* older server or proxy page: no offer */ }
+            return (new SendResult(SendOutcome.Acked), parsed);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            return (new SendResult(SendOutcome.Retry, Describe(ex)), null);
+        }
     }
 
     private async Task<SendResult> SendAsync(HttpRequestMessage request, CancellationToken ct)

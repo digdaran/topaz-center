@@ -2,6 +2,7 @@ import { EditOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { App, Badge, Button, Form, Input, Modal, Select, Table, Tabs, Tag, Tooltip } from 'antd';
 import StationCompare from './StationCompare';
+import AgentUpdates from './AgentUpdates';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { useMe } from '../auth/auth';
@@ -77,6 +78,7 @@ export default function StationsPage() {
         />
       </QueryState>
         ) },
+        ...(me.role === 'owner' ? [{ key: 'updates', label: 'Обновление агентов', children: <AgentUpdates /> }] : []),
       ]} />
       <Modal open={!!edit} title={`АЗС: ${edit?.topaz_name}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>
         <Form form={form} layout="vertical">

@@ -202,6 +202,19 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         GROUP BY f.station_id, r.severity
         ON CONFLICT DO NOTHING
         """,
+        // Agent self-update failed (download, signature or installation; the agent rolled back). One alert per version.
+        Insert + """
+        SELECT u.station_id, 'agent_update_failed', u.version, r.severity,
+               'Обновление агента до ' || u.version || ' не удалось',
+               'Причина: ' || COALESCE(u.error, 'не указана') || '. Агент работает на прежней версии ' || COALESCE(s.agent_version, '?')
+                   || '; повторит попытку не раньше чем через сутки (всего до 3 раз).',
+               NULL, NULL, u.at
+        FROM agent_update_reports u
+        JOIN stations s ON s.id = u.station_id
+        JOIN alert_rules r ON r.code = 'agent_update_failed' AND r.enabled
+        WHERE u.status = 'failed' AND u.at > now() - interval '30 days'
+        ON CONFLICT DO NOTHING
+        """,
         // Rejected batches on the agent or failed processing on the server (one alert per day).
         Insert + """
         SELECT v.id, 'data_rejected', current_date::text, r.severity, 'Данные АЗС не принимаются',

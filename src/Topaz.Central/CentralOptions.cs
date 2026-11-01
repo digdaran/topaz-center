@@ -23,4 +23,6 @@ public sealed class CentralOptions
     /// <summary>Telegram bot token (from @BotFather) for alert notifications; empty = notifications off.</summary>
     public string? TelegramBotToken { get; set; }
     public string TelegramApiBase { get; set; } = "https://api.telegram.org";
+    /// <summary>Signed agent packages for self-update; default: agent-updates next to the server dll (filled by CI).</summary>
+    public string? AgentUpdatesDirectory { get; set; }
 }

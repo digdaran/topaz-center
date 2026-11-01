@@ -104,15 +104,46 @@ jobs:
         with:
           name: agent-zip-${{ matrix.rid }}
           path: dist/*.zip
+      # Self-update package: manifest signed with the key whose public half is built into the agent
+      # (src/Topaz.Agent/Updating/UpdateKeys.cs). Servers offer only signed packages; agents verify the signature.
+      - name: Sign update manifest
+        env:
+          AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          V=${{ steps.pub.outputs.version }}; RID=${{ matrix.rid }}; NAME=TopazAgent-$V-$RID
+          D=updates/$V/$RID; mkdir -p "$D"; cp "dist/$NAME.zip" "$D/"
+          SHA=$(sha256sum "$D/$NAME.zip" | cut -d' ' -f1); SIZE=$(stat -c%s "$D/$NAME.zip")
+          printf '{"version":"%s","rid":"%s","file":"%s","sha256":"%s","size":%s}' "$V" "$RID" "$NAME.zip" "$SHA" "$SIZE" > "$D/manifest.json"
+          if [ -z "$AGENT_SIGNING_KEY" ]; then
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then echo "::error::AGENT_SIGNING_KEY is not set: release packages must be signed"; exit 1; fi
+            echo "::warning::AGENT_SIGNING_KEY is not set: package not signed, servers will not offer it"; exit 0
+          fi
+          umask 077; printf '%s\n' "$AGENT_SIGNING_KEY" > key.pem
+          sed -n '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/p' src/Topaz.Agent/Updating/UpdateKeys.cs | sed 's/^ *//' > builtin.pub
+          openssl pkey -in key.pem -pubout | cmp -s - builtin.pub || { echo "::error::signing key does not match the key built into the agent"; rm -f key.pem; exit 1; }
+          openssl dgst -sha256 -sign key.pem -out "$D/manifest.sig" "$D/manifest.json"
+          rm -f key.pem
+          openssl dgst -sha256 -verify builtin.pub -signature "$D/manifest.sig" "$D/manifest.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-update-${{ matrix.rid }}
+          path: updates
 
   central-image:
-    needs: [test, web]
+    needs: [test, web, agent-package]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # Signed agent packages go into the image: agents update from their own server.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-update-*
+          merge-multiple: true
+          path: agent-updates
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         if: startsWith(github.ref, 'refs/tags/v')
@@ -147,6 +178,11 @@ jobs:
           pattern: agent-zip-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-update-*
+          merge-multiple: true
+          path: upd
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -155,6 +191,11 @@ jobs:
           set -e
           V=${GITHUB_REF_NAME#v}
           IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/topaz-central:$V
+          for m in upd/*/*/manifest.json; do
+            RID=$(basename "$(dirname "$m")")
+            cp "$m" "dist/TopazAgent-$V-$RID.manifest.json"
+            cp "$(dirname "$m")/manifest.sig" "dist/TopazAgent-$V-$RID.manifest.sig"
+          done
           cd dist
           sha256sum TopazAgent-*.zip > SHA256SUMS.txt
           cat > notes.md <<EOF
@@ -165,7 +206,7 @@ jobs:
           | \`TopazAgent-$V-win-x64.zip\` | Windows 10/11, Server 2016+ (64-бит) — обычно нужен этот |
           | \`TopazAgent-$V-win-x86.zip\` | 32-битная Windows 10 |
 
-          .NET устанавливать не нужно. Windows 7 не поддерживается.
+          .NET устанавливать не нужно. Windows 7 не поддерживается. Начиная с 1.2 агент обновляется сам с вашего сервера (раздел «АЗС → Обновление агентов»); \`*.manifest.json\`/\`*.manifest.sig\` — подписанные описания пакетов для автообновления.
 
           1. Скачайте архив, распакуйте, откройте PowerShell **от имени администратора** в распакованной папке.
           2. Выполните:
@@ -184,8 +225,8 @@ jobs:
           EOF
           FLAGS=(); [[ "$V" == *-* ]] && FLAGS+=(--prerelease)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" TopazAgent-*.zip SHA256SUMS.txt --clobber
+            gh release upload "$GITHUB_REF_NAME" TopazAgent-* SHA256SUMS.txt --clobber
           else
-            gh release create "$GITHUB_REF_NAME" TopazAgent-*.zip SHA256SUMS.txt --verify-tag --title "Topaz Agent $V" \
+            gh release create "$GITHUB_REF_NAME" TopazAgent-* SHA256SUMS.txt --verify-tag --title "Topaz Agent $V" \
               --notes-file notes.md --generate-notes "${FLAGS[@]}"
           fi

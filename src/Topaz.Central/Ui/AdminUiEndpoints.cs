@@ -62,7 +62,7 @@ public static class AdminUiEndpoints
                    extract(epoch FROM v.silent_for)::bigint AS silent_seconds, v.agent_queue_pending, v.agent_queue_dead, v.topaz_db_ok,
                    v.last_collect_error, v.server_backlog, v.server_failed, s.last_heartbeat->>'topaz_db_version' AS topaz_db_version,
                    (s.last_heartbeat->>'last_session_id')::bigint AS last_session_id, (s.last_heartbeat->>'last_session_open')::boolean AS last_session_open,
-                   s.created_at,
+                   s.created_at, s.agent_rid, s.update_group,
                    (SELECT max(sold_at) FROM fuel_sales fs WHERE fs.station_id = s.id) AS last_sale_at
             FROM v_station_status v JOIN stations s ON s.id = v.id
             WHERE v.id = ANY(@st) ORDER BY name

@@ -10,15 +10,19 @@ using Topaz.Agent.Hosting;
 using Topaz.Agent.Sending;
 using Topaz.Agent.Source;
 using Topaz.Agent.State;
+using Topaz.Agent.Updating;
 
 // Usage:
 //   TopazAgent.exe                run (console or Windows service "TopazAgent")
 //   TopazAgent.exe check          verify config, Topaz DB (read-only) and server connectivity
 //   TopazAgent.exe status         show queue / watermarks
 //   TopazAgent.exe requeue-dead   move rejected batches back to the queue
+//   TopazAgent.exe apply-update <apply.json>   install a downloaded update (started by the agent itself)
 //   TopazAgent.exe --version
 var command = args.FirstOrDefault(a => !a.StartsWith('-'))?.ToLowerInvariant() ?? "run";
 if (args.Contains("--version")) { Console.WriteLine(AgentInfo.Version); return 0; }
+// Runs from the staging folder with the package's default config: no config validation, no host.
+if (command == "apply-update") return args.Length >= 2 ? UpdateInstaller.RunFromPlanFile(args[1]) : 2;
 
 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
@@ -63,6 +67,17 @@ builder.Services.AddHttpClient<CentralClient>(c =>
     c.Timeout = TimeSpan.FromSeconds(options.Server.TimeoutSeconds);
     c.DefaultRequestHeaders.UserAgent.ParseAdd($"TopazAgent/{AgentInfo.Version}");
 });
+builder.Services.AddHttpClient<UpdateClient>(c =>
+{
+    c.Timeout = TimeSpan.FromMinutes(Math.Max(1, options.Updates.DownloadTimeoutMinutes));
+    c.DefaultRequestHeaders.UserAgent.ParseAdd($"TopazAgent/{AgentInfo.Version}");
+});
+builder.Services.AddSingleton(_ => new UpdatePaths(stateDir));
+builder.Services.AddSingleton<UpdateCoordinator>();
+builder.Services.AddSingleton(_ => new UpdateVerifier(UpdateKeys.ReleasePublicKeyPem));
+builder.Services.AddSingleton<IUpdateLauncher>(sp => OperatingSystem.IsWindows()
+    ? new WindowsUpdateLauncher(m => Log.Warning("{Message}", m))
+    : new LogOnlyUpdateLauncher());
 builder.Services.AddWindowsService(o => o.ServiceName = "TopazAgent");
 
 if (command == "run")
@@ -70,6 +85,7 @@ if (command == "run")
     builder.Services.AddHostedService<CollectorWorker>();
     builder.Services.AddHostedService<SenderWorker>();
     builder.Services.AddHostedService<HeartbeatWorker>();
+    builder.Services.AddHostedService<UpdateWorker>();
 }
 
 using var host = builder.Build();

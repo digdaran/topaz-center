@@ -21,6 +21,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=web /web/dist ./wwwroot
+# Signed agent packages for self-update (CI puts them into agent-updates/; empty in a plain local build).
+COPY agent-updates/ ./agent-updates/
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_gcServer=0
 EXPOSE 8080

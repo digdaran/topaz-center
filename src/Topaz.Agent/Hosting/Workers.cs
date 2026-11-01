@@ -4,6 +4,7 @@ using Topaz.Agent.Collection;
 using Topaz.Agent.Configuration;
 using Topaz.Agent.Sending;
 using Topaz.Agent.State;
+using Topaz.Agent.Updating;
 using Topaz.Contracts;
 
 namespace Topaz.Agent.Hosting;
@@ -81,7 +82,8 @@ public sealed class SenderWorker(Sender sender, AgentStatus status, ILogger<Send
     }
 }
 
-public sealed partial class HeartbeatWorker(CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, ILogger<HeartbeatWorker> log)
+public sealed partial class HeartbeatWorker(
+    CentralClient client, TokenStore tokens, StateStore state, AgentOptions options, AgentStatus status, UpdateCoordinator updates, ILogger<HeartbeatWorker> log)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -94,7 +96,7 @@ public sealed partial class HeartbeatWorker(CentralClient client, TokenStore tok
                 var token = tokens.GetToken();
                 if (token is null) continue;
                 var q = state.GetQueueStats();
-                var result = await client.HeartbeatAsync(token, new HeartbeatRequest
+                var (result, response) = await client.HeartbeatAsync(token, new HeartbeatRequest
                 {
                     AgentVersion = AgentInfo.Version,
                     MachineName = Environment.MachineName,
@@ -112,9 +114,16 @@ public sealed partial class HeartbeatWorker(CentralClient client, TokenStore tok
                     LastSessionId = status.LastSessionId,
                     LastSessionOpen = status.LastSessionOpen,
                     TimeZone = IanaTimeZone(options.ResolveTimeZone()),
+                    Rid = UpdateVerifier.CurrentRid,
+                    Update = updates.Report,
                 }, stoppingToken);
                 if (result.Outcome != SendOutcome.Acked)
                     log.LogDebug("Heartbeat not delivered: {Error}", result.Error);
+                else
+                {
+                    updates.MarkStarted(); // the server answers: an installer waiting for this version may finish
+                    updates.Offer(response?.Update);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex)

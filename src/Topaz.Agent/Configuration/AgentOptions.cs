@@ -12,6 +12,7 @@ public sealed class AgentOptions
     public StationOptions Station { get; set; } = new();
     public FirebirdOptions Firebird { get; set; } = new();
     public CollectionOptions Collection { get; set; } = new();
+    public UpdateOptions Updates { get; set; } = new();
 
     /// <summary>Local state (SQLite queue, watermarks, token, logs). Default: %ProgramData%\TopazAgent.</summary>
     public string? StateDirectory { get; set; }
@@ -60,6 +61,16 @@ public sealed class AgentOptions
         try { tz = TimeZoneInfo.FindSystemTimeZoneById(id); return true; }
         catch (Exception) { tz = null; return false; }
     }
+}
+
+/// <summary>Self-update from the central server (packages signed in CI, see Updating/).</summary>
+public sealed class UpdateOptions
+{
+    /// <summary>false = ignore update offers (the station is then updated by hand with install.ps1).</summary>
+    public bool Enabled { get; set; } = true;
+    public int DownloadTimeoutMinutes { get; set; } = 20;
+    /// <summary>Windows service the installer stops and starts.</summary>
+    public string ServiceName { get; set; } = "TopazAgent";
 }
 
 public sealed class ServerOptions
