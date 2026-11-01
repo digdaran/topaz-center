@@ -22,14 +22,23 @@ public static class OrganizationEndpoints
     private static async Task<IResult> List(NpgsqlDataSource db)
     {
         await using var c = await db.OpenConnectionAsync();
-        return Results.Ok(await c.QueryAsync("""
-            SELECT o.id, o.name, o.is_active, o.created_at,
-                   (SELECT count(*) FROM stations s WHERE s.organization_id = o.id) AS stations,
-                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id) AS users,
-                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id AND u.role = 'owner' AND u.is_active) AS owners
+        var orgs = await c.QueryAsync<OrgRow>("""
+            SELECT o.id, o.name, o.is_active AS IsActive, o.created_at AS CreatedAt,
+                   (SELECT count(*) FROM stations s WHERE s.organization_id = o.id) AS Stations,
+                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id) AS Users,
+                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id AND u.role = 'owner' AND u.is_active) AS Owners
             FROM organizations o ORDER BY o.name
-            """));
+            """);
+        var stations = (await c.QueryAsync<(Guid Id, string Name, Guid? Org)>(
+            "SELECT id, name, organization_id FROM stations WHERE organization_id IS NOT NULL ORDER BY name")).ToLookup(s => s.Org);
+        return Results.Ok(orgs.Select(o => new
+        {
+            id = o.Id, name = o.Name, is_active = o.IsActive, created_at = o.CreatedAt, stations = o.Stations, users = o.Users, owners = o.Owners,
+            station_list = stations[o.Id].Select(s => new { id = s.Id, name = s.Name }),
+        }));
     }
+
+    private sealed record OrgRow(Guid Id, string Name, bool IsActive, DateTime CreatedAt, long Stations, long Users, long Owners);
 
     private static async Task<IResult> Create(OrganizationBody body, ClaimsPrincipal user, NpgsqlDataSource db)
     {

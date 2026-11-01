@@ -165,5 +165,22 @@ test('an owner of another organization sees none of the stations; the superadmin
   expect(back.ok()).toBeTruthy();
   expect((await (await page.request.get('/api/v1/ui/meta')).json()).stations).toEqual([]);
   const home = orgs.find((o: { stations: number }) => o.stations > 0) ?? orgs[0];
+
+  // transfer a station from Settings → Organizations, then give it back
+  const station = main.stations[0];
+  await page.goto('/settings/organizations');
+  await page.getByRole('button', { name: 'Передать АЗС другой организации' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Передать АЗС другой организации' });
+  await dialog.getByLabel('АЗС').click();
+  await page.locator('.ant-select-item-option').filter({ hasText: station.name }).click();
+  await dialog.getByLabel('Новая организация').click();
+  await page.locator('.ant-select-item-option').filter({ hasText: 'E2E Другой хозяин' }).click();
+  await page.screenshot({ path: `test-results/screens/${info.project.name}_org_transfer.png` });
+  await dialog.getByRole('button', { name: 'Передать' }).click();
+  await expect(page.getByText('АЗС передана')).toBeVisible();
+  const after = await (await page.request.get('/api/v1/ui/organizations')).json();
+  expect(after.find((o: { id: string }) => o.id === other.id).station_list.map((s: { id: string }) => s.id)).toContain(station.id);
+  expect((await page.request.post(`/api/v1/ui/stations/${station.id}/organization`, { headers, data: { organization_id: home.id } })).ok()).toBeTruthy();
+
   expect((await page.request.post('/api/v1/ui/session/organization', { headers, data: { id: home.id } })).ok()).toBeTruthy();
 });
