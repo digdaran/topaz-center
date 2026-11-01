@@ -2,6 +2,15 @@
 
 Нужно: Ubuntu 22.04/24.04, Docker Engine 24+ с плагином compose, DNS-запись `A` домена на сервер, открытые порты 80 и 443.
 
+**Быстрый способ** — одна команда. Скрипт спросит только почту для сертификата и пароль владельца (логин `admin`), сам сгенерирует остальные секреты в `.env`, скачает готовый образ, запустит сервис, проверит HTTPS и покажет ключ для установки агентов. Существующий `.env` он не перезаписывает, так что повторный запуск безопасен (так же обновляется версия после `git pull`).
+
+```bash
+git clone https://github.com/digdaran/topaz-center.git   # если ещё не скачан
+cd ~/topaz-center && git pull && bash deploy/central/setup.sh   # домен по умолчанию topaz.08u.ru; другой: setup.sh my.domain.ru
+```
+
+**Вручную:**
+
 ```bash
 git clone https://github.com/digdaran/topaz-center.git && cd topaz-center/deploy/central
 cp .env.example .env
