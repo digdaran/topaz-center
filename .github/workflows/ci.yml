@@ -166,7 +166,7 @@ jobs:
           Set-Content C:\TopazTest\TopazAZS.fdb "not a real database"
           function Setup($argList) {
             $p = Start-Process -FilePath $setup -ArgumentList $argList -Wait -PassThru
-            Get-Content "$env:ProgramData\TopazAgent\logs\setup.log" -Tail 25 -ErrorAction SilentlyContinue
+            Get-Content "$env:ProgramData\TopazAgent\logs\setup.log" -Tail 25 -ErrorAction SilentlyContinue | Write-Host
             return $p.ExitCode
           }
           # No Firebird and no server on the runner: installed with warnings (exit code 1).

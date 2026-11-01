@@ -55,7 +55,8 @@ public static class SetupApp
         var plan = ResolvePlan(parsed, machine);
         void Out(string m) { Console.WriteLine(m); Log(m); }
         var result = new Installer(machine, new SetupProbe(), Log).RunAsync(plan,
-            new SyncProgress<StepReport>(s => { if (s.State != StepState.Running) Out($"[{s.State}] {s.Key}: {s.Title}{(s.Detail is null ? "" : " - " + s.Detail)}"); }),
+            // the installer already writes each step to setup.log; the console gets them too
+            new SyncProgress<StepReport>(s => { if (s.State != StepState.Running) Console.WriteLine($"[{s.State}] {s.Title}{(s.Detail is null ? "" : " - " + s.Detail)}"); }),
             CancellationToken.None).GetAwaiter().GetResult();
         if (result.Error is not null) Out("ERROR: " + result.Error);
         if (result.Connection?.Code is { } code) Out($"Verification code: {code} (give it to the server administrator: АЗС -> Подключение)");
