@@ -1,8 +1,9 @@
 import { DeleteOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, App, Badge, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, useFilter, useFiltered, useMeta, isOwner } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
@@ -15,8 +16,10 @@ function FuelCosts() {
   const [filter] = useFilter();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { data, error, isLoading } = useFiltered<{ receipts: R[]; costs: R[]; fuels: R[] }>('/costs/fuel');
+  const { data, error, isLoading } = useFiltered<{ receipts: R[]; costs: R[]; fuels: R[]; unpriced_receipts: number; vat: { mode: string; rate: number } }>('/costs/fuel');
   const [add, setAdd] = useState<R | null>(null);
+  const [onlyUnpriced, setOnlyUnpriced] = useState(false);
+  const vatLabel = data?.vat?.mode === 'net' ? 'без НДС' : 'с НДС';
   const [form] = Form.useForm();
 
   const submit = async () => {
@@ -35,7 +38,7 @@ function FuelCosts() {
   };
   const open = (r: R, from: string | null) => {
     setAdd(r);
-    form.setFieldsValue({ valid_from: from ? dayjs(from) : dayjs().startOf('day'), price: r.price_per_liter ?? r.effective_price ?? r.current_cost ?? undefined, comment: r.doc_number ? `ТТН ${r.doc_number}` : undefined, all: false });
+    form.setFieldsValue({ valid_from: from ? dayjs(from) : dayjs().startOf('day'), price: r.price_per_liter ?? undefined, comment: r.doc_number ? `ТТН ${r.doc_number}` : undefined, all: false });
   };
   const remove = async (id: number) => {
     await api(`/costs/fuel/${id}`, { method: 'DELETE' });
@@ -51,25 +54,42 @@ function FuelCosts() {
               columns={[
                 { title: 'АЗС', dataIndex: 'station' },
                 { title: 'Топливо', dataIndex: 'fuel_name' },
-                numCol<R>('Закупка, ₽/л', 'current_cost', (v) => (v == null ? 'не задана' : money(v, true))),
+                numCol<R>('Себестоимость, ₽/л', 'current_cost', (v) => (v == null ? 'не задана' : money(v, true))),
                 numCol<R>('Продажа, ₽/л', 'current_price', (v) => money(v, true)),
                 { title: 'Наценка', key: 'm', align: 'right', render: (_, r) => (r.current_cost ? pct((r.current_price - r.current_cost) / r.current_cost) : '—') },
-                { title: '', key: 'a', render: (_, r) => <Button size="small" onClick={() => open(r, null)}>Новая цена</Button> },
+                { title: '', key: 'a', render: (_, r) => <Button size="small" onClick={() => open(r, null)}>Цена остатка на дату</Button> },
               ]} />
+            <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0' }}>
+              Себестоимость литра — средняя цена топлива в резервуаре: при каждом сливе она пересчитывается с учётом остатка
+              (остаток × средняя + литры слива × цена слива) / (остаток + литры). «Цена остатка на дату» задаёт среднюю, например, на начало учёта.
+            </Typography.Paragraph>
           </Card>
-          <Card size="small" title="Приёмы топлива за период — укажите закупочную цену по накладной">
-            <Table size="small" rowKey={(r) => `${r.station_id}/${r.receipt_id}`} pagination={{ pageSize: 20 }} dataSource={data.receipts} scroll={{ x: 900 }}
+          <Card size="small"
+            title={<Space wrap>Сливы топлива за период — укажите закупочную цену по накладной ({vatLabel})
+              {data.unpriced_receipts > 0 && <Tag color="orange">без цены за 30 дней: {data.unpriced_receipts}</Tag>}</Space>}
+            extra={<Segmented size="small" value={onlyUnpriced ? 'unpriced' : 'all'} onChange={(v) => setOnlyUnpriced(v === 'unpriced')}
+              options={[{ value: 'all', label: 'Все' }, { value: 'unpriced', label: 'Без цены' }]} />}>
+            <Table size="small" rowKey={(r) => `${r.station_id}/${r.receipt_id}`} pagination={{ pageSize: 20 }} scroll={{ x: 1000 }}
+              dataSource={onlyUnpriced ? data.receipts.filter((r) => r.unpriced) : data.receipts}
               locale={{ emptyText: `Нет приёмов топлива с ${filter.from.split('-').reverse().join('.')} по ${filter.to.split('-').reverse().join('.')}` }}
               columns={[
                 { title: 'Когда', dataIndex: 'received_at', render: (v) => dateTime(v) },
                 { title: 'АЗС', dataIndex: 'station' },
                 { title: 'Топливо', dataIndex: 'fuel_name' },
+                { title: 'Резервуар', dataIndex: 'tank_num', render: (v) => v ?? '—' },
                 { title: 'Документ', dataIndex: 'doc_number' },
-                numCol<R>('Объём', 'doc_volume', liters),
+                numCol<R>('Литры', 'doc_volume', liters),
+                numCol<R>('Остаток до слива', 'stock_before', (v) => (v == null ? '—' : liters(v))),
                 {
-                  title: 'Цена закупки', key: 'p', align: 'right', render: (_, r) => r.price_per_liter != null
+                  title: 'Цена слива', key: 'p', align: 'right', render: (_, r) => r.price_per_liter != null
                     ? <b>{money(r.price_per_liter, true)}</b>
-                    : <Typography.Text type="secondary">{r.effective_price != null ? `${money(r.effective_price, true)} (действующая)` : 'не задана'}</Typography.Text>,
+                    : <Badge status="warning" text={<Typography.Text type="warning">не задана</Typography.Text>} />,
+                },
+                {
+                  title: <Tooltip title="Средняя цена литра в резервуаре после слива: по ней считаются продажи до следующего слива">Средняя после</Tooltip>,
+                  key: 'avg', align: 'right', render: (_, r) => (r.average_after == null ? '—'
+                    : r.unpriced ? <Tooltip title="Цены слива нет: литры считаются по прежней средней"><Typography.Text type="secondary">{money(r.average_after, true)}</Typography.Text></Tooltip>
+                    : money(r.average_after, true)),
                 },
                 { title: '', key: 'a', render: (_, r) => <Button size="small" type={r.price_per_liter == null ? 'primary' : 'default'} onClick={() => open(r, r.received_at)}>{r.price_per_liter == null ? 'Указать цену' : 'Изменить'}</Button> },
               ]} />
@@ -86,14 +106,15 @@ function FuelCosts() {
                 { title: '', key: 'd', render: (_, r) => <Popconfirm title="Удалить цену? Маржа будет пересчитана." onConfirm={() => remove(r.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm> },
               ]} />
           </Card>
-          <Modal open={!!add} title={`Закупочная цена: ${add?.fuel_name ?? ''} · ${add?.station ?? ''}`} onOk={submit} onCancel={() => setAdd(null)} okText="Сохранить" destroyOnClose>
+          <Modal open={!!add} title={`${add?.receipt_id ? 'Цена слива' : 'Цена остатка'}: ${add?.fuel_name ?? ''} · ${add?.station ?? ''}`} onOk={submit} onCancel={() => setAdd(null)} okText="Сохранить" destroyOnClose>
             <Form form={form} layout="vertical">
-              <Form.Item name="price" label="Цена за литр, ₽" rules={[{ required: true, type: 'number', min: 0.01 }]}><InputNumber style={{ width: '100%' }} decimalSeparator="," step={0.1} /></Form.Item>
-              <Form.Item name="valid_from" label="Действует с" extra="Цена применяется ко всем продажам с этого момента до следующей цены" rules={[{ required: true }]}>
+              <Form.Item name="price" label={`Цена за литр, ₽ (${vatLabel})`} rules={[{ required: true, type: 'number', min: 0.01 }]}><InputNumber style={{ width: '100%' }} decimalSeparator="," step={0.1} /></Form.Item>
+              <Form.Item name="valid_from" label={add?.receipt_id ? 'Время слива' : 'Цена остатка на'} rules={[{ required: true }]}
+                extra={add?.receipt_id ? 'Средняя цена резервуара пересчитается с момента слива' : 'С этого момента средняя цена всех резервуаров этого топлива равна этой цене; дальше её пересчитывают сливы'}>
                 <DatePicker showTime format="DD.MM.YYYY HH:mm" style={{ width: '100%' }} />
               </Form.Item>
               <Form.Item name="comment" label="Основание"><Input placeholder="например, ТТН №…" /></Form.Item>
-              {!add?.receipt_id && <Form.Item name="all" valuePropName="checked"><Checkbox>Та же цена для этого вида топлива на всех моих АЗС</Checkbox></Form.Item>}
+              {!add?.receipt_id && <Form.Item name="all" valuePropName="checked"><Checkbox>Та же цена остатка для этого вида топлива на всех моих АЗС</Checkbox></Form.Item>}
             </Form>
           </Modal>
         </>
@@ -180,6 +201,16 @@ function ItemCosts() {
         )}
       </Modal>
     </QueryState>
+  );
+}
+
+/** Overview hint: receipts of the last 30 days still without a purchase price. */
+export function UnpricedReceiptsBanner() {
+  const n = useMeta().data?.unpriced_receipts ?? 0;
+  if (n === 0) return null;
+  return (
+    <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+      message={<>Сливы топлива без закупочной цены за 30 дней: {n}. Пока цены нет, литры считаются по средней цене резервуара. <Link to="/costs">Ввести цены</Link></>} />
   );
 }
 

@@ -6,6 +6,8 @@ namespace Topaz.Central.Ui;
 
 public sealed record OrganizationBody(string? Name, bool? IsActive);
 public sealed record MoveStationBody(Guid OrganizationId);
+public sealed record OrganizationSettingsBody(string? MarginVat, decimal? VatRate);
+public sealed record PaymentModeBody(bool? IsDiscount);
 
 /// <summary>Organizations (station owners sharing the server), superadmin only.</summary>
 public static class OrganizationEndpoints
@@ -17,6 +19,68 @@ public static class OrganizationEndpoints
         super.MapPost("/organizations", Create);
         super.MapPatch("/organizations/{id:guid}", Update);
         super.MapPost("/stations/{id:guid}/organization", MoveStation);
+
+        // The current organization's own settings (owner, or the superadmin for the organization picked in the header).
+        var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
+        owner.MapGet("/organization/settings", Settings);
+        owner.MapPut("/organization/settings", SetSettings);
+        owner.MapGet("/payment-modes", PaymentModes);
+        owner.MapPut("/payment-modes/{station:guid}/{mode:long}", SetPaymentMode);
+    }
+
+    private static async Task<IResult> Settings(UiDb db)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        var row = await c.QuerySingleOrDefaultAsync("SELECT id, name, margin_vat, vat_rate FROM organizations WHERE id = app_org()");
+        return row is null ? Results.Problem(statusCode: 400, title: "Выберите организацию") : Results.Ok(row);
+    }
+
+    /// <summary>Margin with VAT or without it (VAT at the rate taken out of receipted sales): every margin is recomputed.</summary>
+    private static async Task<IResult> SetSettings(OrganizationSettingsBody body, ClaimsPrincipal user, UiDb db, Processing.RollupRefresher rollups)
+    {
+        if (body.MarginVat is not null and not ("gross" or "net")) return Results.Problem(statusCode: 400, title: "margin_vat: gross | net");
+        if (body.VatRate is < 0 or >= 100) return Results.Problem(statusCode: 400, title: "Ставка НДС: от 0 до 99 %");
+        if (user.OrganizationId() is not { } org) return Results.Problem(statusCode: 400, title: "Выберите организацию");
+        await using var c = await db.OpenConnectionAsync();
+        await using var tx = await c.BeginTransactionAsync();
+        await c.ExecuteAsync("UPDATE organizations SET margin_vat = COALESCE(@MarginVat, margin_vat), vat_rate = COALESCE(@VatRate, vat_rate) WHERE id = @org",
+            new { body.MarginVat, body.VatRate, org }, tx);
+        await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) SELECT id, 'all' FROM stations WHERE organization_id = @org", new { org }, tx);
+        await tx.CommitAsync();
+        rollups.Notify();
+        await Audit.WriteAsync(db, user, "organization_settings_updated", "organization:" + org, body);
+        return Results.NoContent();
+    }
+
+    /// <summary>Payment modes of the visible stations; a discount mode lowers the pump price legitimately (no alert).</summary>
+    private static async Task<IResult> PaymentModes(ClaimsPrincipal user, StationScope scope, UiDb db)
+    {
+        var st = await scope.AllowedAsync(user);
+        await using var c = await db.OpenConnectionAsync();
+        return Results.Ok(await c.QueryAsync("""
+            SELECT m.station_id, sn.station, m.payment_mode_id, m.name, m.is_discount, m.manual,
+                   (SELECT count(*) FROM fuel_sales f WHERE f.station_id = m.station_id AND f.payment_mode_id = m.payment_mode_id
+                      AND f.sold_at > now() - interval '30 days' AND f.volume > 0) AS sales_30d
+            FROM v_payment_mode_flags m JOIN v_station_names sn ON sn.station_id = m.station_id
+            WHERE m.station_id = ANY(@st) AND m.payment_mode_id > 0
+            ORDER BY sn.station, m.name
+            """, new { st }));
+    }
+
+    /// <summary>is_discount true/false marks the mode; null returns it to the guess by name.</summary>
+    private static async Task<IResult> SetPaymentMode(Guid station, long mode, PaymentModeBody body, ClaimsPrincipal user, StationScope scope, UiDb db)
+    {
+        if (!await scope.CanSeeAsync(user, station)) return Results.NotFound();
+        await using var c = await db.OpenConnectionAsync();
+        if (body.IsDiscount is { } flag)
+            await c.ExecuteAsync("""
+                INSERT INTO payment_mode_settings (station_id, payment_mode_id, is_discount, updated_by) VALUES (@station, @mode, @flag, @by)
+                ON CONFLICT (station_id, payment_mode_id) DO UPDATE SET is_discount = EXCLUDED.is_discount, updated_by = EXCLUDED.updated_by, updated_at = now()
+                """, new { station, mode, flag, by = user.Identity?.Name });
+        else
+            await c.ExecuteAsync("DELETE FROM payment_mode_settings WHERE station_id = @station AND payment_mode_id = @mode", new { station, mode });
+        await Audit.WriteAsync(db, user, "payment_mode_updated", $"station:{station}/payment_mode:{mode}", body);
+        return Results.NoContent();
     }
 
     private static async Task<IResult> List(NpgsqlDataSource db)

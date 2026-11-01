@@ -55,7 +55,9 @@ public static class AdminUiEndpoints
         var unmapped = await FuelCatalogEndpoints.UnconfirmedCountAsync(c, st);
         // Connection requests belong to no organization yet: the superadmin's.
         var pendingRegistrations = user.IsInRole(Roles.Superadmin) ? await RegistrationUiEndpoints.PendingCountAsync(db.System) : 0;
-        return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, pending_registrations = pendingRegistrations, item_groups = groups, payment_modes = paymentModes, data_range = range });
+        // Receipts waiting for a purchase price (costs are not shown to viewers).
+        var unpriced = user.IsInRole(Roles.Viewer) ? 0 : await c.ExecuteScalarAsync<long>(MoneyEndpoints.UnpricedReceiptsSql, new { st });
+        return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, pending_registrations = pendingRegistrations, unpriced_receipts = unpriced, item_groups = groups, payment_modes = paymentModes, data_range = range });
     }
 
     private static async Task<IResult> Stations(ClaimsPrincipal user, StationScope scope, UiDb db)

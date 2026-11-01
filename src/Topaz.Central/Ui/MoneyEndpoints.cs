@@ -38,20 +38,23 @@ public static partial class MoneyEndpoints
         if (error is not null) return error;
         var f = fp!;
         var par = new SalesAnalyticsEndpoints.Par(db, ctx.RequestAborted);
+        // Margin: revenue of the sales with a known cost (without the VAT of receipted sales for 'net' organizations) − cost.
         const string fuelMoney = """
             COALESCE(sum(revenue), 0) AS revenue, COALESCE(sum(liters), 0) AS liters, sum(cost_amount) AS cost,
-            COALESCE(sum(costed_revenue), 0) - COALESCE(sum(cost_amount), 0) AS margin,
+            COALESCE(sum(costed_revenue - costed_vat), 0) - COALESCE(sum(cost_amount), 0) AS margin,
             round(COALESCE(sum(costed_liters), 0) / NULLIF(sum(liters), 0), 4) AS coverage,
-            round((COALESCE(sum(costed_revenue), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_liters), 0), 2) AS margin_per_liter,
-            round((COALESCE(sum(costed_revenue), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_revenue), 0), 4) AS margin_pct,
-            COALESCE(sum(discounts), 0) AS discounts, sum(service_cost) AS service_cost, COALESCE(sum(service_liters), 0) AS service_liters
+            round((COALESCE(sum(costed_revenue - costed_vat), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_liters), 0), 2) AS margin_per_liter,
+            round((COALESCE(sum(costed_revenue - costed_vat), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_revenue - costed_vat), 0), 4) AS margin_pct,
+            COALESCE(sum(discounts), 0) AS discounts, sum(service_cost) AS service_cost, COALESCE(sum(service_liters), 0) AS service_liters,
+            COALESCE(sum(fiscal_revenue), 0) AS fiscal_revenue, COALESCE(sum(costed_vat), 0) AS vat
             """;
         const string shopMoney = """
             COALESCE(sum(amount), 0) AS revenue, sum(cost_amount) AS cost,
-            COALESCE(sum(costed_amount), 0) - COALESCE(sum(cost_amount), 0) AS margin,
+            COALESCE(sum(costed_amount - costed_vat), 0) - COALESCE(sum(cost_amount), 0) AS margin,
             round(COALESCE(sum(costed_amount), 0) / NULLIF(sum(amount), 0), 4) AS coverage,
-            round((COALESCE(sum(costed_amount), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(cost_amount), 0), 4) AS markup_pct,
-            round((COALESCE(sum(costed_amount), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_amount), 0), 4) AS margin_pct
+            round((COALESCE(sum(costed_amount - costed_vat), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(cost_amount), 0), 4) AS markup_pct,
+            round((COALESCE(sum(costed_amount - costed_vat), 0) - COALESCE(sum(cost_amount), 0)) / NULLIF(sum(costed_amount - costed_vat), 0), 4) AS margin_pct,
+            COALESCE(sum(fiscal_amount), 0) AS fiscal_revenue, COALESCE(sum(costed_vat), 0) AS vat
             """;
         var fuelTotalT = par.Q($"SELECT {fuelMoney} FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere}", f.Args);
         var shopTotalT = par.Q($"SELECT {shopMoney} FROM v_agg_shop WHERE {AnalyticsSql.AggWhere}", f.Args);
@@ -74,10 +77,10 @@ public static partial class MoneyEndpoints
             """, f.Args);
         var seriesT = par.Q($"""
             WITH fu AS (SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(revenue) AS fuel_revenue,
-                               COALESCE(sum(costed_revenue), 0) - COALESCE(sum(cost_amount), 0) AS fuel_margin
+                               COALESCE(sum(costed_revenue - costed_vat), 0) - COALESCE(sum(cost_amount), 0) AS fuel_margin
                         FROM v_agg_fuel WHERE {AnalyticsSql.AggFuelWhere} GROUP BY 1),
                  sh AS (SELECT {AnalyticsSql.DayBucket(f)} AS bucket, sum(amount) AS shop_revenue,
-                               COALESCE(sum(costed_amount), 0) - COALESCE(sum(cost_amount), 0) AS shop_margin
+                               COALESCE(sum(costed_amount - costed_vat), 0) - COALESCE(sum(cost_amount), 0) AS shop_margin
                         FROM agg_shop_daily WHERE {AnalyticsSql.AggWhere} GROUP BY 1)
             SELECT to_char(COALESCE(fu.bucket, sh.bucket), 'YYYY-MM-DD"T"HH24:MI') AS bucket, COALESCE(fuel_revenue, 0) AS fuel_revenue,
                    COALESCE(fuel_margin, 0) AS fuel_margin, COALESCE(shop_revenue, 0) AS shop_revenue, COALESCE(shop_margin, 0) AS shop_margin
@@ -105,9 +108,11 @@ public static partial class MoneyEndpoints
             ORDER BY 1
             """, f.Args);
 
+        object vat;
+        await using (var vc = await db.OpenConnectionAsync()) vat = await VatAsync(vc);
         return Results.Ok(new
         {
-            filter = OverviewEndpoints.Describe(f),
+            filter = OverviewEndpoints.Describe(f), vat,
             fuel = (await fuelTotalT).Single(), shop = (await shopTotalT).Single(),
             by_station = await byStationT, by_fuel = await byFuelT, by_group = await byGroupT, series = await seriesT, cash = await cashT,
         });
@@ -121,18 +126,22 @@ public static partial class MoneyEndpoints
         if (error is not null) return error;
         var f = fp!;
         await using var c = await db.OpenConnectionAsync();
+        // Receipts with their price, the tank's book stock before them and the tank's average cost after them.
         var receipts = await c.QueryAsync("""
-            SELECT r.station_id, sn.station, r.receipt_id, r.received_at, r.fuel_id, sf.fuel_name, r.doc_number, r.doc_volume, r.measured_volume,
-                   fc.id AS cost_id, fc.price_per_liter, fc.comment,
-                   (SELECT p.price_per_liter FROM fuel_costs p WHERE p.station_id = r.station_id AND p.fuel_id = r.fuel_id AND p.valid_from <= r.received_at
-                    ORDER BY p.valid_from DESC LIMIT 1) AS effective_price
+            SELECT r.station_id, sn.station, r.receipt_id, r.received_at, r.fuel_id, sf.fuel_name, r.tank_id, t.num AS tank_num,
+                   r.doc_number, r.doc_volume, r.measured_volume,
+                   fc.id AS cost_id, fc.price_per_liter, fc.comment, fc.id IS NULL AS unpriced,
+                   a.stock_before, a.avg_price AS average_after
             FROM fuel_receipts r
             JOIN v_station_names sn ON sn.station_id = r.station_id
             LEFT JOIN v_station_fuels sf ON sf.station_id = r.station_id AND sf.fuel_id = r.fuel_id
-            LEFT JOIN fuel_costs fc ON fc.station_id = r.station_id AND fc.receipt_id = r.receipt_id
-            WHERE r.station_id = ANY(@st) AND r.received_at >= @utcFrom AND r.received_at < @utcTo
+            LEFT JOIN v_tanks t ON t.station_id = r.station_id AND t.tank_id = r.tank_id
+            LEFT JOIN LATERAL (SELECT * FROM fuel_costs x WHERE x.station_id = r.station_id AND x.receipt_id = r.receipt_id ORDER BY x.created_at DESC LIMIT 1) fc ON true
+            LEFT JOIN fuel_cost_avg a ON a.station_id = r.station_id AND a.tank_id = r.tank_id AND a.receipt_id = r.receipt_id
+            WHERE r.station_id = ANY(@st) AND r.received_at >= @utcFrom AND r.received_at < @utcTo AND r.doc_volume > 0
             ORDER BY r.received_at DESC
             """, f.Args);
+        var unpriced = await c.ExecuteScalarAsync<long>(UnpricedReceiptsSql, new { st = f.Stations });
         var costs = await c.QueryAsync("""
             SELECT fc.id, fc.station_id, sn.station, fc.fuel_id, sf.fuel_name, fc.valid_from, fc.price_per_liter, fc.receipt_id, fc.comment, fc.created_by, fc.created_at
             FROM fuel_costs fc JOIN v_station_names sn ON sn.station_id = fc.station_id
@@ -141,14 +150,32 @@ public static partial class MoneyEndpoints
             """, new { st = f.Stations });
         var fuels = await c.QueryAsync("""
             SELECT f.station_id, sn.station, f.fuel_id, f.fuel_name, f.fuel_type,
-                   (SELECT p.price_per_liter FROM fuel_costs p WHERE p.station_id = f.station_id AND p.fuel_id = f.fuel_id AND p.valid_from <= now()
-                    ORDER BY p.valid_from DESC LIMIT 1) AS current_cost,
+                   (SELECT a.avg_price FROM fuel_cost_avg a WHERE a.station_id = f.station_id AND a.fuel_id = f.fuel_id AND a.valid_from <= now()
+                    ORDER BY a.valid_from DESC, a.seq DESC LIMIT 1) AS current_cost,
                    (SELECT price FROM fuel_sales s WHERE s.station_id = f.station_id AND s.fuel_id = f.fuel_id ORDER BY sold_at DESC LIMIT 1) AS current_price
             FROM v_station_fuels f JOIN v_station_names sn ON sn.station_id = f.station_id
             WHERE f.station_id = ANY(@st) AND NOT f.is_deleted AND f.fuel_name NOT LIKE '<%' ORDER BY sn.station, f.fuel_name
             """, new { st = f.Stations });
-        return Results.Ok(new { receipts, costs, fuels });
+        return Results.Ok(new { receipts, costs, fuels, unpriced_receipts = unpriced, vat = await VatAsync(c) });
     }
+
+    /// <summary>Receipts of the last 30 days without a purchase price (what the owner still has to enter).</summary>
+    public const string UnpricedReceiptsSql = """
+        SELECT count(*) FROM fuel_receipts r
+        WHERE r.station_id = ANY(@st) AND r.received_at > now() - interval '30 days' AND r.doc_volume > 0
+          AND NOT EXISTS (SELECT 1 FROM fuel_costs c WHERE c.station_id = r.station_id AND c.receipt_id = r.receipt_id)
+        """;
+
+    /// <summary>VAT mode of the current organization (prices are entered with VAT, or without it for 'net').</summary>
+    public static async Task<object> VatAsync(NpgsqlConnection c) =>
+        await c.QuerySingleOrDefaultAsync("SELECT margin_vat AS mode, vat_rate AS rate FROM organizations WHERE id = app_org()")
+        ?? new { mode = "gross", rate = 0m };
+
+    private static async Task CloseReceiptAlertAsync(NpgsqlConnection c, NpgsqlTransaction tx, Guid station, long receipt) =>
+        await c.ExecuteAsync("""
+            UPDATE alerts SET status = 'closed', status_by = 'auto'
+            WHERE rule_code = 'receipt_without_cost' AND station_id = @station AND dedupe_key = @key AND status <> 'closed'
+            """, new { station, key = receipt.ToString() }, tx);
 
     private static async Task<IResult> AddFuelCost(FuelCostBody body, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
@@ -177,6 +204,7 @@ public static partial class MoneyEndpoints
                 """, new { station, fuel, from = body.ValidFrom.ToUniversalTime(), price = body.PricePerLiter, receipt = station == body.StationId ? body.ReceiptId : null, comment = body.Comment, by = user.Identity?.Name }, tx);
             await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) VALUES (@station, 'all')", new { station }, tx);
         }
+        if (body.ReceiptId is { } receiptId) await CloseReceiptAlertAsync(c, tx, body.StationId, receiptId);
         await tx.CommitAsync();
         rollups.Notify();
         await Audit.WriteAsync(db, user, "fuel_cost_added", $"station:{body.StationId}/fuel:{body.FuelId}", new { body.ValidFrom, body.PricePerLiter, body.ReceiptId, stations = targets.Count });
@@ -186,10 +214,15 @@ public static partial class MoneyEndpoints
     private static async Task<IResult> DeleteFuelCost(long id, ClaimsPrincipal user, StationScope scope, UiDb db, RollupRefresher rollups)
     {
         await using var c = await db.OpenConnectionAsync();
-        var station = await c.QuerySingleOrDefaultAsync<Guid?>("SELECT station_id FROM fuel_costs WHERE id = @id", new { id });
-        if (station is null) return Results.NotFound();
-        if (!await scope.CanSeeAsync(user, station.Value)) return Results.Forbid();
+        var found = await c.QuerySingleOrDefaultAsync<(Guid Station, long? Receipt)?>("SELECT station_id, receipt_id FROM fuel_costs WHERE id = @id", new { id });
+        if (found is not { } cost) return Results.NotFound();
+        var station = cost.Station;
+        if (!await scope.CanSeeAsync(user, station)) return Results.Forbid();
         await c.ExecuteAsync("DELETE FROM fuel_costs WHERE id = @id; INSERT INTO rollup_dirty (station_id, kind) VALUES (@station, 'all')", new { id, station });
+        // The receipt is unpriced again: its reminder may come back.
+        if (cost.Receipt is { } receipt)
+            await c.ExecuteAsync("DELETE FROM alerts WHERE rule_code = 'receipt_without_cost' AND station_id = @station AND dedupe_key = @key",
+                new { station, key = receipt.ToString() });
         rollups.Notify();
         await Audit.WriteAsync(db, user, "fuel_cost_deleted", $"fuel_cost:{id}", null);
         return Results.NoContent();

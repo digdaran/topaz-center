@@ -48,7 +48,7 @@ public static class ShiftEndpoints
             o AS (
                 SELECT fs.station_id, fs.session_id, sum(fs.amount) AS revenue, sum(fs.volume) FILTER (WHERE fs.volume > 0 AND fs.payment_kind <> 'none') AS liters,
                        count(*) FILTER (WHERE fs.volume > 0 AND fs.payment_kind <> 'none') AS orders, count(*) FILTER (WHERE fs.volume = 0) AS aborted,
-                       sum(fs.volume) FILTER (WHERE fs.payment_kind = 'none' AND fs.volume > 0) AS service_liters, sum(fs.amount_discount) AS discounts
+                       sum(fs.volume) FILTER (WHERE fs.payment_kind = 'none' AND fs.volume > 0) AS service_liters, sum(fuel_discount(fs.amount_discount, fs.price, fs.price_pump, fs.volume)) AS discounts
                 FROM fuel_sales fs JOIN s ON s.station_id = fs.station_id AND s.session_id = fs.session_id
                 GROUP BY 1, 2)
             SELECT s.user_name, count(*) AS shifts, count(DISTINCT s.station_id) AS stations,

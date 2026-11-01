@@ -6,6 +6,7 @@ import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
 import { bucketLabel, compact, dateTime, int, liters, money, pct } from '../lib/format';
 import { LatestAlerts } from './ControlPage';
+import { UnpricedReceiptsBanner } from './CostsPage';
 import { UnmappedFuelsBanner } from './FuelCatalog';
 import { PendingStationsBanner } from './StationRequests';
 
@@ -83,6 +84,7 @@ export default function OverviewPage() {
             )}
             <PendingStationsBanner />
             <UnmappedFuelsBanner />
+            <UnpricedReceiptsBanner />
             <Row gutter={[12, 12]}>
               {kpis!.map((k) => (
                 <Col key={k.title} xs={12} sm={8} md={6} xl={4}>

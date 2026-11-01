@@ -73,6 +73,12 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                 UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM station_registrations g
                 WHERE a.rule_code = 'station_registration' AND a.status <> 'closed' AND g.id = a.registration_id AND g.status <> 'pending'
                 """);
+            // A receipt alert closes once the receipt has a price.
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'receipt_without_cost' AND a.status <> 'closed'
+                  AND EXISTS (SELECT 1 FROM fuel_costs fc WHERE fc.station_id = a.station_id AND fc.receipt_id::text = a.dedupe_key)
+                """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
@@ -148,23 +154,59 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         SELECT x.station_id, 'discount_share', x.session_id::text, r.severity,
                'Скидки ' || fmt_num(round(100 * x.discounts / x.revenue, 1)) || '% выручки смены', format('Смена №%s, оператор %s: скидки %s ₽.', s.session_num, s.user_name, fmt_num(x.discounts)),
                round(100 * x.discounts / x.revenue, 2), x.session_id, s.ended_at
-        FROM (SELECT station_id, session_id, sum(amount_discount) AS discounts, sum(amount) AS revenue FROM fuel_sales GROUP BY 1, 2) x
+        FROM (SELECT station_id, session_id, sum(fuel_discount(amount_discount, price, price_pump, volume)) AS discounts, sum(amount) AS revenue FROM fuel_sales GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
         {string.Format(Rule, "discount_share", "x")}
         WHERE x.revenue > 0 AND 100 * x.discounts / x.revenue > r.threshold AND {Recent}
         ON CONFLICT DO NOTHING
         """,
-        // Order price differs from the pump price.
+        // A sale whose money does not match the pump: the customer paid more than the order price, the amount is not
+        // litres × pump price, or the price was lowered past Topaz's discounts at a payment mode that gives none.
+        // A card discount (lower pump price at a discount payment mode, or recorded by Topaz) is not an alert.
         Insert + $"""
         SELECT x.station_id, 'price_mismatch', x.session_id::text, r.severity,
-               'Цена заказа ≠ цене ТРК: ' || x.orders || ' отпуск(ов)', format('Смена №%s: например, %s ₽ при цене на колонке %s ₽.', s.session_num, fmt_num(x.price), fmt_num(x.price_pump)),
+               'Цена отпуска не сходится: ' || x.orders || ' отпуск(ов)',
+               format('Смена №%s: %s. Например, отпуск №%s: %s л, цена заказа %s ₽, на колонке %s ₽, сумма %s ₽.', s.session_num,
+                      concat_ws(', ', CASE WHEN x.overcharge > 0 THEN 'переплата клиента — ' || x.overcharge END,
+                                      CASE WHEN x.amount_off > 0 THEN 'сумма ≠ литры × цена колонки — ' || x.amount_off END,
+                                      CASE WHEN x.bypass > 0 THEN 'скидка мимо скидок Топаза — ' || x.bypass END),
+                      x.order_num, fmt_num(x.volume), fmt_num(x.price), fmt_num(x.price_pump), fmt_num(x.amount)),
                x.orders, x.session_id, s.started_at
-        FROM (SELECT f.station_id, f.session_id, count(*) AS orders, min(f.price) AS price, min(f.price_pump) AS price_pump
-              FROM fuel_sales f JOIN v_station_rules rr ON rr.station_id = f.station_id WHERE rr.code = 'price_mismatch' AND f.price_pump > 0 AND f.volume > 0 AND abs(f.price - f.price_pump) > rr.threshold
+        FROM (SELECT y.station_id, y.session_id, count(*) AS orders,
+                     count(*) FILTER (WHERE y.overcharge) AS overcharge, count(*) FILTER (WHERE y.amount_off) AS amount_off,
+                     count(*) FILTER (WHERE y.bypass) AS bypass,
+                     (array_agg(y.order_num ORDER BY y.sold_at))[1] AS order_num, (array_agg(y.volume ORDER BY y.sold_at))[1] AS volume,
+                     (array_agg(y.price ORDER BY y.sold_at))[1] AS price, (array_agg(y.price_pump ORDER BY y.sold_at))[1] AS price_pump,
+                     (array_agg(y.amount ORDER BY y.sold_at))[1] AS amount
+              FROM (SELECT f.station_id, f.session_id, f.order_num, f.sold_at, f.volume, f.price, f.price_pump, f.amount,
+                           f.price_pump > f.price + rr.threshold AS overcharge,
+                           abs(f.amount - round(f.volume * f.price_pump, 2)) > 1 AS amount_off,
+                           f.price > f.price_pump + rr.threshold AND COALESCE(f.amount_discount, 0) = 0 AND NOT COALESCE(pm.is_discount, false) AS bypass
+                    FROM fuel_sales f
+                    JOIN v_station_rules rr ON rr.station_id = f.station_id AND rr.code = 'price_mismatch'
+                    LEFT JOIN v_payment_mode_flags pm ON pm.station_id = f.station_id AND pm.payment_mode_id = f.payment_mode_id
+                    WHERE f.price_pump > 0 AND f.volume > 0 AND f.payment_kind <> 'none' AND f.sold_at > now() - interval '31 days') y
+              WHERE y.overcharge OR y.amount_off OR y.bypass
               GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id
         {string.Format(Rule, "price_mismatch", "x")}
         WHERE {Recent}
+        ON CONFLICT DO NOTHING
+        """,
+        // A fuel receipt still without a purchase price after the threshold (hours): its litres go at the tank's average.
+        Insert + """
+        SELECT f.station_id, 'receipt_without_cost', f.receipt_id::text, r.severity,
+               'Не введена цена слива: ' || COALESCE(sf.fuel_name, 'топливо') || ', ' || fmt_num(f.doc_volume) || ' л',
+               format('Слив %s, резервуар %s, документ %s. Введите закупочную цену в разделе «Себестоимость» — пока её нет, слив считается по средней цене резервуара.',
+                      to_char(f.received_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY HH24:MI'), COALESCE(t.num::text, f.tank_id::text), COALESCE(NULLIF(f.doc_number, ''), 'без номера')),
+               f.doc_volume, f.session_id, f.received_at
+        FROM fuel_receipts f
+        JOIN v_station_rules r ON r.code = 'receipt_without_cost' AND r.enabled AND r.station_id = f.station_id
+        JOIN v_station_names sn ON sn.station_id = f.station_id
+        LEFT JOIN v_station_fuels sf ON sf.station_id = f.station_id AND sf.fuel_id = f.fuel_id
+        LEFT JOIN v_tanks t ON t.station_id = f.station_id AND t.tank_id = f.tank_id
+        WHERE f.received_at > now() - interval '30 days' AND f.received_at < now() - r.threshold * interval '1 hour' AND f.doc_volume > 0
+          AND NOT EXISTS (SELECT 1 FROM fuel_costs c WHERE c.station_id = f.station_id AND c.receipt_id = f.receipt_id)
         ON CONFLICT DO NOTHING
         """,
         // Fuel delivery: less received than on the document (or a negative delivery).

@@ -63,12 +63,15 @@ function Shell({ children }: { children: ReactNode }) {
   const meta = useMeta();
   const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
   const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
+  const unpriced = meta.data?.unpriced_receipts ?? 0;
   const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
     key: n.key, icon: n.icon,
     label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
       ? <Flex justify="space-between" align="center">{n.label}<Badge count={alerts.data!.counts.new} color={alerts.data!.counts.critical > 0 ? 'red' : 'orange'} overflowCount={99} /></Flex>
       : n.key === '/stations' && requests > 0
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={requests} color="red" overflowCount={99} title="АЗС ожидают подключения" /></Flex>
+      : n.key === '/costs' && unpriced > 0
+        ? <Flex justify="space-between" align="center">{n.label}<Badge count={unpriced} color="orange" overflowCount={99} title="Сливы топлива без закупочной цены" /></Flex>
       : n.key === '/settings' && unmapped > 0
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={unmapped} color="orange" overflowCount={99} title="Топливо АЗС ждёт сопоставления со справочником" /></Flex>
         : n.label,

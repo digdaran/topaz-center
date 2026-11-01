@@ -92,6 +92,7 @@ export interface Meta {
   fuel_types: FuelTypeMeta[];
   /** station fuels waiting for a confirmed reference type */
   unmapped_fuels: number;
+  unpriced_receipts: number;
   /** connection requests of new agents (owners and superadmins) */
   pending_registrations: number;
   item_groups: string[];

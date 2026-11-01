@@ -6,7 +6,7 @@ import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from 
 import { bucketLabel, compact, liters, money, Num, pct } from '../lib/format';
 
 type R = Record<string, any>;
-interface Finance { filter: { g: string }; fuel: R; shop: R; by_station: R[]; by_fuel: R[]; by_group: R[]; series: R[]; cash: R[] }
+interface Finance { filter: { g: string }; vat: { mode: string; rate: number }; fuel: R; shop: R; by_station: R[]; by_fuel: R[]; by_group: R[]; series: R[]; cash: R[] }
 
 const coverageWarn = (v: Num) => (v != null && Number(v) < 0.999 ? ` · себестоимость известна для ${pct(v)}` : '');
 
@@ -17,6 +17,10 @@ export default function FinancePage() {
   const shop = data?.shop ?? {};
   const margin = (Number(fuel.margin ?? 0) || 0) + (Number(shop.margin ?? 0) || 0);
   const noCosts = data && fuel.cost == null && shop.cost == null;
+  const net = data?.vat?.mode === 'net';
+  const revenue = Number(fuel.revenue ?? 0) + Number(shop.revenue ?? 0);
+  const fiscal = Number(fuel.fiscal_revenue ?? 0) + Number(shop.fiscal_revenue ?? 0);
+  const vatNote = net ? ` · без НДС ${Number(data!.vat.rate)} % из продаж с чеком` : ' · с НДС';
 
   return (
     <>
@@ -33,11 +37,12 @@ export default function FinancePage() {
             <Row gutter={[12, 12]}>
               {[
                 { title: 'Выручка', value: Number(fuel.revenue ?? 0) + Number(shop.revenue ?? 0), format: money },
-                { title: 'Валовая маржа', value: noCosts ? null : margin, format: money, hint: 'Выручка − себестоимость по продажам, для которых известна закупочная цена' },
+                { title: 'Валовая маржа', value: noCosts ? null : margin, format: money, hint: `Выручка − себестоимость по продажам, для которых известна закупочная цена${vatNote}` },
                 { title: 'Маржа топливо', value: fuel.margin, format: money, hint: `${pct(fuel.margin_pct)} от выручки${coverageWarn(fuel.coverage)}` },
                 { title: 'Маржа на литр', value: fuel.margin_per_liter, format: (v: Num) => money(v, true) },
                 { title: 'Маржа магазин', value: shop.margin, format: money, hint: `наценка ${pct(shop.markup_pct)}${coverageWarn(shop.coverage)}` },
-                { title: 'Скидки', value: fuel.discounts, format: money },
+                { title: 'Скидки', value: fuel.discounts, format: money, hint: 'Скидки Топаза и скидки по дисконтным видам оплаты (цена заказа − цена колонки)' },
+                { title: 'Выручка с чеком', value: revenue ? fiscal / revenue : null, format: pct, hint: `Доля выручки с фискальным чеком${net ? ': из неё вычитается НДС для маржи' : ''}` },
                 { title: 'Отпуск без оплаты', value: fuel.service_cost, format: money, hint: `Тех. прокачки и переливы по закупочной цене: ${liters(fuel.service_liters)}` },
                 { title: 'Покрытие себестоимостью', value: fuel.coverage, format: pct, hint: 'Доля проданных литров, для которых введена закупочная цена' },
               ].map((k) => <Col key={k.title} xs={12} md={8} xl={6}><KpiCard {...k} /></Col>)}

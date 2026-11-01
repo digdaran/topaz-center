@@ -67,7 +67,7 @@ public static class AnalyticsSql
         COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'cashless'), 0) AS cashless,
         COALESCE(sum(revenue) FILTER (WHERE payment_kind = 'mixed'), 0) AS mixed,
         COALESCE(sum(discounts), 0) AS discounts,
-        sum(cost_amount) AS fuel_cost, COALESCE(sum(costed_revenue), 0) AS fuel_costed_revenue, COALESCE(sum(costed_liters), 0) AS costed_liters
+        sum(cost_amount) AS fuel_cost, COALESCE(sum(costed_revenue - costed_vat), 0) AS fuel_costed_revenue, COALESCE(sum(costed_liters), 0) AS costed_liters
         """;
 
     /// <summary>Bucket of a rollup day for day/week/month granularity.</summary>
@@ -87,7 +87,7 @@ public static class AnalyticsSql
                 SELECT COALESCE(sum(amount), 0) AS shop_revenue, COALESCE(sum(receipts), 0) AS shop_receipts,
                        (SELECT COALESCE(sum(quantity), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_items,
                        (SELECT sum(cost_amount) FROM agg_shop_daily WHERE {AggWhere}) AS shop_cost,
-                       (SELECT COALESCE(sum(costed_amount), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_costed_amount
+                       (SELECT COALESCE(sum(costed_amount - costed_vat), 0) FROM agg_shop_daily WHERE {AggWhere}) AS shop_costed_amount
                 FROM agg_shop_receipts_daily WHERE {AggWhere}
                 """, f.Args);
             kpi.ShopRevenue = shop.ShopRevenue;

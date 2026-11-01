@@ -8,6 +8,7 @@ import { useMe } from '../auth/auth';
 import { PageTitle } from '../components/ui';
 import { FuelCatalog } from './FuelCatalog';
 import Organizations from './Organizations';
+import { OrganizationSettings, PaymentModes } from './OrgSettings';
 import { dateTime } from '../lib/format';
 
 interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
@@ -158,6 +159,8 @@ export default function SettingsPage() {
     ...(isSuper(me) ? [{ key: 'organizations', label: 'Организации', children: <Organizations /> }] : []),
     ...(isOwner(me) ? [{ key: 'users', label: 'Пользователи', children: <Users /> }] : []),
     ...(isOwner(me) ? [{ key: 'fuels', label: <>Виды топлива {unmapped > 0 && <Badge count={unmapped} color="orange" size="small" />}</>, children: <FuelCatalog /> }] : []),
+    ...(isOwner(me) ? [{ key: 'organization', label: 'Маржа и НДС', children: <OrganizationSettings /> }] : []),
+    ...(isOwner(me) ? [{ key: 'payment-modes', label: 'Виды оплаты', children: <PaymentModes /> }] : []),
     ...(isOwner(me) ? [{ key: 'audit', label: 'Журнал действий', children: <AuditLog /> }] : []),
     { key: 'profile', label: 'Мой пароль', children: <Profile /> },
   ];

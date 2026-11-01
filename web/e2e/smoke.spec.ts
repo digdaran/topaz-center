@@ -28,6 +28,8 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/data', title: 'Данные' },
   { path: '/settings/organizations', title: 'Настройки', wait: 'Добавить организацию' },
   { path: '/settings/users', title: 'Настройки' },
+  { path: '/settings/organization', title: 'Настройки', wait: 'Маржа и наценка' },
+  { path: '/settings/payment-modes', title: 'Настройки', wait: 'Дисконтный' },
   { path: '/settings/fuels', title: 'Настройки', wait: 'Подтвердить все предложения' },
   { path: '/settings/fuels?view=reference', title: 'Настройки', wait: 'Добавить вид' },
 ];
