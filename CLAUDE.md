@@ -26,13 +26,13 @@ export TOPAZ_TEST_FB_HOST=localhost TOPAZ_TEST_FB_PASSWORD=dev
 docker run --rm -v "$PWD":/src -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test
 
 # agent publish (single exe for stations)
-dotnet publish src/Topaz.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+dotnet publish src/Topaz.Agent -c Release -f net8.0-windows -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 # release: pushing a tag v* makes CI publish a GitHub release (agent zips + SHA256SUMS.txt) and the GHCR image
 # central stack
 cd deploy/central && cp .env.example .env && docker compose up -d --build
 ```
 
-Agent CLI: `TopazAgent.exe [run|check|status|requeue-dead|--version]`. Config via `appsettings.json` next to the exe plus env vars `TOPAZ_AGENT_<Section>__<Key>`; central config via `ConnectionStrings__Postgres` and `Topaz__*` env vars.
+Agent CLI: `TopazAgent.exe [run|check|status|requeue-dead|uninstall|--version]`; without arguments (interactive) the Windows build is its own one-file setup window (`Setup/Ui`, WinForms, `net8.0-windows` target; `net8.0` stays for Linux tests), `/S /station=…` installs silently. Setup logic is platform-neutral behind `IMachine`/`ISetupProbe` (`Setup/Installer.cs`) and unit-tested with fakes; CI job `agent-windows` installs/updates/uninstalls for real and renders the window to PNG (`setup-preview`). Config via `appsettings.json` next to the exe plus env vars `TOPAZ_AGENT_<Section>__<Key>`; central config via `ConnectionStrings__Postgres` and `Topaz__*` env vars.
 
 ## Architecture (big picture)
 
@@ -80,7 +80,7 @@ Re-run the reconciliation after changing projections or views.
 
 - Never write to the Topaz database. Agent SQL must stay `SELECT`-only (`SqlBuilder`) inside the read-only transaction (`FirebirdTopazSource`).
 - Never commit `*.fdb`/`*.gdb`/`*.fbk` (real station data); `.gitignore` covers them.
-- Secrets only via env vars (central `.env`, agent per-service environment in the registry set by `deploy/agent/install.ps1`). Never log row data or tokens.
+- Secrets only via env vars (central `.env`, agent per-service environment in the registry set by the setup (`src/Topaz.Agent/Setup`)). Never log row data or tokens.
 - Excluded secret columns (`dcAgents.Password`, `sysUsers.PswHash/Psw/SecurityData`, `dcPaymentModes.Config`) must stay excluded in `datasets.json`; a test asserts this.
 - .NET 8 means the agent does not run on Windows 7 (accepted by the owner).
 - No shared enrollment keys: a station without a token gets access only after a superadmin approves its request with the verification code.

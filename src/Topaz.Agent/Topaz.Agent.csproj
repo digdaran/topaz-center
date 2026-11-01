@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
   <PropertyGroup>
+    <!-- net8.0: tests and development on Linux; net8.0-windows: the shipped agent with the setup window (WinForms). -->
+    <TargetFrameworks>net8.0;net8.0-windows</TargetFrameworks>
     <RootNamespace>Topaz.Agent</RootNamespace>
     <AssemblyName>TopazAgent</AssemblyName>
     <OutputType>Exe</OutputType>
@@ -8,6 +10,15 @@
     <RuntimeIdentifiers>win-x64;win-x86;linux-x64</RuntimeIdentifiers>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <!-- No console window on double click; console commands attach to the parent console (Setup/ConsoleAttach). -->
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>agent.ico</ApplicationIcon>
+    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Topaz.Contracts\Topaz.Contracts.csproj" />
@@ -28,6 +39,12 @@
   <ItemGroup>
     <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Update="datasets.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- Also inside the exe: the one-file setup writes them next to the installed agent. -->
+    <EmbeddedResource Include="appsettings.json" LogicalName="defaults.appsettings.json" />
+    <EmbeddedResource Include="datasets.json" LogicalName="defaults.datasets.json" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net8.0-windows'">
+    <Compile Remove="Setup/Ui/**" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Topaz.Agent.Tests" />

@@ -19,6 +19,37 @@ using Topaz.Agent.Updating;
 //   TopazAgent.exe requeue-dead   move rejected batches back to the queue
 //   TopazAgent.exe apply-update <apply.json>   install a downloaded update (started by the agent itself)
 //   TopazAgent.exe --version
+// Windows build, one-file setup (1.4+):
+//   TopazAgent-Setup.exe                      double click: setup window (status window when run from the installed copy)
+//   TopazAgent-Setup.exe /S /station="АЗС-5"   silent install (see Setup/SetupPlan.cs for all options)
+//   TopazAgent.exe uninstall [/S] [/removestate]
+#if WINDOWS
+{
+    var first = args.FirstOrDefault()?.ToLowerInvariant();
+    if (args.Length == 0 && !Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
+        return Topaz.Agent.Setup.Ui.Sta.Run(Topaz.Agent.Setup.Ui.SetupApp.RunWindow);
+    if (Topaz.Agent.Setup.SetupArgs.LooksLikeSetup(args) && !args.Contains("--version"))
+    {
+        Topaz.Agent.Setup.Ui.ConsoleAttach.ToParent();
+        return Topaz.Agent.Setup.Ui.Sta.Run(() => Topaz.Agent.Setup.Ui.SetupApp.RunSilent(args));
+    }
+    switch (first)
+    {
+        case "uninstall":
+            Topaz.Agent.Setup.Ui.ConsoleAttach.ToParent();
+            return Topaz.Agent.Setup.Ui.Sta.Run(() => Topaz.Agent.Setup.Ui.SetupApp.Uninstall(args.Skip(1).ToArray()));
+        case "uninstall-continue":
+            return Topaz.Agent.Setup.Ui.Sta.Run(() => Topaz.Agent.Setup.Ui.SetupApp.UninstallContinue(args));
+        case "setup-preview":
+            return Topaz.Agent.Setup.Ui.Sta.Run(() => Topaz.Agent.Setup.Ui.SetupApp.Preview(args.Length > 1 ? args[1] : "setup-preview"));
+        case "run" or "apply-update":
+            break; // service / scheduled task: no console
+        default:
+            Topaz.Agent.Setup.Ui.ConsoleAttach.ToParent(); // check, status, --version typed in a console
+            break;
+    }
+}
+#endif
 var command = args.FirstOrDefault(a => !a.StartsWith('-'))?.ToLowerInvariant() ?? "run";
 if (args.Contains("--version")) { Console.WriteLine(AgentInfo.Version); return 0; }
 // Runs from the staging folder with the package's default config: no config validation, no host.
@@ -52,6 +83,7 @@ Log.Logger = new LoggerConfiguration()
 builder.Services.AddSerilog();
 
 var datasetsPath = Path.IsPathRooted(options.DatasetsFile) ? options.DatasetsFile : Path.Combine(AppContext.BaseDirectory, options.DatasetsFile);
+if (!File.Exists(datasetsPath)) File.WriteAllText(datasetsPath, Topaz.Agent.Setup.Defaults.Read("datasets.json")); // one-file exe started without its catalog
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(_ => DatasetCatalog.Load(datasetsPath));
@@ -98,6 +130,10 @@ try
         case "run":
             Log.Information("TopazAgent {Version} starting; station '{Station}', server {Server}, state {State}",
                 AgentInfo.Version, options.Station.Name, options.Server.Url, stateDir);
+#if WINDOWS
+            if (Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
+                Topaz.Agent.Setup.Ui.SetupApp.EnsureRegistered(); // «Программы и компоненты» + Start menu after self-update
+#endif
             await host.RunAsync();
             return 0;
         case "check":

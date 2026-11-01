@@ -68,7 +68,7 @@ E2E_BASE_URL=http://localhost:8080 E2E_LOGIN=admin E2E_PASSWORD=... npx playwrig
 
 ## Сборка поставки
 
-Готовые сборки агента (zip с `TopazAgent.exe` и скриптами установки, `win-x64` и `win-x86`) лежат на странице [Releases](https://github.com/digdaran/topaz-center/releases/latest). Новая версия выпускается тегом: CI прогонит тесты, создаст релиз с архивами и `SHA256SUMS.txt` и опубликует образ сервера в GHCR.
+Установщик агента — один файл `TopazAgent-Setup-<версия>-win-x64.exe` (двойной клик, название АЗС; есть `win-x86`) — лежит на странице [Releases](https://github.com/digdaran/topaz-center/releases/latest). Новая версия выпускается тегом: CI прогонит тесты, создаст релиз с архивами и `SHA256SUMS.txt` и опубликует образ сервера в GHCR.
 
 ```bash
 git tag v1.0.1 && git push origin v1.0.1      # тег с «-» (v1.1.0-rc1) — предварительный релиз
@@ -78,12 +78,12 @@ git tag v1.0.1 && git push origin v1.0.1      # тег с «-» (v1.1.0-rc1) —
 
 ```bash
 # агент: один exe для Windows
-dotnet publish src/Topaz.Agent -c Release -r win-x64 --self-contained \
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/TopazAgent
-cp deploy/agent/*.ps1 out/TopazAgent/
+dotnet publish src/Topaz.Agent -c Release -f net8.0-windows -r win-x64 --self-contained \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o out/TopazAgent
+# out/TopazAgent/TopazAgent.exe — это и агент, и установщик
 
 # сервер: Docker-образ
 docker build -f src/Topaz.Central/Dockerfile -t topaz-central .
 ```
 
-CI (`.github/workflows/ci.yml`) прогоняет все тесты на PostgreSQL 16 и Firebird 2.5, собирает агент под `win-x64` и `win-x86`, а по тегу `v*` публикует релиз агента и образ сервера в GHCR.
+CI (`.github/workflows/ci.yml`) прогоняет все тесты на PostgreSQL 16 и Firebird 2.5, собирает агент-установщик под `win-x64` и `win-x86`, на Windows-сборщике по-настоящему ставит, обновляет и удаляет его, а по тегу `v*` публикует релиз агента и образ сервера в GHCR.

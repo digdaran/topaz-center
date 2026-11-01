@@ -78,24 +78,29 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}; [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION=1.0.0-ci.${GITHUB_RUN_NUMBER}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          dotnet publish src/Topaz.Agent -c Release -r ${{ matrix.rid }} --self-contained \
+          # The Windows build: agent + one-file setup window (net8.0-windows, WinForms).
+          dotnet publish src/Topaz.Agent -c Release -f net8.0-windows -r ${{ matrix.rid }} --self-contained \
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
             -p:DebugType=none -p:Version="$VERSION" -o out/TopazAgent
-          cp deploy/agent/install.ps1 deploy/agent/uninstall.ps1 deploy/agent/README.md out/TopazAgent/
+          ls -la out/TopazAgent
       - name: Check package contents
         run: |
           set -e
-          for f in TopazAgent.exe appsettings.json datasets.json install.ps1 uninstall.ps1; do test -f "out/TopazAgent/$f" || { echo "missing $f"; exit 1; }; done
+          for f in TopazAgent.exe appsettings.json datasets.json; do test -f "out/TopazAgent/$f" || { echo "missing $f"; exit 1; }; done
           # secret columns must stay excluded (also asserted by a unit test)
           jq -e '[.datasets[] | select(.table=="sysUsers")][0].exclude | index("PswHash") and index("Psw") and index("SecurityData")' out/TopazAgent/datasets.json
           jq -e '[.datasets[] | select(.table=="dcAgents")][0].exclude | index("Password")' out/TopazAgent/datasets.json
           jq -e '[.datasets[] | select(.table=="dcPaymentModes")][0].exclude | index("Config")' out/TopazAgent/datasets.json
-      - name: Zip
+      # People download the setup exe; the zip is the self-update package (exe + catalog), signed below.
+      - name: Setup exe and update zip
         run: |
-          NAME=TopazAgent-${{ steps.pub.outputs.version }}-${{ matrix.rid }}
-          mkdir -p dist && mv out/TopazAgent "out/$NAME"
+          V=${{ steps.pub.outputs.version }}; RID=${{ matrix.rid }}
+          mkdir -p dist setup
+          cp out/TopazAgent/TopazAgent.exe "setup/TopazAgent-Setup-$V-$RID.exe"
+          NAME=TopazAgent-$V-$RID
+          mkdir -p "out/$NAME" && cp out/TopazAgent/TopazAgent.exe out/TopazAgent/datasets.json out/TopazAgent/appsettings.json "out/$NAME/"
           (cd out && zip -9 -r "../dist/$NAME.zip" "$NAME")
-          mv "out/$NAME" out/TopazAgent
+          ls -la setup dist
       - uses: actions/upload-artifact@v4
         with:
           name: TopazAgent-${{ matrix.rid }}
@@ -104,6 +109,10 @@ jobs:
         with:
           name: agent-zip-${{ matrix.rid }}
           path: dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-setup-${{ matrix.rid }}
+          path: setup/*.exe
       # Self-update package: manifest signed with the key whose public half is built into the agent
       # (src/Topaz.Agent/Updating/UpdateKeys.cs). Servers offer only signed packages; agents verify the signature.
       - name: Sign update manifest
@@ -129,6 +138,80 @@ jobs:
         with:
           name: agent-update-${{ matrix.rid }}
           path: updates
+
+  # The real thing on Windows: silent install, update, uninstall of the one-file setup, plus pictures of its window.
+  agent-windows:
+    needs: agent-package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Agent unit tests on Windows (DPAPI, paths)
+        run: dotnet test tests/Topaz.Agent.Tests -c Release
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-setup-win-x64
+          path: setup
+      - name: Silent install, update, uninstall
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = (Get-ChildItem setup\*.exe)[0].FullName
+          Write-Host "Setup: $setup ($([math]::Round((Get-Item $setup).Length / 1MB, 1)) MB)"
+          New-Item -ItemType Directory -Force C:\TopazTest | Out-Null
+          Set-Content C:\TopazTest\TopazAZS.fdb "not a real database"
+          function Setup($argList) {
+            $p = Start-Process -FilePath $setup -ArgumentList $argList -Wait -PassThru
+            Get-Content "$env:ProgramData\TopazAgent\logs\setup.log" -Tail 25 -ErrorAction SilentlyContinue
+            return $p.ExitCode
+          }
+          # No Firebird and no server on the runner: installed with warnings (exit code 1).
+          $code = Setup @('/S', '/station="CI Тест"', '/server=http://127.0.0.1:9', '/db=C:\TopazTest\TopazAZS.fdb')
+          if ($code -ne 1) { throw "install exit code $code" }
+          $svc = Get-Service TopazAgent
+          if ($svc.Status -ne 'Running') { throw "service is $($svc.Status)" }
+          $exe = "$env:ProgramFiles\TopazAgent\TopazAgent.exe"
+          foreach ($f in @($exe, "$env:ProgramFiles\TopazAgent\datasets.json", "$env:ProgramFiles\TopazAgent\appsettings.json")) { if (-not (Test-Path $f)) { throw "missing $f" } }
+          $settings = Get-Content "$env:ProgramFiles\TopazAgent\appsettings.json" -Raw | ConvertFrom-Json
+          if ($settings.Station.Name -ne 'CI Тест') { throw "station name: $($settings.Station.Name)" }
+          if ((Get-Content "$env:ProgramFiles\TopazAgent\appsettings.json" -Raw) -match 'electro') { throw "password leaked into appsettings.json" }
+          $envVars = (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\TopazAgent -Name Environment).Environment
+          if (-not ($envVars -contains 'TOPAZ_AGENT_Firebird__Password=electro')) { throw "service environment: $envVars" }
+          $reg = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\TopazCenterAgent
+          Write-Host "Programs and Features: $($reg.DisplayName) $($reg.DisplayVersion)"
+          $acl = (icacls "$env:ProgramData\TopazAgent") -join "`n"
+          if ($acl -match 'BUILTIN\\Users' -or $acl -notmatch 'NT AUTHORITY\\SYSTEM') { throw "state folder ACL: $acl" }
+          Start-Sleep 15
+          if ((Get-Service TopazAgent).Status -ne 'Running') { throw "service stopped after start" }
+          Get-Content "$env:ProgramData\TopazAgent\logs\agent-*.log" -Tail 5
+
+          # Update in place: the station name is kept.
+          $code = Setup @('/S')
+          if ($code -ne 1) { throw "update exit code $code" }
+          $settings = Get-Content "$env:ProgramFiles\TopazAgent\appsettings.json" -Raw | ConvertFrom-Json
+          if ($settings.Station.Name -ne 'CI Тест') { throw "update lost the station name" }
+
+          # Uninstall continues from a temporary copy: wait until everything is gone.
+          Start-Process -FilePath $exe -ArgumentList 'uninstall', '/S' -Wait
+          for ($i = 0; $i -lt 60 -and ((Get-Service TopazAgent -ErrorAction SilentlyContinue) -or (Test-Path "$env:ProgramFiles\TopazAgent")); $i++) { Start-Sleep 1 }
+          if (Get-Service TopazAgent -ErrorAction SilentlyContinue) { throw "service still there" }
+          if (Test-Path "$env:ProgramFiles\TopazAgent") { throw "program folder still there" }
+          if (Test-Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\TopazCenterAgent) { throw "Programs and Features entry still there" }
+          Write-Host "install / update / uninstall OK"
+      - name: Pictures of the setup window
+        run: |
+          $setup = (Get-ChildItem setup\*.exe)[0].FullName
+          Start-Process -FilePath $setup -ArgumentList 'setup-preview', "$PWD\previews" -Wait
+          Get-ChildItem previews
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: setup-window-previews
+          path: previews
 
   central-image:
     needs: [test, web, agent-package]
@@ -168,7 +251,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, web, agent-package, central-image]
+    needs: [test, web, agent-package, agent-windows, central-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -183,6 +266,11 @@ jobs:
           pattern: agent-update-*
           merge-multiple: true
           path: upd
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-setup-*
+          merge-multiple: true
+          path: dist
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -197,27 +285,17 @@ jobs:
             cp "$(dirname "$m")/manifest.sig" "dist/TopazAgent-$V-$RID.manifest.sig"
           done
           cd dist
-          sha256sum TopazAgent-*.zip > SHA256SUMS.txt
+          sha256sum TopazAgent-Setup-*.exe TopazAgent-*.zip > SHA256SUMS.txt
           cat > notes.md <<EOF
           ## Агент АЗС (Windows)
 
-          | Файл | Для |
-          |---|---|
-          | \`TopazAgent-$V-win-x64.zip\` | Windows 10/11, Server 2016+ (64-бит) — обычно нужен этот |
-          | \`TopazAgent-$V-win-x86.zip\` | 32-битная Windows 10 |
+          **Скачайте \`TopazAgent-Setup-$V-win-x64.exe\`** (для 32-битной Windows — \`-win-x86\`), запустите двойным кликом и введите название АЗС. Всё остальное установщик сделает сам: найдёт базу Топаза, установит службу и покажет **код подтверждения**. Сообщите код администратору сервера — он подключит АЗС в «АЗС → Подключение».
 
-          .NET устанавливать не нужно. Windows 7 не поддерживается. Начиная с 1.2 агент обновляется сам с вашего сервера (раздел «АЗС → Обновление агентов»); \`*.manifest.json\`/\`*.manifest.sig\` — подписанные описания пакетов для автообновления.
+          - .NET устанавливать не нужно; Windows 10/11 или Server 2016+, Windows 7 не поддерживается.
+          - Файл без цифровой подписи Microsoft: если Windows покажет «Система Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае».
+          - Тихая установка: \`TopazAgent-Setup-$V-win-x64.exe /S /station="АЗС-5"\` (код — в \`%ProgramData%\TopazAgent\logs\setup.log\`).
+          - Уже установленные агенты (1.2+) обновятся сами с вашего сервера. \`*.zip\` и \`*.manifest.*\` — подписанные пакеты для автообновления, скачивать их не нужно.
 
-          1. Скачайте архив, распакуйте, откройте PowerShell **от имени администратора** в распакованной папке.
-          2. Выполните:
-          \`\`\`powershell
-          Get-ChildItem -Recurse | Unblock-File
-          Set-ExecutionPolicy -Scope Process Bypass
-          .\\install.ps1 -StationName "АЗС-5 Северная"
-          \`\`\`
-          Сервер по умолчанию — \`https://topaz.08u.ru\` (другой: \`-ServerUrl\`), пароль Firebird — стандартный пароль Топаза (другой: \`-FirebirdPassword\`; если не подойдёт, установщик спросит).
-          В конце установки агент покажет код подтверждения: сообщите его администратору сервера, он одобрит АЗС в «АЗС → Подключение».
-          База Топаза ищется в \`C:\\Program Files (x86)\\TopazAZS-*\`; если её там нет, установщик спросит путь.
           Подробно: [deploy/agent/README.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/deploy/agent/README.md). Контрольные суммы — в \`SHA256SUMS.txt\`.
 
           ## Сервер

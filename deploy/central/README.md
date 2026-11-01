@@ -61,7 +61,7 @@ docker compose exec -T postgres pg_restore -U topaz -d topaz --clean --if-exists
 docker compose start central
 ```
 
-Даже если центральная БД потеряна безвозвратно, данные можно собрать заново: на каждой АЗС выполнить `TopazAgent.exe` с очищенным состоянием (`uninstall.ps1 -RemoveState`, `reset` на сервере, `install.ps1`), и агенты перечитают всё из Топаза.
+Даже если центральная БД потеряна безвозвратно, данные можно собрать заново: на каждой АЗС выполнить `TopazAgent.exe` с очищенным состоянием (`TopazAgent.exe uninstall /removestate`, затем установщик заново и одобрение заявки как «существующая АЗС»), и агенты перечитают всё из Топаза.
 
 ## Обновление
 

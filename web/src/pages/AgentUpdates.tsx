@@ -98,7 +98,7 @@ export default function AgentUpdates() {
               {
                 title: 'Версия агента', dataIndex: 'agent_version', render: (v: string | null, r) => (
                   <>{v ?? '—'} {versionAtLeast(v, data.latest) ? <Tag color="green">актуальная</Tag> : null}
-                    {!r.agent_rid && v && <Tooltip title="Агент до версии 1.2 не умеет обновляться сам: один раз обновите его вручную (install.ps1)."><Tag color="orange">вручную</Tag></Tooltip>}</>
+                    {!r.agent_rid && v && <Tooltip title="Агент до версии 1.2 не умеет обновляться сам: один раз запустите на АЗС установщик новой версии."><Tag color="orange">вручную</Tag></Tooltip>}</>
                 ),
               },
               { title: 'Платформа', dataIndex: 'agent_rid', render: (v) => v ?? '—' },
