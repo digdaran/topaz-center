@@ -78,6 +78,13 @@ Auth: stations connect by request (docs/architecture.md 2.6): the agent sends `P
 - shift item rests are as of the shift end; period reports cut by operation time, not by shift.
 Re-run the reconciliation after changing projections or views.
 
+## Help for station owners (keep it current)
+
+The web UI has **Помощь** (`/help`): the owner's guide `web/src/help/guide.md` and the changelog `web/src/help/changelog.md` ("Что нового"), rendered from Markdown. Readers are business people, not IT: plain Russian, tasks and button names as they appear in the UI, no internal terms.
+- Every user-visible change (new screen, button, rule, report figure, changed behaviour) updates `guide.md` in the same change.
+- Every release adds a changelog entry `## X.Y.Z — DD.MM.YYYY` with **Новое** / **Исправлено** in the owner's words (what changes for them, not how). CI refuses a tag whose version is missing there; `help.test.ts` checks the order and headings.
+- Technical docs (`docs/*.md`) stay as they are; the help is a separate, simpler text.
+
 ## Hard rules
 
 - Never write to the Topaz database. Agent SQL must stay `SELECT`-only (`SqlBuilder`) inside the read-only transaction (`FirebirdTopazSource`).

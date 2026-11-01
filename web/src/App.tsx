@@ -1,6 +1,6 @@
 import {
   AimOutlined, AlertOutlined, AppstoreOutlined, ExperimentOutlined, BarChartOutlined, CalculatorOutlined, WalletOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
-  ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
+  QuestionCircleOutlined, ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
@@ -8,6 +8,7 @@ import { api, isOwner, isSuper, Me, useMeta } from './api/client';
 import { lazy, ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
+import { useHelpUnseen } from './help/version';
 import { useThemeMode } from './components/theme';
 import { Spin } from 'antd';
 
@@ -26,6 +27,7 @@ const TanksPage = lazy(() => import('./pages/TanksPage'));
 const ControlPage = lazy(() => import('./pages/ControlPage'));
 const StationsPage = lazy(() => import('./pages/StationsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const HelpPage = lazy(() => import('./pages/HelpPage'));
 
 interface NavItem {
   key: string;
@@ -48,6 +50,7 @@ export const NAV: NavItem[] = [
   { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
   { key: '/costs', label: 'Себестоимость', icon: <CalculatorOutlined />, roles: ['superadmin', 'owner', 'manager'] },
   { key: '/settings', label: 'Настройки', icon: <SettingOutlined /> },
+  { key: '/help', label: 'Помощь', icon: <QuestionCircleOutlined /> },
 ];
 
 function Shell({ children }: { children: ReactNode }) {
@@ -64,6 +67,7 @@ function Shell({ children }: { children: ReactNode }) {
   const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
   const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
   const unpriced = meta.data?.unpriced_receipts ?? 0;
+  const helpNew = useHelpUnseen();
   const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
     key: n.key, icon: n.icon,
     label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
@@ -72,12 +76,14 @@ function Shell({ children }: { children: ReactNode }) {
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={requests} color="red" overflowCount={99} title="АЗС ожидают подключения" /></Flex>
       : n.key === '/costs' && unpriced > 0
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={unpriced} color="orange" overflowCount={99} title="Сливы топлива без закупочной цены" /></Flex>
+      : n.key === '/help' && helpNew
+        ? <Flex justify="space-between" align="center">{n.label}<Badge count="новое" color="blue" title="Вышло обновление — посмотрите «Что нового»" /></Flex>
       : n.key === '/settings' && unmapped > 0
         ? <Flex justify="space-between" align="center">{n.label}<Badge count={unmapped} color="orange" overflowCount={99} title="Топливо АЗС ждёт сопоставления со справочником" /></Flex>
         : n.label,
   }));
   const menu = (
-    <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key + (e.key === '/settings' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
+    <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key === '/help' && helpNew ? '/help/changes' : e.key + (e.key === '/settings' || e.key === '/help' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
   );
   const desktop = !!screens.lg;
 
@@ -170,6 +176,7 @@ export default function App() {
                     <Route path="/stations" element={<StationsPage />} />
                     <Route path="/data" element={<DataPage />} />
                     <Route path="/settings/*" element={<SettingsPage />} />
+                    <Route path="/help/*" element={<HelpPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </Suspense>

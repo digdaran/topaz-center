@@ -61,6 +61,11 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - name: Release notes cover the tagged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V=${GITHUB_REF_NAME#v}
+          grep -qE "^## ${V//./\\.}( |$)" src/help/changelog.md || { echo "::error::web/src/help/changelog.md has no entry '## $V — DD.MM.YYYY' (Помощь → Что нового)"; exit 1; }
 
   agent-package:
     needs: test

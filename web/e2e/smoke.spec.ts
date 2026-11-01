@@ -26,6 +26,8 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/shifts', title: 'Смены' },
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },
+  { path: '/help', title: 'Помощь', wait: 'Утренняя проверка за 5 минут' },
+  { path: '/help/changes', title: 'Помощь', wait: 'Себестоимость топлива по средней цене резервуара' },
   { path: '/settings/organizations', title: 'Настройки', wait: 'Добавить организацию' },
   { path: '/settings/users', title: 'Настройки' },
   { path: '/settings/organization', title: 'Настройки', wait: 'Маржа и наценка' },
