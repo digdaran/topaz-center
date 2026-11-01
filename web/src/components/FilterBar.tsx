@@ -16,6 +16,8 @@ export function FilterBar({ granularity = true, compare = true, fuel = false }: 
   const [filter, setFilter] = useFilter();
   const meta = useMeta();
   const stations = meta.data?.stations ?? [];
+  // reference fuel types the visible stations sell (the filter value is the type code)
+  const fuelTypes = (meta.data?.fuel_types ?? []).filter((t) => t.present);
 
   return (
     <Flex wrap gap={8} align="center" style={{ marginBottom: 16 }}>
@@ -64,14 +66,14 @@ export function FilterBar({ granularity = true, compare = true, fuel = false }: 
           ]}
         />
       )}
-      {fuel && (meta.data?.fuels.length ?? 0) > 1 && (
+      {fuel && fuelTypes.length > 1 && (
         <Select
           allowClear
           placeholder="Всё топливо"
           style={{ width: 160 }}
           value={filter.fuel}
           onChange={(v) => setFilter({ fuel: v })}
-          options={meta.data!.fuels.map((f) => ({ value: f, label: f }))}
+          options={fuelTypes.map((t) => ({ value: t.code, label: t.name }))}
         />
       )}
     </Flex>

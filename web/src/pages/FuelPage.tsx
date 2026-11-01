@@ -1,5 +1,5 @@
 import { Card, Col, Row, Table, Tag, Tooltip, Typography } from 'antd';
-import { useFiltered } from '../api/client';
+import { useFiltered, useFuelTypeName } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
 import { bucketLabel, compact, dec, int, liters, money, PAYMENT_KIND, pct } from '../lib/format';
@@ -12,10 +12,10 @@ interface Fuel {
 
 const FILL_BINS = ['до 10 л', '10–20', '20–30', '30–40', '40–50', '50–70', '70–100', '100+ л'];
 const ORDER_KIND: Record<string, string> = { full_tank: 'Полный бак', by_liters: 'На литры', by_amount: 'На сумму', other: 'Прочие' };
-const TYPE_NAME: Record<string, string> = { AI92: 'АИ-92', AI95: 'АИ-95', AI98: 'АИ-98/100', DT: 'ДТ', LPG: 'СУГ', CNG: 'Метан', OTHER: 'Прочее' };
 
 export default function FuelPage() {
   const { data, error, isLoading, isFetching } = useFiltered<Fuel>('/analytics/fuel');
+  const typeName = useFuelTypeName();
   const g = data?.filter.g ?? 'day';
   const buckets = [...new Set((data?.series ?? []).map((s) => s.bucket))].sort();
   const types = [...new Set((data?.series ?? []).map((s) => s.fuel_type))];
@@ -51,7 +51,7 @@ export default function FuelPage() {
                   xAxis: { type: 'category', data: buckets.map((b) => bucketLabel(b, g)) },
                   yAxis: { type: 'value', axisLabel: { formatter: (v: number) => compact(v) } },
                   series: types.map((t) => ({
-                    name: TYPE_NAME[t] ?? t, type: 'bar', stack: 'l',
+                    name: typeName(t), type: 'bar', stack: 'l',
                     data: buckets.map((b) => data.series.find((s) => s.bucket === b && s.fuel_type === t)?.liters ?? 0),
                   })),
                 }} />
@@ -106,7 +106,7 @@ export default function FuelPage() {
                     xAxis: { type: 'category', data: days.map((d) => bucketLabel(d, 'day')) },
                     yAxis: { type: 'value', scale: true, axisLabel: { formatter: (v: number) => `${v} ₽` } },
                     series: pts.map((t) => ({
-                      name: TYPE_NAME[t] ?? t, type: 'line', step: 'end', symbol: 'none',
+                      name: typeName(t), type: 'line', step: 'end', symbol: 'none',
                       data: days.map((d) => data.price_history.find((p) => p.day === d && p.fuel_type === t)?.price ?? null), connectNulls: true,
                     })),
                   };
@@ -120,7 +120,7 @@ export default function FuelPage() {
                     columns={[
                       { title: 'Дата', dataIndex: 'date', render: (v: string) => v.split('-').reverse().join('.') },
                       { title: 'АЗС', dataIndex: 'station', width: 170, ellipsis: true },
-                      { title: 'Топливо', dataIndex: 'fuel_type', render: (v: string) => TYPE_NAME[v] ?? v },
+                      { title: 'Топливо', dataIndex: 'fuel_type', render: (v: string) => typeName(v) },
                       { title: 'Цена', key: 'p', render: (_, r) => <span style={{ whiteSpace: 'nowrap' }}>{dec(r.price_before)} → {dec(r.price_after)}</span> },
                       numCol<R>('Δ цены', 'price_change', pct),
                       { title: 'Литров/день', key: 'l', align: 'right', render: (_, r) => <span style={{ whiteSpace: 'nowrap' }}>{int(r.liters_per_day_before)} → {int(r.liters_per_day_after)}</span> },

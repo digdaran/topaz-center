@@ -50,6 +50,12 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                 UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM v_station_status v
                 WHERE a.rule_code = 'station_offline' AND a.status <> 'closed' AND v.id = a.station_id AND v.silent_for < interval '5 minutes'
                 """);
+            // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'fuel_unmapped' AND a.status <> 'closed' AND a.dedupe_key IS DISTINCT FROM
+                      (SELECT string_agg(f.fuel_id::text, ',' ORDER BY f.fuel_id) FROM v_station_fuels f WHERE f.station_id = a.station_id AND f.needs_confirmation)
+                """);
             await NotifyAsync(c, ct);
             if (found > 0) log.LogInformation("Anomaly detection: {Count} new alert(s)", found);
             return found;
@@ -179,6 +185,21 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                round(extract(epoch FROM v.silent_for) / 60), NULL, v.last_seen_at
         FROM v_station_status v JOIN alert_rules r ON r.code = 'station_offline' AND r.enabled
         WHERE v.status = 'active' AND v.silent_for > make_interval(mins => r.threshold::int)
+        ON CONFLICT DO NOTHING
+        """,
+        // Station fuels without a confirmed reference type (one alert per set of such fuels; closes automatically).
+        Insert + """
+        SELECT f.station_id, 'fuel_unmapped', string_agg(f.fuel_id::text, ',' ORDER BY f.fuel_id), r.severity,
+               'Топливо не сопоставлено со справочником: ' || count(*) || ' шт.',
+               'Подтвердите вид в «Настройки → Виды топлива»: ' || string_agg(f.fuel_name || ' → ' || ft.name, ', ' ORDER BY f.fuel_name)
+                   || '. Пока отчёты используют предложенный вид.',
+               count(*), NULL, now()
+        FROM v_station_fuels f
+        JOIN fuel_types ft ON ft.code = f.suggested_type
+        JOIN stations s ON s.id = f.station_id AND s.status = 'active'
+        JOIN alert_rules r ON r.code = 'fuel_unmapped' AND r.enabled
+        WHERE f.needs_confirmation
+        GROUP BY f.station_id, r.severity
         ON CONFLICT DO NOTHING
         """,
         // Rejected batches on the agent or failed processing on the server (one alert per day).

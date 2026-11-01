@@ -1,11 +1,12 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd';
+import { App, Badge, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { PageTitle } from '../components/ui';
+import { FuelCatalog } from './FuelCatalog';
 import { dateTime } from '../lib/format';
 
 interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[] }
@@ -86,37 +87,6 @@ function Users() {
   );
 }
 
-interface FuelRow { station_id: string; station: string; fuel_id: number; fuel_name: string; fuel_type: string; manual: boolean; is_deleted: boolean }
-
-/** Station fuel names → canonical fuel types, so stations can be compared and summed. */
-function FuelTypes() {
-  const qc = useQueryClient();
-  const { message } = App.useApp();
-  const { data, isLoading } = useQuery({ queryKey: ['catalog-fuels'], queryFn: () => api<{ types: { code: string; name: string }[]; fuels: FuelRow[] }>('/catalog/fuels') });
-  const save = async (r: FuelRow, fuelType: string | null) => {
-    try {
-      await api(`/catalog/fuels/${r.station_id}/${r.fuel_id}`, { method: 'PUT', body: { fuel_type: fuelType } });
-      qc.invalidateQueries();
-      message.success('Сохранено');
-    } catch (e) {
-      message.error((e as Error).message);
-    }
-  };
-  return (
-    <Table<FuelRow> size="small" rowKey={(r) => `${r.station_id}/${r.fuel_id}`} loading={isLoading} dataSource={data?.fuels} pagination={false}
-      columns={[
-        { title: 'АЗС', dataIndex: 'station' },
-        { title: 'Топливо в Топазе', dataIndex: 'fuel_name', render: (v, r) => <>{v} {r.is_deleted && <Tag>удалено</Tag>}</> },
-        {
-          title: 'Вид для отчётов', dataIndex: 'fuel_type', render: (v: string, r) => (
-            <Select style={{ width: 180 }} value={v} onChange={(t) => save(r, t)} options={data?.types.map((t) => ({ value: t.code, label: t.name }))} />
-          ),
-        },
-        { title: '', dataIndex: 'manual', render: (m: boolean, r) => (m ? <Button size="small" type="link" onClick={() => save(r, null)}>сбросить</Button> : <Tag>определено автоматически</Tag>) },
-      ]} />
-  );
-}
-
 function AuditLog() {
   const { data, isLoading } = useQuery({ queryKey: ['audit'], queryFn: () => api<AuditRow[]>('/audit?limit=500') });
   return (
@@ -166,10 +136,11 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const tab = location.pathname.split('/')[2] ?? (me.role === 'owner' ? 'users' : 'profile');
+  const unmapped = useMeta().data?.unmapped_fuels ?? 0;
   const items = [
     ...(me.role === 'owner' ? [
       { key: 'users', label: 'Пользователи', children: <Users /> },
-      { key: 'fuels', label: 'Виды топлива', children: <FuelTypes /> },
+      { key: 'fuels', label: <>Виды топлива {unmapped > 0 && <Badge count={unmapped} color="orange" size="small" />}</>, children: <FuelCatalog /> },
       { key: 'audit', label: 'Журнал действий', children: <AuditLog /> },
     ] : []),
     { key: 'profile', label: 'Мой пароль', children: <Profile /> },

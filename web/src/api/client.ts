@@ -73,12 +73,25 @@ export interface StationMeta {
   group_name: string | null;
 }
 
+export interface FuelTypeMeta { code: string; name: string; is_active: boolean; present: boolean }
+
 export interface Meta {
   stations: StationMeta[];
   fuels: string[];
+  /** reference fuel types; `present` = sold by the visible stations */
+  fuel_types: FuelTypeMeta[];
+  /** station fuels waiting for a confirmed reference type */
+  unmapped_fuels: number;
   item_groups: string[];
   payment_modes: string[];
   data_range: { first_sale: string | null; last_sale: string | null };
 }
 
 export const useMeta = () => useQuery({ queryKey: ['meta'], queryFn: () => api<Meta>('/meta'), staleTime: 60_000 });
+
+/** Reference fuel type code → its current name (renames in the catalog show up everywhere). */
+export function useFuelTypeName() {
+  const meta = useMeta();
+  const names = Object.fromEntries((meta.data?.fuel_types ?? []).map((t) => [t.code, t.name]));
+  return (code: string) => names[code] ?? code;
+}

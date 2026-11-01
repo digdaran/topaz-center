@@ -8,7 +8,7 @@ namespace Topaz.Central.Ui;
 ///   from=yyyy-MM-dd&amp;to=yyyy-MM-dd  station-local dates, inclusive (default: current month)
 ///   g=hour|day|week|month          granularity of series
 ///   compare=prev|yoy|none          comparison period for KPIs
-///   fuel=name                      fuel name filter (optional)
+///   fuel=code                      reference fuel type (fuel_types.code), optional
 /// Dates are local to each station; UtcFrom/UtcTo only bound the scan (index use) with a ±14 h margin.
 /// </summary>
 public sealed record UiFilter(Guid[] Stations, DateTime From, DateTime To, string Granularity, string Compare, string? Fuel)

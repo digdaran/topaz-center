@@ -48,6 +48,7 @@ function Alerts() {
                   <b style={{ fontWeight: r.status === 'new' ? 600 : 400 }}>{r.title}</b>
                   {r.details && <div style={{ opacity: 0.75, fontSize: 13 }}>{r.details}</div>}
                   {r.session_id != null && <Link to={`/shifts/${r.station_id}/${r.session_id}${location.search}`}>карточка смены</Link>}
+                  {r.rule_code === 'fuel_unmapped' && <Link to={`/settings/fuels?station=${r.station_id}`}>сопоставить топливо</Link>}
                 </>
               ),
             },

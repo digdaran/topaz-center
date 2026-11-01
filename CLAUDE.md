@@ -63,6 +63,7 @@ Auth: station enrolls with name + shared `Topaz__EnrollmentKey` → per-station 
 - API under `/api/v1/ui`: cookie auth (`Ui/UiAuth.cs`), every mutation needs header `X-Topaz-Ui: 1`, roles owner/manager/viewer. **Every query must be restricted by `StationScope`** (via `UiFilter.ParseAsync` or `CanSeeAsync`); viewers must never receive costs/margins (403 or `Kpi.Redact()`). `UiTests.Managers_see_only_their_stations_everywhere` loops over endpoints — add new ones there.
 - Long-period figures read the daily rollups `agg_fuel_daily` / `agg_shop_daily` / `agg_shop_receipts_daily` (rebuilt by `Processing/RollupRefresher` from `rollup_dirty`, marked by the batch processor; costs are applied during the rebuild, so cost edits mark stations `all`). Hour/hose/order-level views read raw tables for the period. Keep both consistent: `AnalyticsTests` asserts rollup = raw.
 - The SPA fallback answers only GET outside `/api` (a 200 for an unknown API path would make an agent drop batches).
+- Fuel types: reports group by the reference `fuel_types.code` resolved at query time through `v_station_fuels` (confirmed `station_fuel_map` row, else a suggestion learned from other stations' confirmations of the same `fuel_name_key`, else `guess_fuel_type`). The UI `fuel` filter is a type code. Mapping changes need no rollup rebuild.
 - Metric definitions live in `docs/web.md`; keep them in sync with the SQL.
 - Demo data: `tools/DemoData` (synthetic stations through the real agent protocol, with planted anomalies).
 

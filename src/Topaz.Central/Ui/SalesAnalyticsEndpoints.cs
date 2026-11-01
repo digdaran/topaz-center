@@ -11,8 +11,6 @@ public static class SalesAnalyticsEndpoints
         ui.MapGet("/analytics/fuel", Fuel);
         ui.MapGet("/analytics/demand", Demand);
         ui.MapGet("/analytics/items", Items);
-        ui.MapGet("/catalog/fuels", FuelCatalog);
-        ui.MapPut("/catalog/fuels/{station:guid}/{fuel:long}", SetFuelType).RequireAuthorization(Policies.Owner);
     }
 
     private static async Task<(UiFilter?, IResult?, NpgsqlConnection?)> Open(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
@@ -356,39 +354,4 @@ public static class SalesAnalyticsEndpoints
     }
 
     private static DateTime StartOfWeek(DateTime d) => d.Date.AddDays(-(((int)d.DayOfWeek + 6) % 7));
-
-    // ---------------------------------------------------------------- catalog
-
-    private static async Task<IResult> FuelCatalog(HttpContext ctx, StationScope scope, NpgsqlDataSource db)
-    {
-        var st = await scope.AllowedAsync(ctx.User);
-        await using var c = await db.OpenConnectionAsync();
-        var types = await c.QueryAsync("SELECT code, name FROM fuel_types ORDER BY sort");
-        var fuels = await c.QueryAsync("""
-            SELECT f.station_id, sn.station, f.fuel_id, f.fuel_name, f.fuel_type, f.manual, f.is_deleted
-            FROM v_station_fuels f JOIN v_station_names sn ON sn.station_id = f.station_id
-            WHERE f.station_id = ANY(@st) AND f.fuel_name NOT LIKE '<%' ORDER BY sn.station, f.fuel_name
-            """, new { st });
-        return Results.Ok(new { types, fuels });
-    }
-
-    public sealed record FuelTypeBody(string? FuelType);
-
-    private static async Task<IResult> SetFuelType(Guid station, long fuel, FuelTypeBody body, HttpContext ctx, NpgsqlDataSource db)
-    {
-        await using var c = await db.OpenConnectionAsync();
-        if (string.IsNullOrEmpty(body.FuelType))
-            await c.ExecuteAsync("DELETE FROM station_fuel_map WHERE station_id = @station AND fuel_id = @fuel", new { station, fuel });
-        else
-        {
-            if (!await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM fuel_types WHERE code = @t)", new { t = body.FuelType }))
-                return Results.Problem(statusCode: 400, title: "Неизвестный вид топлива");
-            await c.ExecuteAsync("""
-                INSERT INTO station_fuel_map (station_id, fuel_id, fuel_type) VALUES (@station, @fuel, @t)
-                ON CONFLICT (station_id, fuel_id) DO UPDATE SET fuel_type = EXCLUDED.fuel_type
-                """, new { station, fuel, t = body.FuelType });
-        }
-        await Audit.WriteAsync(db, ctx.User, "fuel_type_mapped", $"station:{station}/fuel:{fuel}", body);
-        return Results.NoContent();
-    }
 }

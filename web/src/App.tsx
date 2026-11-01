@@ -4,7 +4,7 @@ import {
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Typography } from 'antd';
-import { api } from './api/client';
+import { api, useMeta } from './api/client';
 import { lazy, ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
@@ -60,11 +60,15 @@ function Shell({ children }: { children: ReactNode }) {
   const { mode, setMode } = useThemeMode();
   const selected = NAV.filter((n) => n.key !== '/' && location.pathname.startsWith(n.key)).map((n) => n.key)[0] ?? '/';
   const alerts = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: { new: number; critical: number } }>('/alerts/summary'), refetchInterval: 60_000 });
+  const meta = useMeta();
+  const unmapped = me.role === 'owner' ? meta.data?.unmapped_fuels ?? 0 : 0;
   const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
     key: n.key, icon: n.icon,
     label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
       ? <Flex justify="space-between" align="center">{n.label}<Badge count={alerts.data!.counts.new} color={alerts.data!.counts.critical > 0 ? 'red' : 'orange'} overflowCount={99} /></Flex>
-      : n.label,
+      : n.key === '/settings' && unmapped > 0
+        ? <Flex justify="space-between" align="center">{n.label}<Badge count={unmapped} color="orange" overflowCount={99} title="Топливо АЗС ждёт сопоставления со справочником" /></Flex>
+        : n.label,
   }));
   const menu = (
     <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key + (e.key === '/settings' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />

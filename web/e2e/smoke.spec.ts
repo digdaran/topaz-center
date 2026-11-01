@@ -27,6 +27,8 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/stations', title: 'АЗС' },
   { path: '/data', title: 'Данные' },
   { path: '/settings/users', title: 'Настройки' },
+  { path: '/settings/fuels', title: 'Настройки', wait: 'Подтвердить все предложения' },
+  { path: '/settings/fuels?view=reference', title: 'Настройки', wait: 'Добавить вид' },
 ];
 
 test('login rejects a wrong password', async ({ page }) => {
@@ -48,7 +50,7 @@ for (const p of PAGES) {
     if (p.wait) await expect(page.getByText(p.wait).first()).toBeVisible();
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500); // let chart animations finish before the screenshot
-    await page.screenshot({ path: `test-results/screens/${info.project.name}${p.path.replace(/\//g, '_') || '_'}.png`, fullPage: true });
+    await page.screenshot({ path: `test-results/screens/${info.project.name}${p.path.replace(/[^a-z0-9]+/gi, '_') || '_'}.png`, fullPage: true });
     expect(errors).toEqual([]);
   });
 }
@@ -78,4 +80,25 @@ test('a viewer sees no money: no finance/costs menu, no margin', async ({ page, 
   await expect(page.getByRole('menuitem', { name: 'Финансы' })).toHaveCount(0);
   await expect(page.getByRole('menuitem', { name: 'Себестоимость' })).toHaveCount(0);
   await expect(page.getByText('Валовая маржа')).toHaveCount(0);
+});
+
+test('owner confirms suggested fuel types in one click (then the test undoes it)', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'changes shared demo data; once is enough');
+  await signIn(page);
+  await page.goto('/settings/fuels');
+  const button = page.getByRole('button', { name: /Подтвердить все предложения/ });
+  await expect(button).toBeVisible();
+  const startedAt = new Date().toISOString();
+  if (await button.isEnabled()) {
+    await button.click();
+    await page.getByRole('button', { name: 'Принять' }).click();
+  }
+  await expect(page.getByText('Всё топливо сопоставлено со справочником')).toBeVisible();
+  await expect(page.locator('.ant-menu').getByText('Настройки').locator('..').locator('.ant-badge-count')).toHaveCount(0);
+
+  // Undo the confirmations this test made, so the demo keeps showing pending fuels.
+  const headers = { 'X-Topaz-Ui': '1' };
+  const all = await (await page.request.get('/api/v1/ui/catalog/fuels', { headers })).json();
+  for (const f of all.fuels.filter((x: { confirmed: boolean; confirmed_at: string }) => x.confirmed && new Date(x.confirmed_at) >= new Date(startedAt)))
+    expect((await page.request.put(`/api/v1/ui/catalog/fuels/${f.station_id}/${f.fuel_id}`, { headers, data: { fuel_type: null } })).ok()).toBeTruthy();
 });

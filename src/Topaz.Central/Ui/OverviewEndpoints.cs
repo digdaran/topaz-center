@@ -47,7 +47,7 @@ public static class AnalyticsSql
 {
     public const string FuelWhere = """
         station_id = ANY(@st) AND sold_at >= @utcFrom AND sold_at < @utcTo
-        AND local_date BETWEEN @from::date AND @to::date AND (@fuel::text IS NULL OR fuel_name = @fuel)
+        AND local_date BETWEEN @from::date AND @to::date AND (@fuel::text IS NULL OR fuel_type = @fuel)
         """;
 
     public const string ShopWhere = """
@@ -56,7 +56,7 @@ public static class AnalyticsSql
 
     /// <summary>Day-level filter on the rollups (agg_*): exact local days, no time-of-day.</summary>
     public const string AggWhere = "station_id = ANY(@st) AND local_date BETWEEN @from::date AND @to::date";
-    public const string AggFuelWhere = AggWhere + " AND (@fuel::text IS NULL OR fuel_name = @fuel)";
+    public const string AggFuelWhere = AggWhere + " AND (@fuel::text IS NULL OR fuel_type = @fuel)";
 
     public const string AggFuelKpiColumns = """
         COALESCE(sum(revenue), 0) AS fuel_revenue,

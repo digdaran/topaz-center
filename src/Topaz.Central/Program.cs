@@ -143,6 +143,7 @@ ui.MapUiShifts();
 ui.MapUiData();
 ui.MapUiAdmin();
 ui.MapUiSalesAnalytics();
+ui.MapUiFuelCatalog();
 ui.MapUiMoney();
 ui.MapUiControl();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an

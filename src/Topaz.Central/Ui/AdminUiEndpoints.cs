@@ -43,7 +43,13 @@ public static class AdminUiEndpoints
         var groups = await c.QueryAsync<string>("SELECT DISTINCT name FROM v_item_groups WHERE station_id = ANY(@st) AND name NOT LIKE '%<%' ORDER BY 1", new { st });
         var paymentModes = await c.QueryAsync<string>("SELECT DISTINCT name FROM v_payment_modes WHERE station_id = ANY(@st) ORDER BY 1", new { st });
         var range = await c.QuerySingleAsync("SELECT min(sold_at) AS first_sale, max(sold_at) AS last_sale FROM fuel_sales WHERE station_id = ANY(@st)", new { st });
-        return Results.Ok(new { stations, fuels, item_groups = groups, payment_modes = paymentModes, data_range = range });
+        // Reference fuel types: names for every code, plus which ones the visible stations actually sell (for the filter).
+        var fuelTypes = await c.QueryAsync("""
+            SELECT ft.code, ft.name, ft.is_active, EXISTS (SELECT 1 FROM v_station_fuels f WHERE f.fuel_type = ft.code AND f.station_id = ANY(@st) AND NOT f.is_deleted) AS present
+            FROM fuel_types ft ORDER BY ft.sort, ft.name
+            """, new { st });
+        var unmapped = await FuelCatalogEndpoints.UnconfirmedCountAsync(c, st);
+        return Results.Ok(new { stations, fuels, fuel_types = fuelTypes, unmapped_fuels = unmapped, item_groups = groups, payment_modes = paymentModes, data_range = range });
     }
 
     private static async Task<IResult> Stations(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db)

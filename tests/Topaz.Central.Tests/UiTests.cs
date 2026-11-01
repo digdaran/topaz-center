@@ -161,6 +161,11 @@ public sealed class UiTests(CentralFixture fx) : IClassFixture<CentralFixture>
         Assert.DoesNotContain("АЗС-ui-other", meta);
         Assert.DoesNotContain("АЗС-ui-other", await manager.GetStringAsync("/api/v1/ui/stations"));
 
+        // Fuel catalog: lists only the manager's stations, editing is owner-only.
+        Assert.DoesNotContain("АЗС-ui-other", await manager.GetStringAsync("/api/v1/ui/catalog/fuels"));
+        Assert.DoesNotContain(other.ToString(), await manager.GetStringAsync($"/api/v1/ui/catalog/fuels?station={other}"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.PutAsJsonAsync($"/api/v1/ui/catalog/fuels/{mine}/1", new { fuel_type = "AI92" })).StatusCode);
+
         // Owner-only endpoints.
         Assert.Equal(HttpStatusCode.Forbidden, (await manager.GetAsync("/api/v1/ui/users")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await manager.PatchAsJsonAsync($"/api/v1/ui/stations/{mine}", new { display_name = "x" })).StatusCode);
