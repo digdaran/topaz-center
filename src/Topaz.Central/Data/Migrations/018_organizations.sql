@@ -82,13 +82,22 @@ WHERE r.dataset = 'dcFuels' AND NOT r.deleted;
 -- The UI pool runs as role topaz_ui (connection option "-c role=topaz_ui"): row level security applies to it,
 -- unlike the owner/superuser the service otherwise uses. Views run with the caller's rights (security_invoker),
 -- so they cannot be a way around the policies either.
+-- Roles are cluster-wide: several databases of one cluster may migrate at the same time (tests), so tolerate the race.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'topaz_ui') THEN
-        CREATE ROLE topaz_ui NOLOGIN;
+        BEGIN
+            CREATE ROLE topaz_ui NOLOGIN;
+        EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
+        END;
+    END IF;
+    IF NOT pg_has_role(CURRENT_USER, 'topaz_ui', 'MEMBER') THEN
+        BEGIN
+            EXECUTE format('GRANT topaz_ui TO %I', CURRENT_USER);
+        EXCEPTION WHEN unique_violation OR duplicate_object THEN NULL;
+        END;
     END IF;
 END $$;
-GRANT topaz_ui TO CURRENT_USER;
 GRANT USAGE ON SCHEMA public TO topaz_ui;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO topaz_ui;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO topaz_ui;
