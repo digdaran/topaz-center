@@ -213,6 +213,22 @@ public sealed class CostAndDiscountTests(CentralFixture fx) : IClassFixture<Cent
         var finance = await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/analytics/finance?stations={st.StationId}&from={Day(start.AddDays(-1))}&to={Day(start.AddDays(1))}");
         Assert.Equal(60m, finance!["fuel"]!["discounts"]!.GetValue<decimal>());
 
+        // Shift card and data table show the price the customer paid (PricePump), the list price stays alongside.
+        var card = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/shifts/{st.StationId}/1"))!;
+        var orders = card["orders"]!.AsArray().ToDictionary(o => o!["order_num"]!.GetValue<long>());
+        Assert.Equal(45m, orders[1]!["price_paid"]!.GetValue<decimal>());
+        Assert.Equal(47m, orders[1]!["price"]!.GetValue<decimal>());
+        Assert.Equal(20m, orders[1]!["discount"]!.GetValue<decimal>());
+        Assert.Equal(47m, orders[2]!["price_paid"]!.GetValue<decimal>());
+        Assert.Equal(0m, orders[2]!["discount"]!.GetValue<decimal>());
+        Assert.Equal(49m, orders[5]!["price_paid"]!.GetValue<decimal>());
+        var discounted = card["fuel"]!.AsArray().Single(r => r!["payment_mode"]!.GetValue<string>() == "Дисконтная(НАЛИЧКА)")!;
+        Assert.Equal(45m, discounted["price_paid"]!.GetValue<decimal>());
+        Assert.Equal(47m, discounted["price"]!.GetValue<decimal>());
+        Assert.Equal(20m, discounted["discount"]!.GetValue<decimal>());
+        var data = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/data/fuel-sales?stations={st.StationId}&from={Day(start.AddDays(-1))}&to={Day(start.AddDays(1))}&sort=order_num&dir=asc"))!;
+        Assert.Equal(45m, data["rows"]!.AsArray()[0]!["price_paid"]!.GetValue<decimal>());
+
         // Discount payment modes: guessed by name, the owner can override.
         var modes = (await owner.GetFromJsonAsync<JsonArray>("/api/v1/ui/payment-modes"))!.Where(m => m!["station_id"]!.GetValue<Guid>() == st.StationId).ToList();
         Assert.False(modes.Single(m => m!["payment_mode_id"]!.GetValue<long>() == 1)!["is_discount"]!.GetValue<bool>());

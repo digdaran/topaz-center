@@ -4,7 +4,7 @@ import { Button, Card, Col, Descriptions, Row, Table, Tabs, Tag, Typography } fr
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { KpiCard, numCol, QueryState } from '../components/ui';
-import { dateTime, dec, duration, int, liters, money } from '../lib/format';
+import { dateTime, dec, duration, int, liters, money, Num, toNum } from '../lib/format';
 import { PAY, PayCategory } from '../lib/payments';
 
 type Row = Record<string, any>;
@@ -15,6 +15,21 @@ interface Card {
 }
 
 const sum = (rows: Row[], key: string) => rows.reduce((a, r) => a + (Number(r[key]) || 0), 0);
+
+/** «Цена»: what the customer paid per litre (Topaz PricePump); the list price crossed out when a discount lowered it. */
+const paidPriceCol = () => numCol<Row>('Цена', 'price_paid', (v) => money(v, true), {
+  render: (v: Num, r: Row) => {
+    const paid = toNum(v), list = toNum(r.price);
+    return (
+      <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+        {money(v, true)}
+        {paid != null && list != null && list > paid && (
+          <Typography.Text type="secondary" delete style={{ marginLeft: 6, fontSize: 12 }} title="Цена без скидки">{money(list, true)}</Typography.Text>
+        )}
+      </span>
+    );
+  },
+});
 
 /** The Topaz shift report, with the same sections and numbers (reconciled with a real Topaz export). */
 export default function ShiftCardPage() {
@@ -71,8 +86,8 @@ export default function ShiftCardPage() {
                     numCol<Row>('Литры', 'volume', liters),
                     numCol<Row>('Сумма', 'amount', (v) => money(v, true)),
                     numCol<Row>('Заказов', 'order_count', int),
-                    numCol<Row>('Цена', 'price', (v) => money(v, true)),
-                    numCol<Row>('Скидки', 'amount_discount', (v) => money(v, true)),
+                    paidPriceCol(),
+                    numCol<Row>('Скидки', 'discount', (v) => money(v, true)),
                     numCol<Row>('Предоплата нал.', 'amount_cash', (v) => money(v, true)),
                   ]} />
               ),
@@ -89,9 +104,9 @@ export default function ShiftCardPage() {
                     { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
                     numCol<Row>('Литры', 'volume', liters),
                     numCol<Row>('Заказано, л', 'volume_ordered', liters),
-                    numCol<Row>('Цена', 'price', (v) => money(v, true)),
+                    paidPriceCol(),
                     numCol<Row>('Сумма', 'amount', (v) => money(v, true)),
-                    numCol<Row>('Скидка', 'amount_discount', (v) => money(v, true)),
+                    numCol<Row>('Скидка', 'discount', (v) => money(v, true)),
                     { title: 'Карта', dataIndex: 'card_code' },
                   ]} />
               ),

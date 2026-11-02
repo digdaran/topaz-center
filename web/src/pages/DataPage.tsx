@@ -11,7 +11,7 @@ interface Page { total: number; page: number; page_size: number; columns: string
 
 const TITLES: Record<string, string> = {
   station: 'АЗС', local_time: 'Время', session_id: 'Смена', order_num: '№', fuel_name: 'Топливо', tank_num: 'Резерв.', hose_num: 'Рукав',
-  payment_mode: 'Вид оплаты', pay_category: 'Способ оплаты', remark: 'Пометка', payment_kind: 'Нал/безнал (Топаз)', volume: 'Литры', price: 'Цена', amount: 'Сумма',
+  payment_mode: 'Вид оплаты', pay_category: 'Способ оплаты', remark: 'Пометка', payment_kind: 'Нал/безнал (Топаз)', volume: 'Литры', price_paid: 'Цена', price: 'Цена без скидки', amount: 'Сумма',
   amount_cash: 'Предопл. нал.', amount_cashless: 'Безнал', amount_discount: 'Скидка', card_code: 'Карта', doc_num: 'Чек', item_name: 'Товар',
   item_code: 'Штрихкод', group_name: 'Группа', is_return: 'Возврат', quantity: 'Кол-во', receipt_id: 'ID', doc_number: 'Документ',
   car_number: 'Машина', doc_volume: 'По документу', measured_volume: 'Факт', discrepancy: 'Расхождение', doc_mass: 'Масса',
@@ -19,7 +19,7 @@ const TITLES: Record<string, string> = {
   object: 'Объект', computer_name: 'Компьютер', doc_type: 'Операция', cash_name: 'Касса',
 };
 
-const MONEY = new Set(['price', 'amount', 'amount_cash', 'amount_cashless', 'amount_discount', 'doc_price']);
+const MONEY = new Set(['price', 'price_paid', 'amount', 'amount_cash', 'amount_cashless', 'amount_discount', 'doc_price']);
 const LITERS = new Set(['volume', 'doc_volume', 'measured_volume', 'discrepancy']);
 
 function render(col: string) {

@@ -101,8 +101,8 @@ public static class ShiftEndpoints
             FROM hose_shift_counters WHERE station_id = @station AND session_id = @session ORDER BY pump_num, num_in_pump
             """, args);
         var fuel = await c.QueryAsync("""
-            SELECT tank_num, hose_num, fuel_name, payment_mode, remark, agent_name, card_code, volume, amount, price, order_count,
-                   amount_cash, amount_cashless, amount_discount, amount_bonuses
+            SELECT tank_num, hose_num, fuel_name, payment_mode, remark, agent_name, card_code, volume, amount, price, price_paid, order_count,
+                   amount_cash, amount_cashless, amount_discount, discount, amount_bonuses
             FROM v_shift_fuel_outcomes WHERE station_id = @station AND session_id = @session ORDER BY fuel_name, payment_mode, remark
             """, args);
         var cash = await c.QueryAsync("""
@@ -120,7 +120,8 @@ public static class ShiftEndpoints
             """, args);
         var orders = await c.QueryAsync("""
             SELECT order_id, order_num, local_ts, fuel_name, tank_num, hose_num, payment_mode, remark, payment_kind, pay_category, volume, volume_ordered,
-                   price, price_pump, amount, amount_cash, amount_cashless, amount_discount, card_code
+                   price, price_pump, fuel_price_paid(price, price_pump) AS price_paid, amount, amount_cash, amount_cashless, amount_discount,
+                   fuel_discount(amount_discount, price, price_pump, volume) AS discount, card_code
             FROM v_fuel_sales_local WHERE station_id = @station AND session_id = @session ORDER BY order_num
             """, args);
         var receipts = await c.QueryAsync("""
