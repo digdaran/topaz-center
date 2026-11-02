@@ -62,6 +62,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - ./logs/caddy:/var/log/caddy   # access log read by fail2ban on the host
     networks: [frontend]
 
   # Daily logical backup, 14 days kept. Copy ./backups off the server (rsync/rclone) as well.

@@ -25,3 +25,6 @@ deploy/central/.env
 
 # Topaz report exports for reconciliation: real station data, never commit
 samples/
+
+# central access logs (fail2ban input)
+deploy/central/logs/

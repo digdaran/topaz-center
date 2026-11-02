@@ -29,8 +29,13 @@
 		-Server
 	}
 
+	# Access log as a file on the host (deploy/central/logs/caddy), read by fail2ban.
+	# Caddy 2.8 sends a site's access log to one output only, so it is not in `docker compose logs`.
 	log {
-		output stdout
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
 		format json
 	}
 }

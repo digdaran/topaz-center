@@ -44,12 +44,40 @@ curl -H "$ADMIN" -X POST https://$DOMAIN/api/v1/admin/stations/<id>/reset    # �
 curl -H "$ADMIN" "https://$DOMAIN/api/v1/export/flOrders?format=csv&updated_since=2026-10-01T00:00:00Z" -o orders.csv
 
 docker compose logs -f central        # JSON-логи
+tail -f logs/caddy/access.log         # журнал HTTP-запросов (Caddy, JSON)
 docker compose exec postgres psql -U topaz topaz -c "select * from v_station_status"
 ```
 
 ## Мониторинг
 
 `docker compose --profile monitoring up -d` поднимает Prometheus на `127.0.0.1:9090` (открывать через `ssh -L 9090:localhost:9090`) с алертами из `monitoring/alerts.yml`: АЗС молчит, растёт очередь агента, есть dead-letter, обработка упала или отстаёт. Чтобы алерты приходили в Telegram или на почту, добавьте Alertmanager.
+
+## Fail2Ban
+
+Банит IP за подбор пароля по SSH и за атаки на 80/443 (по журналу Caddy `logs/caddy/access.log`). Ставится на хост:
+
+```bash
+sudo bash fail2ban/install.sh <свой IP> <IP станций> ...   # эти адреса не банятся никогда
+```
+
+| Джейл | За что | Бан |
+|---|---|---|
+| `sshd` | 5 неудачных входов по SSH за 10 мин | 1 ч, растёт при повторах до недели |
+| `topaz-web-probe` | 3 запроса за час к «приманкам» сканеров: `/.env`, `/.git/`, `*.php`, `wp-*`… | сутки |
+| `topaz-web-login` | 10 неудачных входов в веб-интерфейс за 10 мин | 1 ч |
+| `topaz-web-4xx` | 60 ответов 4xx за 10 мин | 1 ч |
+| `recidive` | 5 банов за сутки в любых джейлах | неделя, на все порты |
+
+Запросы агентов (User-Agent `TopazAgent/…`) не считаются, `/api/v1/*` не бывает «приманкой». Порты 80/443 публикует Docker, поэтому веб-баны стоят в цепочке `DOCKER-USER` (ufw её не видит), SSH-баны — в `INPUT`.
+
+```bash
+fail2ban-client status                       # джейлы
+fail2ban-client status topaz-web-probe       # кто сейчас в бане
+fail2ban-client set sshd unbanip 1.2.3.4     # разбанить
+iptables -S DOCKER-USER                      # веб-баны в фаерволе
+```
+
+Новая станция или сменился свой IP — добавьте адрес в `ignoreip` в `/etc/fail2ban/jail.d/zz-topaz-local.conf` и выполните `fail2ban-client reload`. Станция в бане перестаёт присылать данные (в интерфейсе она станет «молчащей»): разбаньте её IP и добавьте в исключения.
 
 ## Бэкапы
 
