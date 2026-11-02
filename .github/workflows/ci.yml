@@ -90,7 +90,13 @@ jobs:
           V=${GITHUB_REF_NAME#v}
           PREV=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           if [[ -z "$PREV" ]]; then out true "$V"; exit 0; fi
-          if git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | grep -qF '[agent]'; then echo "forced by [agent] in the tag message"; out true "$V"; exit 0; fi
+          # actions/checkout replaces an annotated tag with a plain ref to the commit (whose %(contents) would be the
+          # commit message): fetch the real tag object and read its message only if it is an annotated tag.
+          git fetch -q --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [[ "$(git cat-file -t "$GITHUB_REF_NAME")" == "tag" ]] \
+            && git cat-file tag "$GITHUB_REF_NAME" | sed '1,/^$/d' | grep -qF '[agent]'; then
+            echo "forced by [agent] in the tag message"; out true "$V"; exit 0
+          fi
           if ! git diff --quiet "$PREV" HEAD -- src/Topaz.Agent src/Topaz.Contracts Directory.Build.props Directory.Packages.props global.json; then
             git diff --stat "$PREV" HEAD -- src/Topaz.Agent src/Topaz.Contracts Directory.Build.props Directory.Packages.props global.json
             out true "$V"; exit 0
