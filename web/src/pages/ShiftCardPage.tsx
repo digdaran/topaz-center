@@ -52,7 +52,7 @@ export default function ShiftCardPage() {
           </Row>
           <Tabs items={[
             {
-              key: 'fuel', label: 'Отпуск топлива', children: (
+              key: 'fuel', label: 'Сводка по топливу', children: (
                 <Table size="small" rowKey={(_, i) => String(i)} pagination={false} scroll={{ x: 900 }} dataSource={data.fuel}
                   summary={(rows) => (
                     <Table.Summary.Row>
