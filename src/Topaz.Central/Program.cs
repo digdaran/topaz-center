@@ -136,7 +136,14 @@ app.UseSerilogRequestLogging(o => o.GetLevel = (ctx, _, ex) =>
     : Serilog.Events.LogEventLevel.Information);
 app.UseRequestDecompression();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = f => AppVersion.SetCacheHeaders(f.Context, f.File.Name) });
+// The web UI compares this with its own build version and offers a reload after an update.
+app.Use((ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments(Protocol.ApiPrefix + "/ui"))
+        ctx.Response.OnStarting(() => { ctx.Response.Headers[AppVersion.Header] = AppVersion.Current; return Task.CompletedTask; });
+    return next();
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -166,7 +173,8 @@ ui.MapUiOrganizations();
 app.MapFallback(async ctx =>
 {
     var index = app.Environment.WebRootFileProvider.GetFileInfo("index.html");
-    if (!HttpMethods.IsGet(ctx.Request.Method) || ctx.Request.Path.StartsWithSegments("/api") || !index.Exists)
+    // A missing file (an old tab asking for /assets/… of the previous release) gets 404, not the page as "script".
+    if (!HttpMethods.IsGet(ctx.Request.Method) || ctx.Request.Path.StartsWithSegments("/api") || AppVersion.LooksLikeFile(ctx.Request.Path) || !index.Exists)
     {
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
+import { noteServerVersion } from '../lib/appVersion';
 import { Filter, filterQuery, parseFilter } from '../lib/filter';
 
 export class ApiError extends Error {
@@ -16,6 +17,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     headers: { 'X-Topaz-Ui': '1', ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
+  noteServerVersion(res.headers.get('X-Topaz-Version'));
   if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') {
     window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
   }

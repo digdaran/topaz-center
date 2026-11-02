@@ -5,29 +5,30 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
 import { api, isOwner, isSuper, Me, useMeta } from './api/client';
-import { lazy, ReactNode, Suspense, useState } from 'react';
+import { ReactNode, Suspense, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
 import { useHelpUnseen } from './help/version';
 import { useThemeMode } from './components/theme';
+import { lazyPage, PageErrorBoundary, UpdateBanner, useReloadOnNavigateWhenOutdated, VersionLabel } from './components/appUpdate';
 import { Spin } from 'antd';
 
-const LoginPage = lazy(() => import('./pages/LoginPage'));
-const OverviewPage = lazy(() => import('./pages/OverviewPage'));
-const ShiftsPage = lazy(() => import('./pages/ShiftsPage'));
-const ShiftCardPage = lazy(() => import('./pages/ShiftCardPage'));
-const DataPage = lazy(() => import('./pages/DataPage'));
-const FuelPage = lazy(() => import('./pages/FuelPage'));
-const DemandPage = lazy(() => import('./pages/DemandPage'));
-const ItemsPage = lazy(() => import('./pages/ItemsPage'));
-const FinancePage = lazy(() => import('./pages/FinancePage'));
-const PlansPage = lazy(() => import('./pages/PlansPage'));
-const CostsPage = lazy(() => import('./pages/CostsPage'));
-const TanksPage = lazy(() => import('./pages/TanksPage'));
-const ControlPage = lazy(() => import('./pages/ControlPage'));
-const StationsPage = lazy(() => import('./pages/StationsPage'));
-const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const HelpPage = lazy(() => import('./pages/HelpPage'));
+const LoginPage = lazyPage(() => import('./pages/LoginPage'));
+const OverviewPage = lazyPage(() => import('./pages/OverviewPage'));
+const ShiftsPage = lazyPage(() => import('./pages/ShiftsPage'));
+const ShiftCardPage = lazyPage(() => import('./pages/ShiftCardPage'));
+const DataPage = lazyPage(() => import('./pages/DataPage'));
+const FuelPage = lazyPage(() => import('./pages/FuelPage'));
+const DemandPage = lazyPage(() => import('./pages/DemandPage'));
+const ItemsPage = lazyPage(() => import('./pages/ItemsPage'));
+const FinancePage = lazyPage(() => import('./pages/FinancePage'));
+const PlansPage = lazyPage(() => import('./pages/PlansPage'));
+const CostsPage = lazyPage(() => import('./pages/CostsPage'));
+const TanksPage = lazyPage(() => import('./pages/TanksPage'));
+const ControlPage = lazyPage(() => import('./pages/ControlPage'));
+const StationsPage = lazyPage(() => import('./pages/StationsPage'));
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage'));
+const HelpPage = lazyPage(() => import('./pages/HelpPage'));
 
 interface NavItem {
   key: string;
@@ -86,16 +87,20 @@ function Shell({ children }: { children: ReactNode }) {
     <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key === '/help' && helpNew ? '/help/changes' : e.key + (e.key === '/settings' || e.key === '/help' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
   );
   const desktop = !!screens.lg;
+  useReloadOnNavigateWhenOutdated();
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {desktop && (
-        <Layout.Sider width={220} theme="light" style={{ position: 'sticky', top: 0, height: '100vh', overflow: 'auto' }}>
-          <Flex align="center" gap={8} style={{ padding: '16px 20px' }}>
-            <BarChartOutlined style={{ fontSize: 22, color: '#1668dc' }} />
-            <Typography.Text strong style={{ fontSize: 16 }}>Topaz Center</Typography.Text>
+        <Layout.Sider width={220} theme="light" style={{ position: 'sticky', top: 0, height: '100vh' }}>
+          <Flex vertical style={{ height: '100%' }}>
+            <Flex align="center" gap={8} style={{ padding: '16px 20px' }}>
+              <BarChartOutlined style={{ fontSize: 22, color: '#1668dc' }} />
+              <Typography.Text strong style={{ fontSize: 16 }}>Topaz Center</Typography.Text>
+            </Flex>
+            <div style={{ flex: 1, overflow: 'auto' }}>{menu}</div>
+            <div style={{ padding: '8px 20px 12px' }}><VersionLabel /></div>
           </Flex>
-          {menu}
         </Layout.Sider>
       )}
       <Layout>
@@ -122,9 +127,13 @@ function Shell({ children }: { children: ReactNode }) {
             <Button type="text" icon={<UserOutlined />}>{desktop ? me.name : null}</Button>
           </Dropdown>
         </Layout.Header>
-        <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>{children}</Layout.Content>
+        <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>
+          <UpdateBanner />
+          <PageErrorBoundary resetKey={location.pathname}>{children}</PageErrorBoundary>
+        </Layout.Content>
       </Layout>
-      <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="Topaz Center" styles={{ body: { padding: 0 } }}>
+      <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="Topaz Center" styles={{ body: { padding: 0 } }}
+        footer={<VersionLabel />}>
         {menu}
       </Drawer>
     </Layout>

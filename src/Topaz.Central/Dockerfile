@@ -4,6 +4,9 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# The release version shown in the UI and compared with the server's X-Topaz-Version header.
+ARG VERSION=1.0.0
+ENV VERSION=$VERSION
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build

@@ -4,6 +4,7 @@ import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { VersionLabel } from '../components/appUpdate';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +30,7 @@ export default function LoginPage() {
 
   return (
     <Flex align="center" justify="center" style={{ minHeight: '100vh', padding: 16 }}>
+      <div style={{ position: 'fixed', left: 16, bottom: 12 }}><VersionLabel linked={false} /></div>
       <Card style={{ width: 380, maxWidth: '100%' }}>
         <Flex vertical align="center" gap={4} style={{ marginBottom: 24 }}>
           <BarChartOutlined style={{ fontSize: 36, color: '#1668dc' }} />
