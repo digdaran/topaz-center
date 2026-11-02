@@ -67,27 +67,89 @@ jobs:
           V=${GITHUB_REF_NAME#v}
           grep -qE "^## ${V//./\\.}( |$)" src/help/changelog.md || { echo "::error::web/src/help/changelog.md has no entry '## $V — DD.MM.YYYY' (Помощь → Что нового)"; exit 1; }
 
+  # The agent is rebuilt only when it changed: a new agent version makes every station update itself.
+  # A release that touches only the server/web carries the previous release's signed agent package as is,
+  # so agents see no newer version. Force a rebuild with "[agent]" in the tag message.
+  agent-version:
+    runs-on: ubuntu-latest
+    outputs:
+      rebuild: ${{ steps.v.outputs.rebuild }}
+      version: ${{ steps.v.outputs.version }}
+      from: ${{ steps.v.outputs.from }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out() { printf 'rebuild=%s\nversion=%s\nfrom=%s\n' "$1" "$2" "${3:-}" | tee -a "$GITHUB_OUTPUT"; }
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then out true "1.0.0-ci.${GITHUB_RUN_NUMBER}"; exit 0; fi
+          V=${GITHUB_REF_NAME#v}
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          if [[ -z "$PREV" ]]; then out true "$V"; exit 0; fi
+          if git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | grep -qF '[agent]'; then echo "forced by [agent] in the tag message"; out true "$V"; exit 0; fi
+          if ! git diff --quiet "$PREV" HEAD -- src/Topaz.Agent src/Topaz.Contracts Directory.Build.props Directory.Packages.props global.json; then
+            git diff --stat "$PREV" HEAD -- src/Topaz.Agent src/Topaz.Contracts Directory.Build.props Directory.Packages.props global.json
+            out true "$V"; exit 0
+          fi
+          AV=$(gh release view "$PREV" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null \
+            | sed -n 's/^TopazAgent-Setup-\(.*\)-win-x64\.exe$/\1/p' | head -1 || true)
+          if [[ -z "$AV" ]]; then echo "::warning::release $PREV has no agent package: rebuilding the agent"; out true "$V"; exit 0; fi
+          echo "agent unchanged since $PREV: shipping agent $AV again"
+          out false "$AV" "$PREV"
+
   agent-package:
-    needs: test
+    needs: [test, agent-version]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         rid: [win-x64, win-x86]
+    env:
+      REBUILD: ${{ needs.agent-version.outputs.rebuild }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
+        if: env.REBUILD == 'true'
         with:
           dotnet-version: 8.0.x
       - name: Publish self-contained single-file agent
         id: pub
+        if: env.REBUILD == 'true'
         run: |
-          VERSION=${GITHUB_REF_NAME#v}; [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION=1.0.0-ci.${GITHUB_RUN_NUMBER}
+          VERSION=${{ needs.agent-version.outputs.version }}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # The Windows build: agent + one-file setup window (net8.0-windows, WinForms).
           dotnet publish src/Topaz.Agent -c Release -f net8.0-windows -r ${{ matrix.rid }} --self-contained \
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
             -p:DebugType=none -p:Version="$VERSION" -o out/TopazAgent
           ls -la out/TopazAgent
+      # Unchanged agent: the previous release's files byte for byte (same signed manifest), checked again here.
+      - name: Previous agent package
+        if: env.REBUILD == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V=${{ needs.agent-version.outputs.version }}; RID=${{ matrix.rid }}; NAME=TopazAgent-$V-$RID
+          gh release download "${{ needs.agent-version.outputs.from }}" --repo "$GITHUB_REPOSITORY" --dir prev \
+            -p "TopazAgent-Setup-$V-$RID.exe" -p "$NAME.zip" -p "$NAME.manifest.json" -p "$NAME.manifest.sig"
+          mkdir -p dist setup "updates/$V/$RID" out
+          cp "prev/TopazAgent-Setup-$V-$RID.exe" setup/
+          cp "prev/$NAME.zip" dist/
+          cp "prev/$NAME.zip" "updates/$V/$RID/"
+          cp "prev/$NAME.manifest.json" "updates/$V/$RID/manifest.json"
+          cp "prev/$NAME.manifest.sig" "updates/$V/$RID/manifest.sig"
+          D=updates/$V/$RID
+          jq -e --arg v "$V" --arg r "$RID" --arg f "$NAME.zip" '.version == $v and .rid == $r and .file == $f' "$D/manifest.json"
+          [ "$(jq -r .sha256 "$D/manifest.json")" = "$(sha256sum "$D/$NAME.zip" | cut -d' ' -f1)" ] || { echo "::error::sha256 mismatch"; exit 1; }
+          [ "$(jq -r .size "$D/manifest.json")" = "$(stat -c%s "$D/$NAME.zip")" ] || { echo "::error::size mismatch"; exit 1; }
+          sed -n '/BEGIN PUBLIC KEY/,/END PUBLIC KEY/p' src/Topaz.Agent/Updating/UpdateKeys.cs | sed 's/^ *//' > builtin.pub
+          openssl dgst -sha256 -verify builtin.pub -signature "$D/manifest.sig" "$D/manifest.json"
+          (cd out && unzip -q "../dist/$NAME.zip" && mv "$NAME" TopazAgent)
+          ls -la setup dist "$D"
       - name: Check package contents
         run: |
           set -e
@@ -98,6 +160,7 @@ jobs:
           jq -e '[.datasets[] | select(.table=="dcPaymentModes")][0].exclude | index("Config")' out/TopazAgent/datasets.json
       # People download the setup exe; the zip is the self-update package (exe + catalog), signed below.
       - name: Setup exe and update zip
+        if: env.REBUILD == 'true'
         run: |
           V=${{ steps.pub.outputs.version }}; RID=${{ matrix.rid }}
           mkdir -p dist setup
@@ -107,6 +170,7 @@ jobs:
           (cd out && zip -9 -r "../dist/$NAME.zip" "$NAME")
           ls -la setup dist
       - uses: actions/upload-artifact@v4
+        if: env.REBUILD == 'true'
         with:
           name: TopazAgent-${{ matrix.rid }}
           path: out/TopazAgent
@@ -121,6 +185,7 @@ jobs:
       # Self-update package: manifest signed with the key whose public half is built into the agent
       # (src/Topaz.Agent/Updating/UpdateKeys.cs). Servers offer only signed packages; agents verify the signature.
       - name: Sign update manifest
+        if: env.REBUILD == 'true'
         env:
           AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
         run: |
@@ -263,7 +328,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, web, agent-package, agent-windows, central-image]
+    needs: [test, web, agent-version, agent-package, agent-windows, central-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -290,23 +355,29 @@ jobs:
         run: |
           set -e
           V=${GITHUB_REF_NAME#v}
+          AV=${{ needs.agent-version.outputs.version }}
           IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/topaz-central:$V
           for m in upd/*/*/manifest.json; do
             RID=$(basename "$(dirname "$m")")
-            cp "$m" "dist/TopazAgent-$V-$RID.manifest.json"
-            cp "$(dirname "$m")/manifest.sig" "dist/TopazAgent-$V-$RID.manifest.sig"
+            cp "$m" "dist/TopazAgent-$AV-$RID.manifest.json"
+            cp "$(dirname "$m")/manifest.sig" "dist/TopazAgent-$AV-$RID.manifest.sig"
           done
+          if [[ "${{ needs.agent-version.outputs.rebuild }}" == "true" ]]; then
+            AGENT_NOTE="- Уже установленные агенты (1.2+) обновятся сами с вашего сервера. \`*.zip\` и \`*.manifest.*\` — подписанные пакеты для автообновления, скачивать их не нужно."
+          else
+            AGENT_NOTE="- **Агент в этом выпуске не менялся** (версия $AV, как в ${{ needs.agent-version.outputs.from }}): обновление на АЗС не придёт. \`*.zip\` и \`*.manifest.*\` — подписанные пакеты для автообновления, скачивать их не нужно."
+          fi
           cd dist
           sha256sum TopazAgent-Setup-*.exe TopazAgent-*.zip > SHA256SUMS.txt
           cat > notes.md <<EOF
           ## Агент АЗС (Windows)
 
-          **Скачайте \`TopazAgent-Setup-$V-win-x64.exe\`** (для 32-битной Windows — \`-win-x86\`), запустите двойным кликом и введите название АЗС. Всё остальное установщик сделает сам: найдёт базу Топаза, установит службу и покажет **код подтверждения**. Сообщите код администратору сервера — он подключит АЗС в «АЗС → Подключение».
+          **Скачайте \`TopazAgent-Setup-$AV-win-x64.exe\`** (для 32-битной Windows — \`-win-x86\`), запустите двойным кликом и введите название АЗС. Всё остальное установщик сделает сам: найдёт базу Топаза, установит службу и покажет **код подтверждения**. Сообщите код администратору сервера — он подключит АЗС в «АЗС → Подключение».
 
           - .NET устанавливать не нужно; Windows 10/11 или Server 2016+, Windows 7 не поддерживается.
           - Файл без цифровой подписи Microsoft: если Windows покажет «Система Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае».
-          - Тихая установка: \`TopazAgent-Setup-$V-win-x64.exe /S /station="АЗС-5"\` (код — в \`%ProgramData%\TopazAgent\logs\setup.log\`).
-          - Уже установленные агенты (1.2+) обновятся сами с вашего сервера. \`*.zip\` и \`*.manifest.*\` — подписанные пакеты для автообновления, скачивать их не нужно.
+          - Тихая установка: \`TopazAgent-Setup-$AV-win-x64.exe /S /station="АЗС-5"\` (код — в \`%ProgramData%\TopazAgent\logs\setup.log\`).
+          $AGENT_NOTE
 
           Подробно: [deploy/agent/README.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/deploy/agent/README.md). Контрольные суммы — в \`SHA256SUMS.txt\`.
 

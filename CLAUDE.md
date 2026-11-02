@@ -28,6 +28,9 @@ docker run --rm -v "$PWD":/src -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet t
 # agent publish (single exe for stations)
 dotnet publish src/Topaz.Agent -c Release -f net8.0-windows -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 # release: pushing a tag v* makes CI publish a GitHub release (agent zips + SHA256SUMS.txt) and the GHCR image
+# the agent is rebuilt (new agent version -> stations self-update) only if src/Topaz.Agent, src/Topaz.Contracts,
+# Directory.*.props or global.json changed since the previous tag, or the tag message has "[agent]";
+# otherwise the release re-ships the previous signed agent package byte for byte (CI job agent-version)
 # central stack
 cd deploy/central && cp .env.example .env && docker compose up -d --build
 ```
