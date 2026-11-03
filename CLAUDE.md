@@ -80,7 +80,8 @@ Auth: stations connect by request (docs/architecture.md 2.6): the agent sends `P
 - cash vs cashless comes from `flOrders.Remark = 'Б'` / `AmountCashless > 0` (`fuel_sales.payment_kind`), not from the payment mode name;
 - revenue is `Amount`; `AmountCash`/`AmountCashless` are the prepaid amounts before the per-litre discount;
 - Topaz groups payment modes by name (several ids share one name) and counts zero-volume orders;
-- shift item rests are as of the shift end; period reports cut by operation time, not by shift.
+- shift item rests are as of the shift end; the period export (`DataPacket`) cuts by operation time, not by shift (Topaz's printed period report takes whole shifts started in the period — a different thing; central reports follow the export).
+- Deletes of rows of shifts closed more than `Topaz__HoldDeletesAfterDays` (3) days ago are held in `held_deletes`, not applied (Topaz database compaction, alert `history_deleted`).
 Re-run the reconciliation after changing projections or views.
 
 ## Help for station owners (keep it current)

@@ -87,6 +87,19 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                   AND NOT EXISTS (SELECT 1 FROM v_hose_counter_mismatches m JOIN v_station_rules r ON r.station_id = m.station_id AND r.code = 'counter_mismatch'
                                   WHERE m.station_id = a.station_id AND m.hose_id || '/' || m.session_id = a.dedupe_key AND abs(m.by_counter - m.by_orders) > r.threshold)
                 """);
+            // Deletes of a compaction arrive over several batches: the open alert shows the current count, and closes
+            // once the rows are back (the database restored from a copy).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET value = h.rows, title = 'Из базы АЗС удалены данные старых смен (записей: ' || h.rows || ')'
+                FROM v_held_delete_days h
+                WHERE a.rule_code = 'history_deleted' AND a.status <> 'closed' AND h.station_id = a.station_id AND h.day::text = a.dedupe_key
+                  AND a.value IS DISTINCT FROM h.rows
+                """);
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'history_deleted' AND a.status <> 'closed'
+                  AND NOT EXISTS (SELECT 1 FROM v_held_delete_days h WHERE h.station_id = a.station_id AND h.day::text = a.dedupe_key)
+                """);
             // A receipt alert closes once the receipt has a price.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
@@ -253,6 +266,69 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         FROM v_tank_measurements m
         {string.Format(Rule, "tank_surplus", "m")}
         WHERE m.diff > r.threshold AND m.started_at > now() - interval '30 days'
+        ON CONFLICT DO NOTHING
+        """,
+        // Rows of old shifts vanished from Topaz (database compaction): the deletes were held, the history is kept.
+        Insert + $"""
+        SELECT h.station_id, 'history_deleted', h.day::text, r.severity,
+               'Из базы АЗС удалены данные старых смен (записей: ' || h.rows || ')',
+               format('Смены №%s–%s (%s – %s). Обычно так бывает после свёртки базы Топаза. В сервисе история этих смен сохранена.',
+                      h.num_from, h.num_to, to_char(h.from_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY'), to_char(h.to_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY')),
+               h.rows, NULL, h.last_at
+        FROM v_held_delete_days h
+        JOIN v_station_names sn ON sn.station_id = h.station_id
+        {string.Format(Rule, "history_deleted", "h")}
+        ON CONFLICT DO NOTHING
+        """,
+        // Sales without a discount at a payment mode that has a namesake with a discount (Topaz shows both under one
+        // name): the operator picks the old mode and the customer does not get the discount.
+        Insert + $"""
+        WITH m AS (
+            SELECT pm.station_id, pm.payment_mode_id, pm.name, lower_ru(trim(pm.name)) AS k,
+                   EXISTS (SELECT 1 FROM fuel_sales d WHERE d.station_id = pm.station_id AND d.payment_mode_id = pm.payment_mode_id
+                             AND d.volume > 0 AND d.sold_at > now() - interval '31 days'
+                             AND fuel_discount(d.amount_discount, d.price, d.price_pump, d.volume) > 0) AS discounted
+            FROM payment_modes pm WHERE COALESCE(trim(pm.name), '') <> ''
+        ), tw AS (
+            SELECT a.station_id, a.payment_mode_id, a.name, string_agg(b.payment_mode_id::text, ', ' ORDER BY b.payment_mode_id) AS twins
+            FROM m a JOIN m b ON b.station_id = a.station_id AND b.k = a.k AND b.payment_mode_id <> a.payment_mode_id AND b.discounted
+            WHERE NOT a.discounted
+            GROUP BY 1, 2, 3
+        )
+        SELECT x.station_id, 'payment_mode_twin', x.session_id || '/' || x.payment_mode_id, r.severity,
+               'Скидка не применилась: «' || x.name || '», наливов без скидки: ' || x.orders,
+               format('Смена №%s, оператор %s: %s налив(ов) на %s л по виду оплаты «%s» (код %s) без скидки. У вида оплаты с тем же названием (код %s) скидка есть. Проверьте, какой из них выбирает оператор, и отключите лишний в Топазе.',
+                      s.session_num, s.user_name, x.orders, fmt_num(x.liters), x.name, x.payment_mode_id, x.twins),
+               x.orders, x.session_id, s.ended_at
+        FROM (SELECT f.station_id, f.session_id, f.payment_mode_id, tw.name, tw.twins, count(*) AS orders, sum(f.volume) AS liters
+              FROM fuel_sales f
+              JOIN tw ON tw.station_id = f.station_id AND tw.payment_mode_id = f.payment_mode_id
+              WHERE f.volume > 0 AND f.sold_at > now() - interval '31 days'
+              GROUP BY 1, 2, 3, 4, 5) x
+        JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
+        {string.Format(Rule, "payment_mode_twin", "x")}
+        WHERE {Recent}
+        ON CONFLICT DO NOTHING
+        """,
+        // Many overflows (Topaz's service payment mode "Переливы") on one hose within 7 days: the pump needs a check.
+        // One alert per hose and week.
+        Insert + $"""
+        SELECT x.station_id, 'hose_overflows', x.hose_id || '/' || to_char(now(), 'IYYY-IW'), r.severity,
+               'Частые переливы: колонка ' || COALESCE(p.num::text, '?') || ', рукав ' || COALESCE(h.num_in_pump::text, x.hose_id::text) || ' — ' || x.ops || ' раз за 7 дней',
+               format('Переливы на %s л (отрицательных: %s). Частые переливы бывают из-за сброса заказов и перезагрузок, наливов с пульта, сдвига счётчиков, неверной дискретности или разного округления на ТРК, контроллере и в Топазе.',
+                      fmt_num(x.liters), x.negative),
+               x.ops, x.last_session, x.last_at
+        FROM (SELECT f.station_id, f.hose_id, count(*) AS ops, sum(f.volume) AS liters, count(*) FILTER (WHERE f.volume < 0) AS negative,
+                     max(f.sold_at) AS last_at, (array_agg(f.session_id ORDER BY f.sold_at DESC))[1] AS last_session
+              FROM fuel_sales f
+              JOIN payment_modes pm ON pm.station_id = f.station_id AND pm.payment_mode_id = f.payment_mode_id
+              WHERE lower_ru(COALESCE(pm.name, '')) ~ 'перелив' AND f.volume <> 0 AND f.hose_id IS NOT NULL
+                AND f.sold_at > now() - interval '7 days'
+              GROUP BY 1, 2) x
+        LEFT JOIN v_hoses h ON h.station_id = x.station_id AND h.hose_id = x.hose_id
+        LEFT JOIN v_pumps p ON p.station_id = h.station_id AND p.pump_id = h.pump_id
+        {string.Format(Rule, "hose_overflows", "x")}
+        WHERE x.ops >= r.threshold
         ON CONFLICT DO NOTHING
         """,
         // A shift still open after the threshold (hours).

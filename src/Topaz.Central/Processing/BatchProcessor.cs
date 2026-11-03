@@ -38,7 +38,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
             FROM raw_batches WHERE status <> 'processed'
             ORDER BY station_id, id
         )
-        SELECT b.id, b.station_id AS StationId, b.payload::text AS Payload, b.attempts
+        SELECT b.id, b.station_id AS StationId, b.payload::text AS Payload, b.attempts, b.received_at AS ReceivedAt
         FROM heads h JOIN raw_batches b ON b.id = h.id
         WHERE h.status = 'received'
         ORDER BY h.station_id <= @last, h.station_id
@@ -48,7 +48,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
 
     private Guid _last = Guid.Empty;
 
-    private sealed record PendingBatch(long Id, Guid StationId, string? Payload, int Attempts);
+    private sealed record PendingBatch(long Id, Guid StationId, string? Payload, int Attempts, DateTime ReceivedAt);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -85,7 +85,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
         var sw = Stopwatch.StartNew();
         try
         {
-            await ApplyAsync(conn, tx, batch, ct);
+            await ApplyAsync(conn, tx, batch, options.Value.HoldDeletesAfterDays, ct);
             await conn.ExecuteAsync("UPDATE raw_batches SET status = 'processed', processed_at = now(), error = NULL WHERE id = @Id", new { batch.Id }, tx);
             await tx.CommitAsync(ct);
             AppMetrics.ProcessingSeconds.Observe(sw.Elapsed.TotalSeconds);
@@ -108,12 +108,14 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
         }
     }
 
-    private static async Task ApplyAsync(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, CancellationToken ct)
+    private static async Task ApplyAsync(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, int holdDeletesAfterDays, CancellationToken ct)
     {
         if (batch.Payload is null) throw new InvalidOperationException("Payload was purged before processing");
         var envelope = JsonSerializer.Deserialize<BatchEnvelope>(batch.Payload, Protocol.Json)
                        ?? throw new InvalidOperationException("Empty payload");
         var dirty = new DirtyDays();
+        var anyHeld = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "SELECT EXISTS (SELECT 1 FROM held_deletes WHERE station_id = @station)", new { station = batch.StationId }, tx, cancellationToken: ct));
 
         foreach (var item in envelope.Items)
         {
@@ -121,6 +123,11 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
             if (item.Op == Protocol.OpUpsert)
             {
                 var data = item.Data!.ToJsonString();
+                // The row is back in Topaz (e.g. the database was restored from a copy): its delete is no longer held.
+                if (anyHeld)
+                    await conn.ExecuteAsync(new CommandDefinition(
+                        "DELETE FROM held_deletes WHERE station_id = @station AND dataset = @dataset AND key = @key",
+                        new { station = batch.StationId, dataset = item.Dataset, key = item.Key }, tx, cancellationToken: ct));
                 var version = await conn.QuerySingleOrDefaultAsync<int?>(new CommandDefinition("""
                     INSERT INTO records (station_id, dataset, key, session_id, hash, data, last_batch_id)
                     VALUES (@station, @dataset, @key, @session, @hash, @data::jsonb, @batch)
@@ -141,6 +148,12 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
             }
             else
             {
+                if (holdDeletesAfterDays > 0 && item.SessionId is not null && await HoldAsync(conn, tx, batch, item, holdDeletesAfterDays, ct))
+                {
+                    anyHeld = true;
+                    AppMetrics.RecordsApplied.WithLabels("delete_held").Inc();
+                    continue;
+                }
                 var deleted = await conn.QuerySingleOrDefaultAsync<DeletedRow>(new CommandDefinition("""
                     UPDATE records SET deleted = true, version = version + 1, updated_at = now(), last_batch_id = @batch
                     WHERE station_id = @station AND dataset = @dataset AND key = @key AND NOT deleted
@@ -200,6 +213,23 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
     }
 
     private sealed record DeletedRow(int Version, string? Data);
+
+    /// <summary>
+    /// A row of a shift closed long ago vanished from Topaz: most likely the database was compacted ("свёртка"),
+    /// not a sale undone. The delete is kept aside (held_deletes, alert history_deleted) instead of erasing history.
+    /// </summary>
+    private static async Task<bool> HoldAsync(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, RecordChange item, int days, CancellationToken ct) =>
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO held_deletes (station_id, dataset, key, session_id, raw_batch_id)
+            SELECT @station, @dataset, @key, @session, @batch
+            FROM shifts s
+            WHERE s.station_id = @station AND s.session_id = @session
+              AND s.ended_at < @received - make_interval(days => @days)
+              AND EXISTS (SELECT 1 FROM records r WHERE r.station_id = @station AND r.dataset = @dataset AND r.key = @key AND NOT r.deleted)
+            ON CONFLICT (station_id, dataset, key) DO UPDATE SET session_id = EXCLUDED.session_id, raw_batch_id = EXCLUDED.raw_batch_id
+            """, new { station = batch.StationId, dataset = item.Dataset, key = item.Key, session = item.SessionId, batch = batch.Id,
+                       received = DateTime.SpecifyKind(batch.ReceivedAt, DateTimeKind.Utc), days },
+            tx, cancellationToken: ct)) > 0;
 
     private static Task InsertVersion(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, RecordChange item, int version, string? data, CancellationToken ct) =>
         conn.ExecuteAsync(new CommandDefinition("""

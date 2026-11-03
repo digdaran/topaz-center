@@ -15,6 +15,11 @@ public sealed class CentralOptions
     public int StationSilentMinutes { get; set; } = 15;
     /// <summary>Failed processing attempts before a batch is parked as 'failed'.</summary>
     public int MaxProcessingAttempts { get; set; } = 5;
+    /// <summary>
+    /// Deletes of rows of a shift closed more than this many days ago are held, not applied (Topaz's database
+    /// compaction removes old documents; the history stays here). 0 = apply every delete.
+    /// </summary>
+    public int HoldDeletesAfterDays { get; set; } = 3;
     public long MaxRequestBodyBytes { get; set; } = 64L * 1024 * 1024;
     public int BatchesPerMinutePerStation { get; set; } = 600;
     /// <summary>Where cookie encryption keys are kept (a Docker volume); empty = in-memory (dev/tests).</summary>
