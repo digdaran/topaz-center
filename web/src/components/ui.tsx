@@ -5,6 +5,7 @@ import ReactEChartsCore from 'echarts-for-react/lib/core';
 import { echarts } from './echarts';
 import { ReactNode } from 'react';
 import { change, Num, pct, toNum } from '../lib/format';
+import { ApiError } from '../api/client';
 import { useThemeMode } from './theme';
 
 export function PageTitle({ title, extra }: { title: string; extra?: ReactNode }) {
@@ -89,6 +90,9 @@ export function ChartCard({ title, option, height = 320, loading, extra, empty }
 }
 
 export function QueryState({ error, loading, children }: { error: unknown; loading: boolean; children: ReactNode }) {
+  if (error instanceof ApiError && error.status === 403)
+    return <Alert type="warning" showIcon message="Нет доступа к этим данным"
+      description="Скорее всего, это АЗС другой организации. Выберите нужную организацию вверху страницы или откройте раздел заново из меню." />;
   if (error) return <Alert type="error" showIcon message="Не удалось загрузить данные" description={(error as Error).message} />;
   if (loading) return <Spin style={{ display: 'block', margin: '64px auto' }} size="large" />;
   return <>{children}</>;

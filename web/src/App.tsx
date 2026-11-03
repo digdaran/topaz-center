@@ -12,6 +12,7 @@ import { useHelpUnseen } from './help/version';
 import { useThemeMode } from './components/theme';
 import { lazyPage, PageErrorBoundary, UpdateBanner, useReloadOnNavigateWhenOutdated, VersionLabel } from './components/appUpdate';
 import { Spin } from 'antd';
+import { pathAfterOrgSwitch } from './lib/orgSwitch';
 
 const LoginPage = lazyPage(() => import('./pages/LoginPage'));
 const OverviewPage = lazyPage(() => import('./pages/OverviewPage'));
@@ -148,7 +149,7 @@ function OrganizationBadge({ me, compact }: { me: Me; compact: boolean }) {
   if (!isSuper(me)) return me.organization ? <Tag style={{ marginInlineStart: 4 }}>{me.organization}</Tag> : null;
   const switchTo = async (id: string) => {
     await api('/session/organization', { method: 'POST', body: { id } });
-    window.location.assign(window.location.pathname); // fresh data and filters of the other organization
+    window.location.assign(pathAfterOrgSwitch(window.location.pathname)); // fresh data and filters of the other organization
   };
   return (
     <Select size="small" value={me.organization_id ?? undefined} placeholder="Организация" onChange={switchTo}

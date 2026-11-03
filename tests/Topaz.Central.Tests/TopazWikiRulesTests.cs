@@ -95,6 +95,8 @@ public sealed class TopazWikiRulesTests(CentralFixture fx) : IClassFixture<Centr
         var t = DateTimeOffset.UtcNow.AddDays(-1);
         await SendAsync(st.Token,
             Mode(109, "НАЛИЧКА"), Mode(115, "НАЛИЧКА "), Mode(120, "Банковская карта"),
+            Shift(0, t.AddDays(-3), t.AddDays(-3).AddHours(12)),
+            Order(5, 0, t.AddDays(-3).AddHours(1), 109, 25, 48, 48),   // before the discount existed: nothing missed
             Shift(1, t, t.AddHours(12)),
             Order(1, 1, t.AddHours(1), 115, 20, 48, 47),   // the new mode: 1 ₽ per litre off
             Order(2, 1, t.AddHours(2), 109, 30, 48, 48),   // the old mode: no discount

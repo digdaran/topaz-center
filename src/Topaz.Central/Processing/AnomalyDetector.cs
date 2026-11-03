@@ -285,14 +285,16 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         Insert + $"""
         WITH m AS (
             SELECT pm.station_id, pm.payment_mode_id, pm.name, lower_ru(trim(pm.name)) AS k,
-                   EXISTS (SELECT 1 FROM fuel_sales d WHERE d.station_id = pm.station_id AND d.payment_mode_id = pm.payment_mode_id
-                             AND d.volume > 0 AND d.sold_at > now() - interval '31 days'
-                             AND fuel_discount(d.amount_discount, d.price, d.price_pump, d.volume) > 0) AS discounted
+                   (SELECT min(d.sold_at) FROM fuel_sales d WHERE d.station_id = pm.station_id AND d.payment_mode_id = pm.payment_mode_id
+                      AND d.volume > 0 AND d.sold_at > now() - interval '61 days'
+                      AND fuel_discount(d.amount_discount, d.price, d.price_pump, d.volume) > 0) AS discount_from
             FROM payment_modes pm WHERE COALESCE(trim(pm.name), '') <> ''
         ), tw AS (
-            SELECT a.station_id, a.payment_mode_id, a.name, string_agg(b.payment_mode_id::text, ', ' ORDER BY b.payment_mode_id) AS twins
-            FROM m a JOIN m b ON b.station_id = a.station_id AND b.k = a.k AND b.payment_mode_id <> a.payment_mode_id AND b.discounted
-            WHERE NOT a.discounted
+            -- discount_from: the namesake's first discounted sale; shifts that ended before it had no discount to miss.
+            SELECT a.station_id, a.payment_mode_id, a.name, string_agg(b.payment_mode_id::text, ', ' ORDER BY b.payment_mode_id) AS twins,
+                   min(b.discount_from) AS discount_from
+            FROM m a JOIN m b ON b.station_id = a.station_id AND b.k = a.k AND b.payment_mode_id <> a.payment_mode_id AND b.discount_from IS NOT NULL
+            WHERE a.discount_from IS NULL
             GROUP BY 1, 2, 3
         )
         SELECT x.station_id, 'payment_mode_twin', x.session_id || '/' || x.payment_mode_id, r.severity,
@@ -300,12 +302,12 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
                format('Смена №%s, оператор %s: %s налив(ов) на %s л по виду оплаты «%s» (код %s) без скидки. У вида оплаты с тем же названием (код %s) скидка есть. Проверьте, какой из них выбирает оператор, и отключите лишний в Топазе.',
                       s.session_num, s.user_name, x.orders, fmt_num(x.liters), x.name, x.payment_mode_id, x.twins),
                x.orders, x.session_id, s.ended_at
-        FROM (SELECT f.station_id, f.session_id, f.payment_mode_id, tw.name, tw.twins, count(*) AS orders, sum(f.volume) AS liters
+        FROM (SELECT f.station_id, f.session_id, f.payment_mode_id, tw.name, tw.twins, tw.discount_from, count(*) AS orders, sum(f.volume) AS liters
               FROM fuel_sales f
               JOIN tw ON tw.station_id = f.station_id AND tw.payment_mode_id = f.payment_mode_id
               WHERE f.volume > 0 AND f.sold_at > now() - interval '31 days'
-              GROUP BY 1, 2, 3, 4, 5) x
-        JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
+              GROUP BY 1, 2, 3, 4, 5, 6) x
+        JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL AND s.ended_at >= x.discount_from
         {string.Format(Rule, "payment_mode_twin", "x")}
         WHERE {Recent}
         ON CONFLICT DO NOTHING
