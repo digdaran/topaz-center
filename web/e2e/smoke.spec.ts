@@ -1,5 +1,7 @@
 import { expect, Page, test } from '@playwright/test';
 
+// The default user is a superadmin: start the stack under test with Topaz__RequireTotpForSuperadmin=false
+// (and Topaz__SecureCookies=false when it is plain http), or two-factor login stops at the setup screen.
 const login = process.env.E2E_LOGIN ?? 'admin';
 const password = process.env.E2E_PASSWORD ?? 'demo-password-1';
 const period = process.env.E2E_PERIOD ?? '';

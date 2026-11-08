@@ -30,6 +30,14 @@ public sealed class CentralOptions
     /// <summary>Telegram bot token (from @BotFather) for alert notifications; empty = notifications off.</summary>
     public string? TelegramBotToken { get; set; }
     public string TelegramApiBase { get; set; } = "https://api.telegram.org";
+    /// <summary>A superadmin without two-factor login can only set it up (and log out) until it is on.</summary>
+    public bool RequireTotpForSuperadmin { get; set; } = true;
+    /// <summary>Session cookies only over HTTPS. False for tests and a local stack without TLS.</summary>
+    public bool SecureCookies { get; set; } = true;
+    /// <summary>Login attempts (password and code steps, two-factor setup) per address and minute.</summary>
+    public int LoginsPerMinutePerIp { get; set; } = 20;
+    /// <summary>Web interface API calls per user and minute (stops scraping with a stolen session).</summary>
+    public int UiRequestsPerMinute { get; set; } = 600;
     /// <summary>Signed agent packages for self-update; default: agent-updates next to the server dll (filled by CI).</summary>
     public string? AgentUpdatesDirectory { get; set; }
 }

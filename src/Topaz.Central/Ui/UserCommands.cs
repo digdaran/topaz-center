@@ -36,6 +36,33 @@ public static class UserCommands
         }
     }
 
+    /// <summary>
+    /// Lost phone and recovery codes (or lost data protection keys):
+    ///   docker compose exec central dotnet Topaz.Central.dll reset-totp --login admin
+    /// </summary>
+    public static async Task<int> ResetTotpAsync(IServiceProvider sp, string[] args)
+    {
+        var i = Array.IndexOf(args, "--login");
+        var login = i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+        if (string.IsNullOrWhiteSpace(login))
+        {
+            Console.Error.WriteLine("Usage: reset-totp --login <login>");
+            return 2;
+        }
+        var db = sp.GetRequiredService<NpgsqlDataSource>();
+        await using var c = await db.OpenConnectionAsync();
+        var id = await c.ExecuteScalarAsync<Guid?>("SELECT id FROM users WHERE login_normalized = @l", new { l = UserService.Normalize(login) });
+        if (id is null)
+        {
+            Console.Error.WriteLine($"User {login} not found");
+            return 1;
+        }
+        await c.ExecuteAsync(UserService.ResetTotpSql, new { id, stamp = Guid.NewGuid() });
+        await Audit.WriteAsync(db, null, "cli", "totp_reset", "user:" + id, new { login });
+        Console.WriteLine($"Two-factor login of {login} is off; it is set up again at the next login.");
+        return 0;
+    }
+
     public static async Task BootstrapOwnerAsync(IServiceProvider sp, CentralOptions options, ILogger log)
     {
         if (string.IsNullOrWhiteSpace(options.BootstrapOwnerLogin) || string.IsNullOrEmpty(options.BootstrapOwnerPassword)) return;

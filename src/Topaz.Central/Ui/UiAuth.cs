@@ -43,6 +43,12 @@ public sealed class UserRecord
     /// <summary>Null for a superadmin.</summary>
     public Guid? OrganizationId { get; set; }
     public bool OrganizationActive { get; set; } = true;
+    /// <summary>Encrypted TOTP secret; null = two-factor login off.</summary>
+    public string? TotpSecret { get; set; }
+    public string? TotpPending { get; set; }
+    public long? TotpLastStep { get; set; }
+    public string[] RecoveryCodes { get; set; } = [];
+    public bool TotpEnabled => TotpSecret is not null;
 }
 
 /// <summary>User storage, password hashing (PBKDF2 via ASP.NET Identity) and login checks.</summary>
@@ -57,7 +63,9 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
     private const string SelectUser = """
         SELECT u.id, u.login, u.name, u.role, u.password_hash AS PasswordHash, u.security_stamp AS SecurityStamp,
                u.is_active AS IsActive, u.failed_logins AS FailedLogins, u.locked_until AS LockedUntil,
-               u.organization_id AS OrganizationId, COALESCE(o.is_active, true) AS OrganizationActive
+               u.organization_id AS OrganizationId, COALESCE(o.is_active, true) AS OrganizationActive,
+               u.totp_secret AS TotpSecret, u.totp_pending AS TotpPending, u.totp_last_step AS TotpLastStep,
+               u.recovery_codes AS RecoveryCodes
         FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
         """;
 
@@ -106,12 +114,61 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
             return (LoginResult.Invalid, null);
         }
         var newHash = verdict == PasswordVerificationResult.SuccessRehashNeeded ? HashPassword(password) : null;
+        // With two-factor login the failure counter is reset only after the code: otherwise the password step
+        // would reset it between guesses of the code.
+        await c.ExecuteAsync("""
+            UPDATE users SET password_hash = COALESCE(@newHash, password_hash),
+                failed_logins = CASE WHEN @twoFactor THEN failed_logins ELSE 0 END,
+                locked_until = CASE WHEN @twoFactor THEN locked_until ELSE NULL END,
+                last_login_at = CASE WHEN @twoFactor THEN last_login_at ELSE now() END
+            WHERE id = @id
+            """, new { id = user.Id, newHash, twoFactor = user.TotpEnabled });
+        return (LoginResult.Ok, user);
+    }
+
+    public enum CodeResult { Ok, Invalid, Locked }
+
+    /// <summary>Turns two-factor login off (own choice, an owner/superadmin reset, CLI); ends all sessions.</summary>
+    public const string ResetTotpSql = """
+        UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL, totp_enabled_at = NULL,
+            recovery_codes = '{}', security_stamp = @stamp
+        WHERE id = @id
+        """;
+
+    /// <summary>
+    /// Second login step: a code from the app (each 30-second code once) or a recovery code (each once).
+    /// A wrong code counts as a failed login, so the lockout covers guessing.
+    /// </summary>
+    public async Task<CodeResult> CheckCodeAsync(UserRecord user, string? code, TotpProtector protector)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        await using var tx = await c.BeginTransactionAsync();
+        var row = await c.QuerySingleOrDefaultAsync<UserRecord>(SelectUser + " WHERE u.id = @id FOR UPDATE OF u", new { id = user.Id }, tx);
+        if (row?.TotpSecret is null) return CodeResult.Invalid;
+        if (row.LockedUntil is { } until && until > DateTime.UtcNow) return CodeResult.Locked;
+
+        var step = Totp.Verify(protector.Unprotect(row.TotpSecret), code, DateTimeOffset.UtcNow, row.TotpLastStep);
+        var recoveryHash = step is null && (code ?? "").Contains('-') ? Totp.HashRecoveryCode(code!) : null;
+        var recovery = recoveryHash is not null && row.RecoveryCodes.Contains(recoveryHash);
+        if (step is null && !recovery)
+        {
+            await c.ExecuteAsync("""
+                UPDATE users SET failed_logins = failed_logins + 1,
+                    locked_until = CASE WHEN failed_logins + 1 >= @max THEN now() + @lock ELSE locked_until END
+                WHERE id = @id
+                """, new { id = row.Id, max = MaxFailedLogins, @lock = LockoutFor }, tx);
+            await tx.CommitAsync();
+            return CodeResult.Invalid;
+        }
         await c.ExecuteAsync("""
             UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now(),
-                password_hash = COALESCE(@newHash, password_hash)
+                totp_last_step = COALESCE(@step, totp_last_step),
+                recovery_codes = CASE WHEN @recoveryHash IS NULL THEN recovery_codes ELSE array_remove(recovery_codes, @recoveryHash) END
             WHERE id = @id
-            """, new { id = user.Id, newHash });
-        return (LoginResult.Ok, user);
+            """, new { id = row.Id, step, recoveryHash = recovery ? recoveryHash : null }, tx);
+        await tx.CommitAsync();
+        Forget(row.Id);
+        return CodeResult.Ok;
     }
 
     public async Task<Guid> CreateAsync(string login, string name, string role, string password, IEnumerable<Guid>? stations = null, Guid? organizationId = null)
@@ -169,9 +226,10 @@ public static class UiAuthSetup
     public const string CookieName = "topaz_ui";
     public const string CsrfHeader = "X-Topaz-Ui";
 
-    public static void AddUiAuth(this IServiceCollection services)
+    public static void AddUiAuth(this IServiceCollection services, bool secureCookies)
     {
         services.AddSingleton<UserService>();
+        services.AddSingleton<TotpProtector>();
         services.AddSingleton<StationScope>();
         services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(o =>
@@ -179,7 +237,8 @@ public static class UiAuthSetup
                 o.Cookie.Name = CookieName;
                 o.Cookie.HttpOnly = true;
                 o.Cookie.SameSite = SameSiteMode.Strict;
-                o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; // HTTPS behind Caddy (X-Forwarded-Proto)
+                // Never sent over plain http; tests and a local stack without TLS set Topaz__SecureCookies=false.
+                o.Cookie.SecurePolicy = secureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
                 o.ExpireTimeSpan = TimeSpan.FromHours(12);
                 o.SlidingExpiration = true;
                 o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
@@ -201,6 +260,26 @@ public static class UiAuthSetup
             .AddPolicy(Policies.Super, p => p.RequireRole(Roles.Superadmin))
             .AddPolicy(Policies.Owner, p => p.RequireRole(Roles.Owner))
             .AddPolicy(Policies.Manager, p => p.RequireRole(Roles.Owner, Roles.Manager));
+    }
+
+    /// <summary>
+    /// Two-factor login is mandatory for superadmins (Topaz__RequireTotpForSuperadmin): until it is on, only
+    /// /auth/* answers (me, logout, setting it up). Checked against the user row, so older sessions are covered too.
+    /// </summary>
+    public sealed class TotpRequiredFilter(UserService users, Microsoft.Extensions.Options.IOptions<CentralOptions> options) : IEndpointFilter
+    {
+        public const string SetupRequired = "Включите двухфакторную защиту входа: Настройки → Вход и защита";
+
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var http = context.HttpContext;
+            if (options.Value.RequireTotpForSuperadmin && http.User.IsInRole(Roles.Superadmin)
+                && !http.Request.Path.StartsWithSegments(Topaz.Contracts.Protocol.ApiPrefix + "/ui/auth")
+                && Guid.TryParse(http.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)
+                && await users.FindCachedAsync(id) is { TotpEnabled: false })
+                return Results.Problem(statusCode: 403, title: SetupRequired, type: "totp_setup_required");
+            return await next(context);
+        }
     }
 
     /// <summary>CSRF guard for state-changing UI calls: a custom header cannot be sent cross-site without CORS.</summary>

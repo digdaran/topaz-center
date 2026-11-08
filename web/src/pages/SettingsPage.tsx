@@ -1,6 +1,6 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Badge, Button, Card, Form, Input, Modal, Select, Switch, Table, Tabs, Tag, Typography } from 'antd';
+import { App, Badge, Button, Card, Flex, Form, Input, Modal, Select, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, isOwner, isSuper, useMeta } from '../api/client';
@@ -10,8 +10,9 @@ import { FuelCatalog } from './FuelCatalog';
 import Organizations from './Organizations';
 import { OrganizationSettings, PaymentModes } from './OrgSettings';
 import { dateTime } from '../lib/format';
+import { TotpStatus } from '../components/TotpSetup';
 
-interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
+interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; totp_enabled: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
 interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string; organization?: string | null }
 
 const ROLE_LABEL: Record<string, string> = { superadmin: 'Суперадминистратор', owner: 'Владелец', manager: 'Управляющий', viewer: 'Просмотр' };
@@ -47,7 +48,7 @@ function Users() {
     const v = await form.validateFields();
     try {
       if (edit === 'new') await api('/users', { method: 'POST', body: v });
-      else await api(`/users/${(edit as UserRow).id}`, { method: 'PATCH', body: { name: v.name, role: v.role, is_active: v.is_active, stations: stationsSelectable ? v.stations : undefined, password: v.password || null, organization_id: sup ? v.organization_id : undefined } });
+      else await api(`/users/${(edit as UserRow).id}`, { method: 'PATCH', body: { name: v.name, role: v.role, is_active: v.is_active, stations: stationsSelectable ? v.stations : undefined, password: v.password || null, organization_id: sup ? v.organization_id : undefined, reset_totp: v.reset_totp || undefined } });
       message.success('Сохранено');
       setEdit(null);
       qc.invalidateQueries({ queryKey: ['users'] });
@@ -67,6 +68,7 @@ function Users() {
           { title: 'Логин', dataIndex: 'login' },
           { title: 'Имя', dataIndex: 'name' },
           { title: 'Роль', dataIndex: 'role', render: (v) => ROLE_LABEL[v] },
+          { title: 'Код при входе', dataIndex: 'totp_enabled', render: (v: boolean) => (v ? <Tag color="green">включён</Tag> : <Tag>нет</Tag>) },
           { title: 'АЗС', dataIndex: 'stations', render: (v: string[], r) => (r.role === 'owner' || r.role === 'superadmin' ? 'все' : v.length ? v.map((s) => <Tag key={s}>{stationName(s)}</Tag>) : <Tag color="orange">не назначены</Tag>) },
           { title: 'Статус', key: 's', render: (_, r) => (!r.is_active ? <Tag>отключён</Tag> : r.locked_until && new Date(r.locked_until) > new Date() ? <Tag color="red">заблокирован</Tag> : <Tag color="green">активен</Tag>) },
           { title: 'Последний вход', dataIndex: 'last_login_at', render: (v) => dateTime(v) },
@@ -98,6 +100,12 @@ function Users() {
             <Input.Password autoComplete="new-password" />
           </Form.Item>
           {edit !== 'new' && (edit as UserRow)?.id !== me.id && <Form.Item name="is_active" label="Активен" valuePropName="checked"><Switch /></Form.Item>}
+          {edit !== 'new' && (edit as UserRow)?.totp_enabled && (edit as UserRow)?.id !== me.id && (
+            <Form.Item name="reset_totp" valuePropName="checked" label="Сбросить код при входе"
+              extra="Если пользователь потерял телефон и запасные коды: он войдёт по паролю и включит защиту заново.">
+              <Switch />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </>
@@ -120,6 +128,7 @@ function AuditLog() {
 }
 
 function Profile() {
+  const me = useMe();
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const submit = async (v: { current_password: string; new_password: string }) => {
@@ -132,7 +141,8 @@ function Profile() {
     }
   };
   return (
-    <Card size="small" style={{ maxWidth: 420 }}>
+    <Flex gap={16} wrap align="start">
+    <Card size="small" title="Пароль" style={{ width: 420, maxWidth: '100%' }}>
       <Form form={form} layout="vertical" onFinish={submit}>
         <Form.Item name="current_password" label="Текущий пароль" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
         <Form.Item name="new_password" label="Новый пароль" rules={[{ required: true }, { min: MIN_PASSWORD, message: `Не короче ${MIN_PASSWORD} символов` }]}>
@@ -146,6 +156,10 @@ function Profile() {
         <Button type="primary" htmlType="submit">Сменить пароль</Button>
       </Form>
     </Card>
+    <Card size="small" title="Двухфакторная защита" style={{ width: 560, maxWidth: '100%' }}>
+      <TotpStatus enabled={me.totp_enabled} required={me.totp_mandatory} codesLeft={me.recovery_codes_left} />
+    </Card>
+    </Flex>
   );
 }
 
@@ -162,7 +176,7 @@ export default function SettingsPage() {
     ...(isOwner(me) ? [{ key: 'organization', label: 'Маржа и НДС', children: <OrganizationSettings /> }] : []),
     ...(isOwner(me) ? [{ key: 'payment-modes', label: 'Виды оплаты', children: <PaymentModes /> }] : []),
     ...(isOwner(me) ? [{ key: 'audit', label: 'Журнал действий', children: <AuditLog /> }] : []),
-    { key: 'profile', label: 'Мой пароль', children: <Profile /> },
+    { key: 'profile', label: 'Вход и защита', children: <Profile /> },
   ];
   return (
     <>

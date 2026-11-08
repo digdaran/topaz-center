@@ -1,28 +1,51 @@
-import { BarChartOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
+import { BarChartOutlined, LockOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { VersionLabel } from '../components/appUpdate';
+import { safeNext } from '../lib/safeNext';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Two-factor login: after the password, a code from the app (or a recovery code).
+  const [needCode, setNeedCode] = useState(false);
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const qc = useQueryClient();
+
+  const done = async () => {
+    await qc.invalidateQueries({ queryKey: ['me'] });
+    const next = params.get('next');
+    navigate(safeNext(next), { replace: true });
+  };
 
   const submit = async (v: { login: string; password: string }) => {
     setLoading(true);
     setError(null);
     try {
-      await api('/auth/login', { method: 'POST', body: v });
-      await qc.invalidateQueries({ queryKey: ['me'] });
-      const next = params.get('next');
-      navigate(next && next.startsWith('/') && !next.startsWith('//') ? next : '/', { replace: true });
+      const r = await api<{ need_code?: boolean }>('/auth/login', { method: 'POST', body: v });
+      if (r.need_code) setNeedCode(true);
+      else await done();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitCode = async (v: { code: string }) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await api('/auth/login/code', { method: 'POST', body: v });
+      await done();
+    } catch (e) {
+      setError((e as Error).message);
+      // The 5-minute window is over: start again from the password.
+      if ((e as Error).message.includes('войдите заново')) setNeedCode(false);
     } finally {
       setLoading(false);
     }
@@ -38,6 +61,16 @@ export default function LoginPage() {
           <Typography.Text type="secondary">Данные и аналитика АЗС</Typography.Text>
         </Flex>
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
+        {needCode ? (
+          <Form layout="vertical" onFinish={submitCode} requiredMark={false}>
+            <Form.Item name="code" label="Код из приложения" extra="Шесть цифр из Яндекс Ключа или Google Authenticator. Без телефона введите один из запасных кодов."
+              rules={[{ required: true, message: 'Введите код' }]}>
+              <Input prefix={<SafetyOutlined />} inputMode="numeric" autoComplete="one-time-code" autoFocus size="large" />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" block size="large" loading={loading}>Войти</Button>
+            <Button type="link" block onClick={() => { setNeedCode(false); setError(null); }}>Назад</Button>
+          </Form>
+        ) : (
         <Form layout="vertical" onFinish={submit} requiredMark={false}>
           <Form.Item name="login" label="Логин" rules={[{ required: true, message: 'Введите логин' }]}>
             <Input prefix={<UserOutlined />} autoComplete="username" autoFocus size="large" />
@@ -47,6 +80,7 @@ export default function LoginPage() {
           </Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={loading}>Войти</Button>
         </Form>
+        )}
       </Card>
     </Flex>
   );

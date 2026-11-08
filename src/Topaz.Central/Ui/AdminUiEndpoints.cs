@@ -6,7 +6,7 @@ namespace Topaz.Central.Ui;
 
 public sealed record StationUpdate(string? DisplayName, string? TimeZone, string? Region, string? GroupName, string? Address);
 public sealed record UserCreate(string Login, string Name, string Role, string Password, Guid[]? Stations, Guid? OrganizationId = null);
-public sealed record UserUpdate(string? Name, string? Role, bool? IsActive, Guid[]? Stations, string? Password, Guid? OrganizationId = null);
+public sealed record UserUpdate(string? Name, string? Role, bool? IsActive, Guid[]? Stations, string? Password, Guid? OrganizationId = null, bool? ResetTotp = null);
 
 /// <summary>Meta for filters, station monitoring/settings, user management, audit log.</summary>
 public static class AdminUiEndpoints
@@ -114,6 +114,7 @@ public static class AdminUiEndpoints
         await using var c = await db.OpenConnectionAsync();
         var rows = await c.QueryAsync("""
             SELECT u.id, u.login, u.name, u.role, u.is_active, u.created_at, u.last_login_at, u.locked_until, u.organization_id, o.name AS organization,
+                   u.totp_secret IS NOT NULL AS totp_enabled,
                    COALESCE(array_agg(us.station_id) FILTER (WHERE us.station_id IS NOT NULL), '{}') AS stations
             FROM users u LEFT JOIN user_stations us ON us.user_id = u.id LEFT JOIN organizations o ON o.id = u.organization_id
             WHERE @super OR u.organization_id = @org
@@ -188,6 +189,9 @@ public static class AdminUiEndpoints
                 security_stamp = @stamp
             WHERE id = @id
             """, new { id, body.Name, newRole, newOrg, body.IsActive, hash = body.Password is null ? null : UserService.HashPassword(body.Password), stamp = Guid.NewGuid() }, tx);
+        // Lost phone: the app's codes and the recovery codes stop working; the user sets it up again.
+        if (body.ResetTotp == true)
+            await c.ExecuteAsync(UserService.ResetTotpSql, new { id, stamp = Guid.NewGuid() }, tx);
         if (body.Stations is not null || newOrg != target.Value.Org)
         {
             await c.ExecuteAsync("DELETE FROM user_stations WHERE user_id = @id", new { id }, tx);
@@ -198,7 +202,7 @@ public static class AdminUiEndpoints
         users.Forget(id);
         scope.Forget(id);
         await Audit.WriteAsync(db.System, user.UserId(), user.Identity?.Name, "user_updated", "user:" + id,
-            new { body.Name, body.Role, body.IsActive, body.Stations, organization_id = newOrg, password_changed = body.Password is not null }, newOrg);
+            new { body.Name, body.Role, body.IsActive, body.Stations, organization_id = newOrg, password_changed = body.Password is not null, totp_reset = body.ResetTotp == true }, newOrg);
         return Results.NoContent();
     }
 }

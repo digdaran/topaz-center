@@ -1,0 +1,24 @@
+# Weekly update PRs; minor/patch updates of one ecosystem come as one grouped PR.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      nuget-minor: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+    groups:
+      npm-minor: { update-types: [minor, patch] }
+  - package-ecosystem: docker
+    directory: /src/Topaz.Central
+    schedule: { interval: weekly }
+  - package-ecosystem: docker-compose
+    directory: /deploy/central
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }

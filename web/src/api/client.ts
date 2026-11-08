@@ -70,6 +70,13 @@ export interface Me {
   organization: string | null;
   /** Superadmin only: all organizations for the header switch. */
   organizations: { id: string; name: string; is_active: boolean }[] | null;
+  /** Two-factor login (code from an authenticator app). */
+  totp_enabled: boolean;
+  /** Superadmin: mandatory, cannot be turned off. */
+  totp_mandatory: boolean;
+  /** Mandatory but not on yet: only the setup screen works until it is. */
+  totp_setup_required: boolean;
+  recovery_codes_left: number;
 }
 
 /** Owner rights (a superadmin has them too). */

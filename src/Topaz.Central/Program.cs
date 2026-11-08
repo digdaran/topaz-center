@@ -50,7 +50,7 @@ builder.Services.AddHttpClient("telegram", c => c.Timeout = TimeSpan.FromSeconds
 builder.Services.AddSingleton<AnomalyDetector>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AnomalyDetector>());
 builder.Services.AddHostedService<StationMonitor>();
-builder.Services.AddUiAuth();
+builder.Services.AddUiAuth(options.SecureCookies);
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("topaz-center");
 if (!string.IsNullOrWhiteSpace(options.KeysDirectory))
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(options.KeysDirectory));
@@ -93,7 +93,11 @@ builder.Services.AddRateLimiter(o =>
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(10) }));
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1) }));
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = options.LoginsPerMinutePerIp, Window = TimeSpan.FromMinutes(1) }));
+    // Web interface: per signed-in user (anonymous: per address); login has its own stricter policy.
+    o.AddPolicy("ui", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = options.UiRequestsPerMinute, Window = TimeSpan.FromMinutes(1) }));
     o.AddPolicy("station", ctx => RateLimitPartition.GetFixedWindowLimiter(
         Tokens.Bearer(ctx) is { } t ? Convert.ToHexString(Tokens.Hash(t)) : ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = options.BatchesPerMinutePerStation, Window = TimeSpan.FromMinutes(1) }));
@@ -114,6 +118,8 @@ await app.Services.GetRequiredService<Topaz.Central.Updates.AgentReleases>().Sca
 
 if (args.FirstOrDefault() == "create-user")
     return await UserCommands.CreateUserAsync(app.Services, args[1..]);
+if (args.FirstOrDefault() == "reset-totp")
+    return await UserCommands.ResetTotpAsync(app.Services, args[1..]);
 await UserCommands.BootstrapOwnerAsync(app.Services, options, app.Logger);
 
 app.UseForwardedHeaders();
@@ -155,7 +161,8 @@ app.MapMetrics("/metrics");
 app.MapIngest();
 app.MapAdmin();
 
-var ui = app.MapGroup(Protocol.ApiPrefix + "/ui").RequireAuthorization(Policies.Ui).AddEndpointFilter<UiAuthSetup.CsrfFilter>();
+var ui = app.MapGroup(Protocol.ApiPrefix + "/ui").RequireAuthorization(Policies.Ui).RequireRateLimiting("ui")
+    .AddEndpointFilter<UiAuthSetup.CsrfFilter>().AddEndpointFilter<UiAuthSetup.TotpRequiredFilter>();
 ui.MapUiAuth();
 ui.MapUiOverview();
 ui.MapUiShifts();

@@ -46,6 +46,10 @@ public sealed class CentralFixture : IAsyncLifetime
             b.UseSetting("Topaz:RegistrationsPerHourPerIp", "100000");
             b.UseSetting("Topaz:AdminToken", AdminToken);
             b.UseSetting("Topaz:MaxProcessingAttempts", "2");
+            b.UseSetting("Topaz:SecureCookies", "false"); // TestServer speaks http
+            b.UseSetting("Topaz:UiRequestsPerMinute", "100000");
+            b.UseSetting("Topaz:LoginsPerMinutePerIp", "100000");
+            b.UseSetting("Topaz:RequireTotpForSuperadmin", "false"); // UiTests turn it on where they test it
         });
         _ = Factory.Server; // start (runs migrations)
     }

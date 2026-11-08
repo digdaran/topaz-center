@@ -53,7 +53,7 @@ services:
     logging: *logging
 
   caddy:
-    image: caddy:2.8-alpine
+    image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on: [central]
     ports:
