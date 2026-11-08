@@ -30,8 +30,8 @@ jobs:
       TOPAZ_TEST_FB_HOST: localhost
       TOPAZ_TEST_FB_PASSWORD: ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
       - name: Wait for Firebird
@@ -41,7 +41,7 @@ jobs:
         run: bash .github/scripts/nuget-audit.sh
       - run: dotnet build --no-restore -c Release
       - run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx" --results-directory TestResults
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-results
@@ -53,8 +53,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -81,7 +81,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       from: ${{ steps.v.outputs.from }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: v
@@ -120,8 +120,8 @@ jobs:
     env:
       REBUILD: ${{ needs.agent-version.outputs.rebuild }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         if: env.REBUILD == 'true'
         with:
           dotnet-version: 8.0.x
@@ -179,16 +179,16 @@ jobs:
           mkdir -p "out/$NAME" && cp out/TopazAgent/TopazAgent.exe out/TopazAgent/datasets.json out/TopazAgent/appsettings.json "out/$NAME/"
           (cd out && zip -9 -r "../dist/$NAME.zip" "$NAME")
           ls -la setup dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.REBUILD == 'true'
         with:
           name: TopazAgent-${{ matrix.rid }}
           path: out/TopazAgent
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent-zip-${{ matrix.rid }}
           path: dist/*.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent-setup-${{ matrix.rid }}
           path: setup/*.exe
@@ -214,7 +214,7 @@ jobs:
           openssl dgst -sha256 -sign key.pem -out "$D/manifest.sig" "$D/manifest.json"
           rm -f key.pem
           openssl dgst -sha256 -verify builtin.pub -signature "$D/manifest.sig" "$D/manifest.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent-update-${{ matrix.rid }}
           path: updates
@@ -227,13 +227,13 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
       - name: Agent unit tests on Windows (DPAPI, paths)
         run: dotnet test tests/Topaz.Agent.Tests -c Release
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: agent-setup-win-x64
           path: setup
@@ -294,7 +294,7 @@ jobs:
           $setup = (Get-ChildItem setup\*.exe)[0].FullName
           Start-Process -FilePath $setup -ArgumentList 'setup-preview', "$PWD\previews" -Wait
           Get-ChildItem previews
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: setup-window-previews
@@ -307,15 +307,15 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Signed agent packages go into the image: agents update from their own server.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: agent-update-*
           merge-multiple: true
           path: agent-updates
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           registry: ghcr.io
@@ -327,7 +327,7 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/topaz-central" >> "$GITHUB_OUTPUT"
       # Build once into the local daemon, scan, then push the same build (cache) only if the scan passed.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: src/Topaz.Central/Dockerfile
@@ -344,7 +344,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: .github/trivyignore
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: src/Topaz.Central/Dockerfile
@@ -362,17 +362,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: agent-zip-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: agent-update-*
           merge-multiple: true
           path: upd
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: agent-setup-*
           merge-multiple: true
