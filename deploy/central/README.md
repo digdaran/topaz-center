@@ -79,6 +79,16 @@ iptables -S DOCKER-USER                      # веб-баны в фаервол
 
 Новая станция или сменился свой IP — добавьте адрес в `ignoreip` в `/etc/fail2ban/jail.d/zz-topaz-local.conf` и выполните `fail2ban-client reload`. Станция в бане перестаёт присылать данные (в интерфейсе она станет «молчащей»): разбаньте её IP и добавьте в исключения.
 
+## CrowdSec
+
+Дополнительно к fail2ban: `sudo bash crowdsec/install.sh`. CrowdSec разбирает логи SSH и Caddy своими сценариями (сканеры, перебор, известные CVE) и подтягивает общий список атакующих адресов от сообщества; баны ставит firewall-bouncer в цепочки INPUT и DOCKER-USER. Адреса из `ignoreip` fail2ban переносятся в белый список (`/etc/crowdsec/parsers/s02-enrich/topaz-whitelist.yaml`). Добавили станцию или свой IP — допишите его в оба файла и перезапустите скрипт.
+
+```bash
+cscli decisions list                 # кто сейчас в бане
+cscli decisions delete --ip 1.2.3.4  # разбанить
+cscli metrics                        # что читается и сколько срабатываний
+```
+
 ## Бэкапы
 
 Контейнер `backup` раз в сутки делает `pg_dump` в `./backups` и хранит три последних (`TOPAZ_BACKUP_KEEP` в `.env`). Перед дампом лишние старые удаляются, и если места всё равно не хватает, бэкап пропускается, а не заполняет диск (`docker compose logs backup`). Копируйте эту папку за пределы сервера. Восстановление:
@@ -105,6 +115,16 @@ age-keygen -o /root/backup.key                            # ключ храни�
 - SSH: только по ключу (`ssh/11-topaz-hardening.conf`, ставит `setup.sh`: root по ключу, без паролей и форвардинга, 3 попытки).
 - API администратора и выгрузки (`/api/v1/admin/*`, `/api/v1/export/*`, токен `TOPAZ_ADMIN_TOKEN`) Caddy пропускает только с адресов из `TOPAZ_ADMIN_ALLOW_IPS`; без него всем отвечает 403. После изменения выполните `docker compose up -d caddy`.
 - Смена токена: `openssl rand -hex 32` → `TOPAZ_ADMIN_TOKEN` в `.env` → `docker compose up -d central`.
+
+## Двухфакторный вход
+
+Для суперадминистратора обязателен: после обновления до 1.8 он при первом входе попадает на экран включения (приложение Яндекс Ключ / Google Authenticator). Потерян телефон и запасные коды:
+
+```bash
+docker compose exec central dotnet Topaz.Central.dll reset-totp --login admin
+```
+
+Секреты кодов зашифрованы ключами из тома `keys`; бэкап базы их не содержит. Сохраните копию тома (`docker run --rm -v topaz_keys:/k -v $PWD:/b alpine tar czf /b/keys.tgz -C /k .`) вместе с бэкапами; без неё после переезда все сессии и коды придётся сбросить командой выше.
 
 ## Сторож сервера
 
