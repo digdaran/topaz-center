@@ -9,7 +9,7 @@ ARG VERSION=1.0.0
 ENV VERSION=$VERSION
 RUN npm run build
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/Topaz.Contracts/Topaz.Contracts.csproj src/Topaz.Contracts/
