@@ -9,12 +9,13 @@
 	@internal path /metrics /metrics/* /health/ready
 	respond @internal 404
 
-	# Optional: allow admin/export API only from the office network.
-	# @admin_outside {
-	# 	path /api/v1/admin/* /api/v1/export/*
-	# 	not remote_ip 203.0.113.0/24
-	# }
-	# respond @admin_outside 403
+	# Admin/export API (static Bearer token) only from TOPAZ_ADMIN_ALLOW_IPS in .env (space-separated IPs/CIDRs);
+	# unset = nobody from outside. The web interface does not use it.
+	@admin_outside {
+		path /api/v1/admin/* /api/v1/export/*
+		not remote_ip {$TOPAZ_ADMIN_ALLOW_IPS:127.0.0.1/32}
+	}
+	respond @admin_outside 403
 
 	reverse_proxy central:8080 {
 		header_up X-Forwarded-Proto {scheme}

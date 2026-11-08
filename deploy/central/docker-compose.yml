@@ -62,6 +62,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (Let's Encrypt account)}
+      TOPAZ_ADMIN_ALLOW_IPS: ${TOPAZ_ADMIN_ALLOW_IPS:-127.0.0.1/32}   # admin/export API from these IPs only
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

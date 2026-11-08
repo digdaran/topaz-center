@@ -89,6 +89,13 @@ docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/digdaran/topaz-central
   | sort -V | head -n -1 | xargs -r docker rmi >/dev/null 2>&1 || true
 docker image prune -f >/dev/null 2>&1 || true
 
+# SSH hardening (key-only root, no forwarding); applied only if sshd accepts the result.
+if [[ -d /etc/ssh/sshd_config.d ]] && command -v sshd >/dev/null; then
+  install -m 0644 ssh/11-topaz-hardening.conf /etc/ssh/sshd_config.d/11-topaz-hardening.conf
+  if sshd -t; then systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  else rm -f /etc/ssh/sshd_config.d/11-topaz-hardening.conf; warn "sshd отверг 11-topaz-hardening.conf, оставил как было"; fi
+fi
+
 # Watchdog (disk, PostgreSQL, HTTPS, backups) every 10 minutes: see watchdog.sh.
 if command -v systemctl >/dev/null; then
   cat > /etc/systemd/system/topaz-watchdog.service <<UNIT

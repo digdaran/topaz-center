@@ -89,7 +89,22 @@ docker compose exec -T postgres pg_restore -U topaz -d topaz --clean --if-exists
 docker compose start central
 ```
 
+**Копия вне сервера.** Бэкапы на том же диске не спасут при потере сервера или взломе. Раз в сутки копируйте их в другое место, например в S3-совместимое хранилище (Yandex Object Storage, Selectel), с шифрованием:
+
+```bash
+apt-get install -y rclone age && rclone config            # хранилище "s3backup"
+age-keygen -o /root/backup.key                            # ключ храните ВНЕ сервера, на сервере нужен только публичный
+# /etc/cron.d/topaz-offsite:
+# 30 6 * * * root f=$(ls -1t /root/topaz-center/deploy/central/backups/topaz-*.dump | head -1); age -r <публичный ключ> "$f" | rclone rcat s3backup:topaz/$(basename "$f").age
+```
+
 Даже если центральная БД потеряна безвозвратно, данные можно собрать заново: на каждой АЗС выполнить `TopazAgent.exe` с очищенным состоянием (`TopazAgent.exe uninstall /removestate`, затем установщик заново и одобрение заявки как «существующая АЗС»), и агенты перечитают всё из Топаза.
+
+## Доступ администратора
+
+- SSH: только по ключу (`ssh/11-topaz-hardening.conf`, ставит `setup.sh`: root по ключу, без паролей и форвардинга, 3 попытки).
+- API администратора и выгрузки (`/api/v1/admin/*`, `/api/v1/export/*`, токен `TOPAZ_ADMIN_TOKEN`) Caddy пропускает только с адресов из `TOPAZ_ADMIN_ALLOW_IPS`; без него всем отвечает 403. После изменения выполните `docker compose up -d caddy`.
+- Смена токена: `openssl rand -hex 32` → `TOPAZ_ADMIN_TOKEN` в `.env` → `docker compose up -d central`.
 
 ## Сторож сервера
 
