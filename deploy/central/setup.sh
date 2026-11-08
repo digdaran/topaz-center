@@ -84,6 +84,35 @@ say "Скачиваю образы и запускаю"
 "${DC[@]}" pull
 "${DC[@]}" up -d --no-build --remove-orphans
 
+# Old central images pile up with every release (~600 MB each): keep the current and the previous one.
+docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/digdaran/topaz-central | grep -vx "$IMAGE" \
+  | sort -V | head -n -1 | xargs -r docker rmi >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
+
+# Watchdog (disk, PostgreSQL, HTTPS, backups) every 10 minutes: see watchdog.sh.
+if command -v systemctl >/dev/null; then
+  cat > /etc/systemd/system/topaz-watchdog.service <<UNIT
+[Unit]
+Description=Topaz central server watchdog
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash $PWD/watchdog.sh
+UNIT
+  cat > /etc/systemd/system/topaz-watchdog.timer <<'UNIT'
+[Unit]
+Description=Topaz central server watchdog every 10 minutes
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload && systemctl enable --now topaz-watchdog.timer >/dev/null 2>&1 \
+    || warn "не удалось включить topaz-watchdog.timer"
+  grep -qE "^TOPAZ_WATCHDOG_TELEGRAM_CHAT=.+" .env \
+    || warn "уведомления о проблемах сервера (диск, база, бэкапы) не уходят в Telegram: задайте TOPAZ_WATCHDOG_TELEGRAM_CHAT в .env"
+fi
+
 say "Жду, пока сервис ответит на https://$DOMAIN/health/live (до 3 минут)"
 ok=0
 for _ in $(seq 1 36); do

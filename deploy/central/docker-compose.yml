@@ -2,6 +2,11 @@
 # Only Caddy publishes ports. Usage: see deploy/central/README.md
 name: topaz
 
+# Every container rotates its log: without it a crash-looping service fills the disk.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,6 +24,7 @@ services:
       timeout: 5s
       retries: 10
     shm_size: 256mb
+    logging: *logging
 
   central:
     image: ${CENTRAL_IMAGE:-topaz-central:latest}
@@ -44,9 +50,7 @@ services:
     read_only: true
     tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]
-    logging:
-      driver: json-file
-      options: { max-size: "50m", max-file: "10" }
+    logging: *logging
 
   caddy:
     image: caddy:2.8-alpine
@@ -64,8 +68,11 @@ services:
       - caddy_config:/config
       - ./logs/caddy:/var/log/caddy   # access log read by fail2ban on the host
     networks: [frontend]
+    logging: *logging
 
-  # Daily logical backup, 14 days kept. Copy ./backups off the server (rsync/rclone) as well.
+  # Daily logical backup; the newest TOPAZ_BACKUP_KEEP (3) dumps are kept. A dump needs about as much
+  # free space as the previous one: old dumps are removed first, and the backup is skipped (not the disk
+  # filled) when there is still not enough room. Copy ./backups off the server (rsync/rclone) as well.
   backup:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -74,16 +81,32 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
+      KEEP: ${TOPAZ_BACKUP_KEEP:-3}
     volumes:
       - ./backups:/backups
     networks: [backend]
+    logging: *logging
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        prune() { ls -1t /backups/topaz-*.dump 2>/dev/null | tail -n +$$(($$1 + 1)) | xargs -r rm -f; }
         while true; do
+          rm -f /backups/*.dump.tmp
+          keep=$$((KEEP > 1 ? KEEP - 1 : 1))
+          prune $$keep
+          last=$$(ls -1t /backups/topaz-*.dump 2>/dev/null | head -1)
+          size=0; [ -n "$$last" ] && size=$$(du -k "$$last" | cut -f1)
+          need=$$((size * 3 / 2 + 524288))   # KB: last dump + 50% growth + 512 MB left for the database
+          free=$$(df -Pk /backups | awk 'NR==2{print $$4}')
           f=/backups/topaz-$$(date +%Y%m%d-%H%M).dump
-          pg_dump -h postgres -U topaz -d topaz -Fc -f "$$f.tmp" && mv "$$f.tmp" "$$f" && echo "backup $$f done"
-          find /backups -name 'topaz-*.dump' -mtime +14 -delete
+          if [ "$$free" -lt "$$need" ]; then
+            echo "backup SKIPPED: only $$((free / 1024)) MB free, need $$((need / 1024)) MB"
+          elif pg_dump -h postgres -U topaz -d topaz -Fc -f "$$f.tmp" && mv "$$f.tmp" "$$f"; then
+            echo "backup $$f done"
+            prune $$KEEP
+          else
+            rm -f "$$f.tmp"; echo "backup FAILED"
+          fi
           sleep 86400
         done
 
