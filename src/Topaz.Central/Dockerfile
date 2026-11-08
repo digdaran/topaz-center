@@ -20,7 +20,7 @@ COPY src/Topaz.Central/ src/Topaz.Central/
 ARG VERSION=1.0.0
 RUN dotnet publish src/Topaz.Central/Topaz.Central.csproj -c Release -o /app --no-restore -p:Version=$VERSION
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=web /web/dist ./wwwroot
