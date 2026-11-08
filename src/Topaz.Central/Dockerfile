@@ -1,5 +1,5 @@
 # Build from the repository root:  docker build -f src/Topaz.Central/Dockerfile -t topaz-central .
-FROM node:20-alpine AS web
+FROM node:25-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
