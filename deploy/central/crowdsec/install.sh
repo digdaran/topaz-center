@@ -50,10 +50,8 @@ IPS="$(sed -n 's/^ignoreip *= *//p' "$F2B_LOCAL" 2>/dev/null | tr ' ' '\n' | gre
 
 # Bans must also cover traffic Docker forwards to Caddy.
 CONF=/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
-if ! grep -qE '^\s*-\s*DOCKER-USER' "$CONF"; then
-  sed -i -E 's/^(\s*)#\s*-\s*DOCKER-USER/\1- DOCKER-USER/' "$CONF"
-  grep -qE '^\s*-\s*DOCKER-USER' "$CONF" || sed -i -E '/^iptables_chains:/a\  - DOCKER-USER' "$CONF"
-fi
+sed -i -E 's/^#?[[:space:]]*-[[:space:]]*DOCKER-USER[[:space:]]*$/  - DOCKER-USER/' "$CONF"   # uncomment / fix indent
+grep -qE '^  - DOCKER-USER$' "$CONF" || sed -i -E '/^iptables_chains:/a\  - DOCKER-USER' "$CONF"
 
 systemctl enable --now crowdsec crowdsec-firewall-bouncer >/dev/null
 systemctl restart crowdsec
