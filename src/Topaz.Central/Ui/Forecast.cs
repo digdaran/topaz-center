@@ -8,6 +8,13 @@ public static class Forecast
 {
     public sealed record Point(DateTime Date, decimal Value);
 
+    /// <summary>
+    /// Date the stock runs out at the current sales speed, or null when there is no stock or it lasts over 10 years
+    /// (Topaz keeps a placeholder stock like 999 999 for tea/coffee; such a date would also overflow DateTime).
+    /// </summary>
+    public static DateTime? StockoutDate(DateTime today, decimal stock, decimal? coverDays) =>
+        stock > 0 && coverDays is { } d and >= 0 and <= 3650 ? today.Date.AddDays((double)Math.Floor(d)) : null;
+
     public static List<Point> Daily(IReadOnlyDictionary<DateTime, decimal> history, DateTime lastActual, int days)
     {
         decimal V(DateTime d) => history.TryGetValue(d, out var v) ? v : 0;

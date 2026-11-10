@@ -43,6 +43,17 @@ public sealed class ForecastTests
         Assert.Equal(200m, f.Single(p => p.Date.DayOfWeek == DayOfWeek.Friday).Value);
         Assert.All(f.Where(p => p.Date.DayOfWeek != DayOfWeek.Friday), p => Assert.Equal(100m, p.Value));
     }
+
+    [Fact]
+    public void Stockout_date_is_empty_for_placeholder_stock()
+    {
+        var today = new DateTime(2026, 11, 10, 6, 9, 0);
+        Assert.Equal(new DateTime(2026, 11, 20), Forecast.StockoutDate(today, 30, 10.4m));
+        Assert.Null(Forecast.StockoutDate(today, 0, 5));
+        Assert.Null(Forecast.StockoutDate(today, 5, null));
+        // prod 10.11.2026: tea with stock 999 983 and 9 sold in 28 days -> 3.1 million days, used to answer 500
+        Assert.Null(Forecast.StockoutDate(today, 999_983, 3_111_058.7m));
+    }
 }
 
 public sealed class AnalyticsTests(CentralFixture fx) : IClassFixture<CentralFixture>

@@ -338,7 +338,7 @@ public static class SalesAnalyticsEndpoints
             return new
             {
                 station_id = s.StationId, station = s.Station, item_key = s.ItemKey, name = s.Name, group_name = s.GroupName, stock = s.Stock,
-                sold_28d = s.Sold28, per_day = perDay, days_of_cover = cover, stockout_date = cover is { } cv3 && s.Stock > 0 ? DateTime.UtcNow.AddDays((double)cv3).ToString("yyyy-MM-dd") : null,
+                sold_28d = s.Sold28, per_day = perDay, days_of_cover = cover, stockout_date = Forecast.StockoutDate(now, s.Stock, cover)?.ToString("yyyy-MM-dd"),
                 recommended_order = recommended, last_sale = s.LastSale, days_since_sale = daysSinceSale, status,
                 stock_value = s.Price is { } p ? Math.Round(p * Math.Max(0, s.Stock), 2) : (decimal?)null,
             };
