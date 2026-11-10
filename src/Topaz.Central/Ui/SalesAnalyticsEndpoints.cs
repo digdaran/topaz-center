@@ -281,8 +281,8 @@ public static class SalesAnalyticsEndpoints
             JOIN v_station_names sn ON sn.station_id = m.station_id
             JOIN v_item_keys k ON k.station_id = m.station_id AND k.item_id = m.item_id
             LEFT JOIN sales s ON s.station_id = m.station_id AND s.item_id = m.item_id
-            WHERE m.stock <> 0 OR COALESCE(s.sold28, 0) > 0
-            """, new { st = f.Stations }));
+            WHERE (m.stock <> 0 OR COALESCE(s.sold28, 0) > 0) AND m.stock < @placeholder
+            """, new { st = f.Stations, placeholder = PlaceholderStock }));
         var shopVsFuelT = par.Q($"""
             WITH fh AS (SELECT local_hour AS hour, count(*) FILTER (WHERE is_sale) AS orders FROM v_fuel_sales_local WHERE {AnalyticsSql.FuelWhere} GROUP BY 1),
                  sh AS (SELECT local_hour AS hour, count(DISTINCT (station_id, receipt_id)) AS receipts, sum(amount) AS revenue FROM v_shop_lines_local WHERE {AnalyticsSql.ShopWhere} GROUP BY 1)
@@ -352,6 +352,12 @@ public static class SalesAnalyticsEndpoints
             groups, items = itemRows, matrix, stock = stockRows, shop_vs_fuel = shopVsFuel, returns, write_offs = writeOffs,
         });
     }
+
+    /// <summary>
+    /// Topaz keeps a fake "endless" stock (99 999, 999 999, 9 999 999) for drinks made on the spot (coffee machines, tea).
+    /// Real shop stocks on prod stations are under 1 500; such items are left out of the stock list.
+    /// </summary>
+    internal const decimal PlaceholderStock = 10_000m;
 
     private static DateTime StartOfWeek(DateTime d) => d.Date.AddDays(-(((int)d.DayOfWeek + 6) % 7));
 }

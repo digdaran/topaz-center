@@ -171,12 +171,15 @@ public sealed class AnalyticsTests(CentralFixture fx) : IClassFixture<CentralFix
             Row("dcItems", "1", new JsonObject { ["ItemID"] = 1, ["Name"] = "Кофе", ["ItemCode"] = "", ["ItemsGrpID"] = -1 }),
             Row("dcItems", "2", new JsonObject { ["ItemID"] = 2, ["Name"] = "Трос", ["ItemCode"] = "4610000000001", ["ItemsGrpID"] = -2 }),
             Row("dcItems", "3", new JsonObject { ["ItemID"] = 3, ["Name"] = "Вода", ["ItemCode"] = "4600000000002", ["ItemsGrpID"] = -1 }),
+            Row("dcItems", "4", new JsonObject { ["ItemID"] = 4, ["Name"] = "Чай", ["ItemCode"] = "", ["ItemsGrpID"] = -1 }),
             Row("dcItemsGrps", "-1", new JsonObject { ["ItemsGrpID"] = -1, ["Name"] = "Кафе" }),
             Row("dcItemsGrps", "-2", new JsonObject { ["ItemsGrpID"] = -2, ["Name"] = "Автотовары" }),
             // stock: coffee 100, rope 5 (never sold → dead), water 30 − 28 sold = 2 (sells 1/day → low)
             Row("rgItemRests", "1", new JsonObject { ["rgItemRestID"] = 1, ["Date"] = Ts(now.AddDays(-60)), ["DocTypeID"] = 3, ["ItemID"] = 1, ["StorageID"] = 1, ["Quantity"] = 100 }),
             Row("rgItemRests", "2", new JsonObject { ["rgItemRestID"] = 2, ["Date"] = Ts(now.AddDays(-60)), ["DocTypeID"] = 3, ["ItemID"] = 2, ["StorageID"] = 1, ["Quantity"] = 5 }),
             Row("rgItemRests", "3", new JsonObject { ["rgItemRestID"] = 3, ["Date"] = Ts(now.AddDays(-60)), ["DocTypeID"] = 3, ["ItemID"] = 3, ["StorageID"] = 1, ["Quantity"] = 30 }),
+            // tea: Topaz's "endless" placeholder stock, left out of the stock list
+            Row("rgItemRests", "4", new JsonObject { ["rgItemRestID"] = 4, ["Date"] = Ts(now.AddDays(-60)), ["DocTypeID"] = 3, ["ItemID"] = 4, ["StorageID"] = 1, ["Quantity"] = 999_999 }),
         };
         var move = 10;
         for (var d = 1; d <= 28; d++)
@@ -205,5 +208,6 @@ public sealed class AnalyticsTests(CentralFixture fx) : IClassFixture<CentralFix
         Assert.Equal(2m, stock["Вода"]["days_of_cover"]!.GetValue<decimal>());
         Assert.Equal(15m, stock["Вода"]["recommended_order"]!.GetValue<decimal>()); // ceil(1 × 14 × 1.2 − 2)
         Assert.Equal(44m, stock["Кофе"]["stock"]!.GetValue<decimal>());
+        Assert.False(stock.ContainsKey("Чай"));
     }
 }
