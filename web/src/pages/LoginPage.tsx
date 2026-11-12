@@ -1,11 +1,12 @@
-import { BarChartOutlined, LockOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
+import { BarChartOutlined, KeyOutlined, LockOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Flex, Form, Input, Typography } from 'antd';
+import { Alert, Button, Card, Divider, Flex, Form, Input, Typography } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { VersionLabel } from '../components/appUpdate';
 import { safeNext } from '../lib/safeNext';
+import { getPasskey, passkeyError, passkeysSupported, RequestOptionsJson } from '../lib/webauthn';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +32,22 @@ export default function LoginPage() {
       else await done();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Passkey: no login or password — the device offers its key for this site after the fingerprint or face.
+  const passkey = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const options = await api<RequestOptionsJson>('/auth/passkey/options', { method: 'POST', body: {} });
+      const credential = await getPasskey(options);
+      await api('/auth/passkey/login', { method: 'POST', body: credential });
+      await done();
+    } catch (e) {
+      setError(passkeyError(e));
     } finally {
       setLoading(false);
     }
@@ -79,6 +96,15 @@ export default function LoginPage() {
             <Input.Password prefix={<LockOutlined />} autoComplete="current-password" size="large" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={loading}>Войти</Button>
+          {passkeysSupported() && (
+            <>
+              <Divider plain style={{ margin: '16px 0' }}>или</Divider>
+              <Button block size="large" icon={<KeyOutlined />} onClick={passkey} loading={loading}>Войти по отпечатку или лицу</Button>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, textAlign: 'center' }}>
+                Сначала добавьте устройство: Настройки → Вход и защита
+              </Typography.Paragraph>
+            </>
+          )}
         </Form>
         )}
       </Card>

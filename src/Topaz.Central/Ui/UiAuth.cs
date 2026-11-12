@@ -135,6 +135,14 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
         WHERE id = @id
         """;
 
+    /// <summary>A lost phone (owner/superadmin reset, CLI): the app's codes and all passkeys stop working; sessions end.</summary>
+    public const string ResetSecondFactorsSql = """
+        WITH gone AS (DELETE FROM user_passkeys WHERE user_id = @id)
+        UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL, totp_enabled_at = NULL,
+            recovery_codes = '{}', security_stamp = @stamp
+        WHERE id = @id
+        """;
+
     /// <summary>
     /// Second login step: a code from the app (each 30-second code once) or a recovery code (each once).
     /// A wrong code counts as a failed login, so the lockout covers guessing.
@@ -225,11 +233,13 @@ public static class UiAuthSetup
 {
     public const string CookieName = "topaz_ui";
     public const string CsrfHeader = "X-Topaz-Ui";
+    public static readonly TimeSpan SessionLifetime = TimeSpan.FromDays(7);
 
     public static void AddUiAuth(this IServiceCollection services, bool secureCookies)
     {
         services.AddSingleton<UserService>();
         services.AddSingleton<TotpProtector>();
+        services.AddSingleton<PasskeyChallenges>();
         services.AddSingleton<StationScope>();
         services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
             .AddCookie(o =>
@@ -239,8 +249,11 @@ public static class UiAuthSetup
                 o.Cookie.SameSite = SameSiteMode.Strict;
                 // Never sent over plain http; tests and a local stack without TLS set Topaz__SecureCookies=false.
                 o.Cookie.SecurePolicy = secureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
-                o.ExpireTimeSpan = TimeSpan.FromHours(12);
+                // A week since the last visit; the cookie survives closing the browser (phones drop tabs and
+                // session cookies often). Logout, a new password, blocking or a reset end it at once (security stamp).
+                o.ExpireTimeSpan = SessionLifetime;
                 o.SlidingExpiration = true;
+                o.Events.OnSigningIn = ctx => { ctx.Properties.IsPersistent = true; return Task.CompletedTask; };
                 o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = 401; return Task.CompletedTask; };
                 o.Events.OnRedirectToAccessDenied = ctx => { ctx.Response.StatusCode = 403; return Task.CompletedTask; };
                 o.Events.OnValidatePrincipal = async ctx =>

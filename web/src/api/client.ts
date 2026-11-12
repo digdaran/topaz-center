@@ -18,7 +18,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
   noteServerVersion(res.headers.get('X-Topaz-Version'));
-  if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me') {
+  // Login steps answer 401 for a wrong password, code or passkey: the login page shows it, no redirect.
+  if (res.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/auth/passkey/') && path !== '/auth/me') {
     window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
   }
   if (!res.ok) {

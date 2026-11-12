@@ -57,9 +57,9 @@ public static class UserCommands
             Console.Error.WriteLine($"User {login} not found");
             return 1;
         }
-        await c.ExecuteAsync(UserService.ResetTotpSql, new { id, stamp = Guid.NewGuid() });
+        await c.ExecuteAsync(UserService.ResetSecondFactorsSql, new { id, stamp = Guid.NewGuid() });
         await Audit.WriteAsync(db, null, "cli", "totp_reset", "user:" + id, new { login });
-        Console.WriteLine($"Two-factor login of {login} is off; it is set up again at the next login.");
+        Console.WriteLine($"Two-factor login and passkeys of {login} are off; they are set up again after the next login.");
         return 0;
     }
 

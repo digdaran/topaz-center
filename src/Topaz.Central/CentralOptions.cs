@@ -32,6 +32,11 @@ public sealed class CentralOptions
     public string TelegramApiBase { get; set; } = "https://api.telegram.org";
     /// <summary>A superadmin without two-factor login can only set it up (and log out) until it is on.</summary>
     public bool RequireTotpForSuperadmin { get; set; } = true;
+    /// <summary>
+    /// Public address of the web interface (https://topaz.example.ru) for passkeys: they belong to this domain.
+    /// Empty = the address the browser used.
+    /// </summary>
+    public string? PublicOrigin { get; set; }
     /// <summary>Session cookies only over HTTPS. False for tests and a local stack without TLS.</summary>
     public bool SecureCookies { get; set; } = true;
     /// <summary>Login attempts (password and code steps, two-factor setup) per address and minute.</summary>

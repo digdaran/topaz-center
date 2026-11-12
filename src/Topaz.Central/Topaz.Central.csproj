@@ -13,6 +13,8 @@
     <PackageReference Include="Serilog.Formatting.Compact" />
     <PackageReference Include="prometheus-net.AspNetCore" />
     <PackageReference Include="Microsoft.Extensions.Identity.Core" />
+    <!-- Version here, not in Directory.Packages.props: a change there rebuilds the agent and updates every station. -->
+    <PackageReference Include="System.Formats.Cbor" VersionOverride="8.0.2" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Data\Migrations\*.sql" />

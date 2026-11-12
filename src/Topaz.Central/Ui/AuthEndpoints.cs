@@ -30,6 +30,7 @@ public static class AuthEndpoints
             return Results.NoContent();
         });
         ui.MapGet("/auth/me", Me);
+        ui.MapUiPasskeys();
         ui.MapPost("/auth/password", ChangePassword);
         ui.MapPost("/session/organization", SwitchOrganization).RequireAuthorization(Policies.Super);
     }
@@ -69,11 +70,12 @@ public static class AuthEndpoints
         MaxAge = TotpProtector.TicketLifetime,
     };
 
-    private static async Task<IResult> SignInAsync(HttpContext ctx, UserRecord user, NpgsqlDataSource db, string action)
+    internal static async Task<IResult> SignInAsync(HttpContext ctx, UserRecord user, NpgsqlDataSource db, string action, string? method = null)
     {
         var selected = user.Role == Roles.Superadmin ? await DefaultOrganizationAsync(db) : null;
         await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, UserService.Principal(user, selected));
-        await Audit.WriteAsync(db, user.Id, user.Login, action, null, new { ip = ctx.Connection.RemoteIpAddress?.ToString() }, user.OrganizationId);
+        object details = method is null ? new { ip = ctx.Connection.RemoteIpAddress?.ToString() } : new { ip = ctx.Connection.RemoteIpAddress?.ToString(), method };
+        await Audit.WriteAsync(db, user.Id, user.Login, action, null, details, user.OrganizationId);
         return Results.Ok(new { id = user.Id, login = user.Login, name = user.Name, role = user.Role, need_code = false });
     }
 

@@ -10,7 +10,7 @@ export async function signIn(page: Page, user = login, pass = password) {
   await page.goto('/login');
   await page.getByLabel('Логин').fill(user);
   await page.getByLabel('Пароль').fill(pass);
-  await page.getByRole('button', { name: 'Войти' }).click();
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(page).not.toHaveURL(/login/);
 }
 
@@ -42,7 +42,7 @@ test('login rejects a wrong password', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('Логин').fill(login);
   await page.getByLabel('Пароль').fill('wrong-password!');
-  await page.getByRole('button', { name: 'Войти' }).click();
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
   await expect(page.getByText('Неверный логин или пароль')).toBeVisible();
 });
 

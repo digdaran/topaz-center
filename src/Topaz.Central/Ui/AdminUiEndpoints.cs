@@ -115,6 +115,7 @@ public static class AdminUiEndpoints
         var rows = await c.QueryAsync("""
             SELECT u.id, u.login, u.name, u.role, u.is_active, u.created_at, u.last_login_at, u.locked_until, u.organization_id, o.name AS organization,
                    u.totp_secret IS NOT NULL AS totp_enabled,
+                   (SELECT count(*)::int FROM user_passkeys p WHERE p.user_id = u.id) AS passkeys,
                    COALESCE(array_agg(us.station_id) FILTER (WHERE us.station_id IS NOT NULL), '{}') AS stations
             FROM users u LEFT JOIN user_stations us ON us.user_id = u.id LEFT JOIN organizations o ON o.id = u.organization_id
             WHERE @super OR u.organization_id = @org
@@ -189,9 +190,9 @@ public static class AdminUiEndpoints
                 security_stamp = @stamp
             WHERE id = @id
             """, new { id, body.Name, newRole, newOrg, body.IsActive, hash = body.Password is null ? null : UserService.HashPassword(body.Password), stamp = Guid.NewGuid() }, tx);
-        // Lost phone: the app's codes and the recovery codes stop working; the user sets it up again.
+        // Lost phone: the app's codes, the recovery codes and the passkeys stop working; the user sets them up again.
         if (body.ResetTotp == true)
-            await c.ExecuteAsync(UserService.ResetTotpSql, new { id, stamp = Guid.NewGuid() }, tx);
+            await c.ExecuteAsync(UserService.ResetSecondFactorsSql, new { id, stamp = Guid.NewGuid() }, tx);
         if (body.Stations is not null || newOrg != target.Value.Org)
         {
             await c.ExecuteAsync("DELETE FROM user_stations WHERE user_id = @id", new { id }, tx);

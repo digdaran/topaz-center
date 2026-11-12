@@ -11,8 +11,9 @@ import Organizations from './Organizations';
 import { OrganizationSettings, PaymentModes } from './OrgSettings';
 import { dateTime } from '../lib/format';
 import { TotpStatus } from '../components/TotpSetup';
+import { Passkeys } from '../components/Passkeys';
 
-interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; totp_enabled: boolean; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
+interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; totp_enabled: boolean; passkeys: number; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
 interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string; organization?: string | null }
 
 const ROLE_LABEL: Record<string, string> = { superadmin: 'Суперадминистратор', owner: 'Владелец', manager: 'Управляющий', viewer: 'Просмотр' };
@@ -69,6 +70,7 @@ function Users() {
           { title: 'Имя', dataIndex: 'name' },
           { title: 'Роль', dataIndex: 'role', render: (v) => ROLE_LABEL[v] },
           { title: 'Код при входе', dataIndex: 'totp_enabled', render: (v: boolean) => (v ? <Tag color="green">включён</Tag> : <Tag>нет</Tag>) },
+          { title: 'Вход по отпечатку', dataIndex: 'passkeys', render: (v: number) => (v ? <Tag color="green">{v} устр.</Tag> : <Tag>нет</Tag>) },
           { title: 'АЗС', dataIndex: 'stations', render: (v: string[], r) => (r.role === 'owner' || r.role === 'superadmin' ? 'все' : v.length ? v.map((s) => <Tag key={s}>{stationName(s)}</Tag>) : <Tag color="orange">не назначены</Tag>) },
           { title: 'Статус', key: 's', render: (_, r) => (!r.is_active ? <Tag>отключён</Tag> : r.locked_until && new Date(r.locked_until) > new Date() ? <Tag color="red">заблокирован</Tag> : <Tag color="green">активен</Tag>) },
           { title: 'Последний вход', dataIndex: 'last_login_at', render: (v) => dateTime(v) },
@@ -100,9 +102,9 @@ function Users() {
             <Input.Password autoComplete="new-password" />
           </Form.Item>
           {edit !== 'new' && (edit as UserRow)?.id !== me.id && <Form.Item name="is_active" label="Активен" valuePropName="checked"><Switch /></Form.Item>}
-          {edit !== 'new' && (edit as UserRow)?.totp_enabled && (edit as UserRow)?.id !== me.id && (
-            <Form.Item name="reset_totp" valuePropName="checked" label="Сбросить код при входе"
-              extra="Если пользователь потерял телефон и запасные коды: он войдёт по паролю и включит защиту заново.">
+          {edit !== 'new' && ((edit as UserRow)?.totp_enabled || (edit as UserRow)?.passkeys > 0) && (edit as UserRow)?.id !== me.id && (
+            <Form.Item name="reset_totp" valuePropName="checked" label="Сбросить код при входе и вход по отпечатку"
+              extra="Если пользователь потерял телефон: код из приложения, запасные коды и вход по отпечатку или лицу перестанут работать. Он войдёт по паролю и настроит защиту заново.">
               <Switch />
             </Form.Item>
           )}
@@ -158,6 +160,9 @@ function Profile() {
     </Card>
     <Card size="small" title="Двухфакторная защита" style={{ width: 560, maxWidth: '100%' }}>
       <TotpStatus enabled={me.totp_enabled} required={me.totp_mandatory} codesLeft={me.recovery_codes_left} />
+    </Card>
+    <Card size="small" title="Вход по отпечатку или лицу" style={{ width: 560, maxWidth: '100%' }}>
+      <Passkeys />
     </Card>
     </Flex>
   );
