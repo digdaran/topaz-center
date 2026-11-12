@@ -132,6 +132,46 @@ public sealed class ControlTests(CentralFixture fx) : IClassFixture<CentralFixtu
         Assert.Equal("closed", await fx.QueryAsync<string>("SELECT status FROM alerts WHERE id = @id", new { id }));
     }
 
+    [PostgresFact]
+    public async Task Mark_all_seen_and_close_all_follow_the_filter_and_the_scope()
+    {
+        var a = await StationAsync("АЗС-bulk-a");
+        var b = await StationAsync("АЗС-bulk-b");
+        var users = fx.Factory!.Services.GetRequiredService<UserService>();
+        async Task<HttpClient> Login(string login, string role, params Guid[] stations)
+        {
+            try { await users.CreateAsync(login, login, role, "bulk-password-1", stations); } catch (Npgsql.PostgresException) { }
+            var client = fx.Factory.CreateClient();
+            client.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
+            (await client.PostAsJsonAsync("/api/v1/ui/auth/login", new { login, password = "bulk-password-1" })).EnsureSuccessStatusCode();
+            return client;
+        }
+        var owner = await Login("bulk-owner", Roles.Owner);
+        (await owner.PostAsync("/api/v1/ui/alerts/run", null)).EnsureSuccessStatusCode();
+        var period = $"from={DateTime.UtcNow.AddDays(-40):yyyy-MM-dd}&to={DateTime.UtcNow.AddDays(1):yyyy-MM-dd}";
+        Task<long> Count(Guid st, string status) =>
+            fx.QueryAsync<long>("SELECT count(*) FROM alerts WHERE station_id = @st AND status = @status", new { st, status });
+        var newA = await Count(a, "new");
+        Assert.True(newA >= 3);
+        var newB = await Count(b, "new");
+
+        // «Просмотреть все» with a rule filter touches only that rule at that station.
+        var r = await owner.PostAsJsonAsync($"/api/v1/ui/alerts/status?stations={a}&{period}&rule=counter_gap", new { status = "seen" });
+        Assert.Equal(1, (await r.Content.ReadFromJsonAsync<JsonObject>())!["changed"]!.GetValue<int>());
+        Assert.Equal("seen", await fx.QueryAsync<string>("SELECT status FROM alerts WHERE station_id = @a AND rule_code = 'counter_gap'", new { a }));
+        Assert.Equal(newA - 1, await Count(a, "new"));
+
+        // A manager of station A cannot touch B; «Закрыть все» closes all of A (new and seen), B stays as it was.
+        var manager = await Login("bulk-manager", Roles.Manager, a);
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.PostAsJsonAsync($"/api/v1/ui/alerts/status?stations={b}&{period}", new { status = "closed" })).StatusCode);
+        r = await manager.PostAsJsonAsync($"/api/v1/ui/alerts/status?{period}", new { status = "closed" });
+        Assert.Equal(newA, (await r.Content.ReadFromJsonAsync<JsonObject>())!["changed"]!.GetValue<int>());
+        Assert.Equal(0, await fx.QueryAsync<long>("SELECT count(*) FROM alerts WHERE station_id = @a AND status <> 'closed'", new { a }));
+        Assert.Equal("bulk-manager", await fx.QueryAsync<string>("SELECT DISTINCT status_by FROM alerts WHERE station_id = @a", new { a }));
+        Assert.Equal(newB, await Count(b, "new"));
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.PostAsJsonAsync($"/api/v1/ui/alerts/status?{period}", new { status = "new" })).StatusCode);
+    }
+
     /// <summary>
     /// A station uploading its history sends the newest shifts first: the counter of shift 3 must not be compared with
     /// shift 1 while shift 2 is missing. A totalizer passing 999 999,99 → 0 is not minus a million litres. An alert the

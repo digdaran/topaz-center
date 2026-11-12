@@ -1,9 +1,10 @@
 import { DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, isOwner, isSuper, useFiltered } from '../api/client';
+import { api, isOwner, isSuper, useFilter, useFiltered } from '../api/client';
+import { filterQuery } from '../lib/filter';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
 import { PageTitle, QueryState } from '../components/ui';
@@ -26,6 +27,23 @@ function Alerts() {
     qc.invalidateQueries({ queryKey: ['/alerts'] });
     qc.invalidateQueries({ queryKey: ['alerts-summary'] });
   };
+  const [filter] = useFilter();
+  const { message } = App.useApp();
+  const [bulk, setBulk] = useState<string | null>(null);
+  // «Просмотреть все» / «Закрыть все»: every alert of the current filter (АЗС, период, важность, правило), not just this page.
+  const setAll = async (s: 'seen' | 'closed') => {
+    setBulk(s);
+    try {
+      const r = await api<{ changed: number }>(`/alerts/status?${filterQuery(filter, { severity, rule })}`, { method: 'POST', body: { status: s } });
+      message.success(`${s === 'seen' ? 'Просмотрено' : 'Закрыто'} событий: ${r.changed}`);
+      qc.invalidateQueries({ queryKey: ['/alerts'] });
+      qc.invalidateQueries({ queryKey: ['alerts-summary'] });
+    } finally {
+      setBulk(null);
+    }
+  };
+  const newCount = (data?.alerts ?? []).filter((r) => r.status === 'new').length;
+  const openCount = (data?.alerts ?? []).filter((r) => r.status !== 'closed').length;
   return (
     <>
       <FilterBar granularity={false} compare={false} />
@@ -33,6 +51,14 @@ function Alerts() {
         <Segmented value={status} onChange={(v) => setStatus(String(v))} options={[{ value: 'open', label: 'Открытые' }, { value: 'new', label: 'Новые' }, { value: 'closed', label: 'Закрытые' }, { value: 'all', label: 'Все' }]} />
         <Select allowClear placeholder="Важность" style={{ width: 150 }} value={severity} onChange={setSeverity} options={Object.entries(SEVERITY).map(([k, v]) => ({ value: k, label: v.label }))} />
         <Select allowClear placeholder="Правило" style={{ width: 300 }} value={rule} onChange={setRule} options={(data?.by_rule ?? []).map((r) => ({ value: r.rule_code, label: `${r.title} (${r.total})` }))} />
+        <Button disabled={newCount === 0} loading={bulk === 'seen'} onClick={() => setAll('seen')}>Просмотреть все</Button>
+        <Popconfirm
+          title="Закрыть все события?"
+          description="Будут закрыты все незакрытые события за выбранный период по выбранным АЗС, важности и правилу."
+          okText="Закрыть все" cancelText="Отмена" disabled={openCount === 0}
+          onConfirm={() => setAll('closed')}>
+          <Button disabled={openCount === 0} loading={bulk === 'closed'}>Закрыть все</Button>
+        </Popconfirm>
       </Space>
       <QueryState error={error} loading={isLoading}>
         <Table size="small" rowKey="id" dataSource={data?.alerts} pagination={{ pageSize: 50 }} scroll={{ x: 1000 }} locale={{ emptyText: 'Событий нет' }}

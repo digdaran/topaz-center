@@ -23,6 +23,7 @@ public static class ControlEndpoints
         ui.MapGet("/alerts", Alerts);
         ui.MapGet("/alerts/summary", Summary);
         ui.MapPost("/alerts/{id:long}/status", SetStatus);
+        ui.MapPost("/alerts/status", SetStatusAll);
         ui.MapPost("/alerts/run", async (AnomalyDetector d, CancellationToken ct) => Results.Ok(new { found = await d.RunAsync(ct) })).RequireAuthorization(Policies.Owner);
 
         var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
@@ -188,6 +189,29 @@ public static class ControlEndpoints
         if (found[0].Station is { } station ? !await scope.CanSeeAsync(user, station) : !user.IsInRole(Roles.Superadmin)) return Results.NotFound();
         await c.ExecuteAsync("UPDATE alerts SET status = @s, status_by = @by WHERE id = @id", new { id, s = body.Status, by = user.Identity?.Name });
         return Results.NoContent();
+    }
+
+    /// <summary>
+    /// «Просмотреть все» / «Закрыть все»: the alerts the list shows for the same filter (stations, period, severity, rule):
+    /// seen = new ones become seen, closed = every not closed one is closed. Answers how many changed.
+    /// </summary>
+    private static async Task<IResult> SetStatusAll(HttpContext ctx, AlertStatusBody body, StationScope scope, UiDb db, string? severity, string? rule)
+    {
+        if (body.Status is not ("seen" or "closed")) return Results.Problem(statusCode: 400, title: "status: seen | closed");
+        var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
+        if (error is not null) return error;
+        var f = fp!;
+        var owner = ctx.User.IsInRole(Roles.Superadmin) && ctx.Request.Query["stations"].Count == 0; // same rule as the list
+        await using var c = await db.OpenConnectionAsync();
+        var changed = await c.ExecuteAsync("""
+            UPDATE alerts a SET status = @s, status_by = @by
+            WHERE (a.station_id = ANY(@st) OR (a.station_id IS NULL AND @owner))
+              AND COALESCE(a.occurred_at, a.detected_at) >= @utcFrom AND COALESCE(a.occurred_at, a.detected_at) < @utcTo
+              AND (@severity::text IS NULL OR a.severity = @severity) AND (@rule::text IS NULL OR a.rule_code = @rule)
+              AND CASE WHEN @s = 'seen' THEN a.status = 'new' ELSE a.status <> 'closed' END
+            """, new { s = body.Status, by = ctx.User.Identity?.Name, st = f.Stations, f.UtcFrom, f.UtcTo, owner,
+                       severity = string.IsNullOrEmpty(severity) ? null : severity, rule = string.IsNullOrEmpty(rule) ? null : rule });
+        return Results.Ok(new { changed });
     }
 
     // ---------------------------------------------------------------- rules and channels (owner)
