@@ -30,6 +30,11 @@ public sealed class CentralOptions
     /// <summary>Telegram bot token (from @BotFather) for alert notifications; empty = notifications off.</summary>
     public string? TelegramBotToken { get; set; }
     public string TelegramApiBase { get; set; } = "https://api.telegram.org";
+    /// <summary>
+    /// HTTP proxy for Telegram only (e.g. http://telegram-proxy:3128, the xray container of the compose stack),
+    /// for servers where api.telegram.org is not reachable directly. Empty = direct.
+    /// </summary>
+    public string? TelegramProxy { get; set; }
     /// <summary>The bot reads "/start &lt;code&gt;" (Telegram by link) by long polling; false = off (tests drive it by hand).</summary>
     public bool TelegramPolling { get; set; } = true;
     /// <summary>How long one getUpdates call waits for news.</summary>

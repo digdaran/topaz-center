@@ -13,6 +13,8 @@ cd "$(dirname "$0")"
 envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | sed -E "s/^['\"]//; s/['\"]$//"; }
 DOMAIN="$(envval DOMAIN)"
 TOKEN="$(envval TOPAZ_TELEGRAM_BOT_TOKEN)"
+# Telegram through the telegram-proxy container when it is configured (published on 127.0.0.1:3128).
+TG_PROXY=(); [[ -n "$(envval TOPAZ_TELEGRAM_PROXY)" ]] && TG_PROXY=(-x http://127.0.0.1:3128)
 CHATS="$(envval TOPAZ_WATCHDOG_TELEGRAM_CHAT)"
 DISK_PCT="$(envval TOPAZ_WATCHDOG_DISK_PCT)"; DISK_PCT="${DISK_PCT:-85}"
 STATE_DIR=/var/lib/topaz-watchdog
@@ -23,7 +25,7 @@ notify() {
   [[ -n "$TOKEN" && -n "$CHATS" ]] || return 0
   local chat
   for chat in ${CHATS//,/ }; do
-    curl -fsS -m 20 -o /dev/null "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+    curl -fsS -m 20 "${TG_PROXY[@]}" -o /dev/null "https://api.telegram.org/bot${TOKEN}/sendMessage" \
       --data-urlencode "chat_id=${chat}" --data-urlencode "text=$1" \
       || logger -t topaz-watchdog "telegram send to ${chat} failed"
   done

@@ -45,11 +45,28 @@ services:
       Topaz__BootstrapOwnerLogin: ${TOPAZ_BOOTSTRAP_OWNER_LOGIN:-}
       Topaz__BootstrapOwnerPassword: ${TOPAZ_BOOTSTRAP_OWNER_PASSWORD:-}
       Topaz__TelegramBotToken: ${TOPAZ_TELEGRAM_BOT_TOKEN:-}
+      Topaz__TelegramProxy: ${TOPAZ_TELEGRAM_PROXY:-}   # http://telegram-proxy:3128 with the telegram-proxy profile
     volumes:
       - keys:/keys   # cookie encryption keys: sessions survive restarts
     networks: [backend, frontend]
     read_only: true
     tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  # Telegram through a VPN server (xray, config from a Remnawave subscription: telegram-proxy/make-config.py),
+  # for hosts where api.telegram.org is blocked. Started only with COMPOSE_PROFILES=telegram-proxy in .env.
+  telegram-proxy:
+    image: ghcr.io/xtls/xray-core:26.10.21
+    profiles: [telegram-proxy]
+    restart: unless-stopped
+    command: ["run", "-c", "/etc/xray/config.json"]
+    volumes:
+      - ./telegram-proxy/config.json:/etc/xray/config.json:ro
+    ports:
+      - "127.0.0.1:3128:3128"   # the host's watchdog sends its Telegram alerts through it
+    networks: [frontend]
+    read_only: true
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 

@@ -33,6 +33,23 @@ docker compose exec -it central dotnet Topaz.Central.dll create-user --login adm
 
 Для уведомлений в Telegram впишите токен бота в `TOPAZ_TELEGRAM_BOT_TOKEN` и выполните `docker compose up -d`, затем подключите чаты по ссылке: лично — «Настройки → Вход и защита → Уведомления в Telegram», группу — «Контроль → Уведомления → Добавить бота в группу». Подробности — в [docs/web.md](../../docs/web.md).
 
+### Telegram через VPN (если api.telegram.org заблокирован)
+
+Контейнер `telegram-proxy` (xray) — HTTP-прокси только для Telegram; наружу он ходит через серверы подписки Remnawave (или любой xray-подписки: VLESS/Trojan/Shadowsocks, Reality/TLS, xhttp/ws/grpc). Через него идут запросы сервиса к Bot API и уведомления сторожа; остальной трафик — напрямую.
+
+```bash
+# в .env:
+#   TOPAZ_TELEGRAM_PROXY_SUBSCRIPTION=<ссылка подписки>
+#   COMPOSE_PROFILES=telegram-proxy
+#   TOPAZ_TELEGRAM_PROXY=http://telegram-proxy:3128
+python3 telegram-proxy/make-config.py --list   # серверы подписки
+python3 telegram-proxy/make-config.py          # telegram-proxy/config.json (все серверы, балансировка)
+docker compose up -d
+curl -x http://127.0.0.1:3128 -s -o /dev/null -w "%{http_code}\n" https://api.telegram.org/   # 302 = работает
+```
+
+xray раз в 5 минут проверяет через каждый сервер доступность `api.telegram.org` и ходит через самый быстрый работающий. Сменились серверы в подписке — повторите `make-config.py` и `docker compose restart telegram-proxy`. `config.json` содержит ключи серверов: он не в git и читается только пользователем контейнера.
+
 ## Работа
 
 ```bash

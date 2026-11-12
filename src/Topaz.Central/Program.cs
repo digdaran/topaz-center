@@ -46,8 +46,15 @@ builder.Services.AddSingleton<Topaz.Central.Updates.AgentReleases>();
 builder.Services.AddSingleton<RollupRefresher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RollupRefresher>());
 builder.Services.AddHostedService<BatchProcessor>();
-builder.Services.AddHttpClient("telegram", c => c.Timeout = TimeSpan.FromSeconds(20));
-builder.Services.AddHttpClient("telegram-poll", c => c.Timeout = TimeSpan.FromSeconds(options.TelegramPollSeconds + 20));
+// Only these clients go through Topaz__TelegramProxy; everything else stays direct.
+void ViaTelegramProxy(IHttpClientBuilder b)
+{
+    if (string.IsNullOrWhiteSpace(options.TelegramProxy)) return;
+    var proxy = new System.Net.WebProxy(options.TelegramProxy);
+    b.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { Proxy = proxy, UseProxy = true });
+}
+ViaTelegramProxy(builder.Services.AddHttpClient("telegram", c => c.Timeout = TimeSpan.FromSeconds(20)));
+ViaTelegramProxy(builder.Services.AddHttpClient("telegram-poll", c => c.Timeout = TimeSpan.FromSeconds(options.TelegramPollSeconds + 20)));
 builder.Services.AddSingleton<TelegramApi>();
 builder.Services.AddSingleton<TelegramBot>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBot>());
