@@ -74,7 +74,7 @@ public static class Projections
         new()
         {
             Dataset = "flOrders", Table = "fuel_sales", Key = [B("order_id", "OrderID")],
-            Columns = [B("session_id", "SessionID"), I("order_num", "OrderNum"), Ts("sold_at", "DateTime"), B("fuel_id", "FuelID"),
+            Columns = [B("session_id", "SessionID"), B("local_session_id", "LocalSessionID"), I("order_num", "OrderNum"), Ts("sold_at", "DateTime"), B("fuel_id", "FuelID"),
                        B("tank_id", "TankID"), B("hose_id", "HoseID"), B("payment_mode_id", "PaymentModeID"), N("volume", "Volume"),
                        N("volume_ordered", "VolumeOrdered"), N("price", "Price"), N("amount", "Amount"), N("amount_cash", "AmountCash"),
                        N("amount_cashless", "AmountCashless"), N("amount_discount", "AmountDiscount"), N("amount_bonuses", "AmountBonuses"),
@@ -101,7 +101,7 @@ public static class Projections
         new()
         {
             Dataset = "flRecepts", Table = "fuel_receipts", Key = [B("receipt_id", "ReceptID")],
-            Columns = [B("session_id", "SessionID"), Ts("received_at", "ReceptDateTime"), B("tank_id", "TankID"), B("fuel_id", "FuelID"),
+            Columns = [B("session_id", "SessionID"), B("local_session_id", "LocalSessionID"), Ts("received_at", "ReceptDateTime"), B("tank_id", "TankID"), B("fuel_id", "FuelID"),
                        B("partner_id", "PartnerID"), T("doc_number", "DocNumber"), T("car_number", "DocCarNumber"),
                        N("doc_volume", "DocVolume"), N("doc_mass", "DocMass"), N("doc_density", "DocDensity"),
                        N("doc_temperature", "DocTemperature"), N("doc_price", "DocFuelPrice"), N("measured_volume", "MeasuredVolume"),
@@ -110,7 +110,7 @@ public static class Projections
         new()
         {
             Dataset = "trFastTradeH", Table = "shop_receipts", Key = [B("receipt_id", "FastTradeHID")],
-            Columns = [B("session_id", "SessionID"), I("doc_num", "NDoc"), Ts("doc_at", "DateDoc"), Bo("is_return", "IsReturn"),
+            Columns = [B("session_id", "SessionID"), B("local_session_id", "LocalSessionID"), I("doc_num", "NDoc"), Ts("doc_at", "DateDoc"), Bo("is_return", "IsReturn"),
                        B("cash_id", "CashID"), B("storage_id", "StorageID"), B("partner_id", "PartnerID"),
                        B("payment_mode_id", "PaymentModeID"), N("amount_cash", "AmountCash"), N("amount_cashless", "AmountCashless"),
                        N("amount_discount", "AmountDiscount"), N("amount_bonuses", "AmountBonuses"), I("status", "Status"),
@@ -140,6 +140,24 @@ public static class Projections
             Dataset = "sysEvents", Table = "station_events", Key = [B("event_id", "EventID")],
             Columns = [Ts("occurred_at", "DateTime"), B("category_id", "EventCategoryID"), T("message", "EventString"),
                        T("computer_name", "ComputerName"), T("source", "EventSource"), T("object", "EventObject")],
+        },
+        // Workplaces (1.11): several workplaces sell in one shift, each with its own local shift and operator.
+        new()
+        {
+            Dataset = "sysWorkbenchs", Table = "workplaces", Key = [B("workbench_id", "WorkbenchID")],
+            Columns = [T("name", "Name"), T("computer_name", "ComputerName"), I("type_id", "WorkbenchTypeID"), Bo("is_deleted", "Deleted")],
+        },
+        new()
+        {
+            Dataset = "sysLocalSessions", Table = "workplace_shifts", Key = [B("local_session_id", "LocalSessionID")],
+            Columns = [B("session_id", "SessionID"), B("workbench_id", "WorkbenchID"), B("user_id", "UserID"),
+                       Ts("started_at", "StartDateTime"), Ts("ended_at", "EndDateTime")],
+        },
+        new()
+        {
+            // Only the login: the other columns of sysUsers are not needed (the secret ones are not even exported).
+            Dataset = "sysUsers", Table = "station_users", Key = [B("user_id", "UserID")],
+            Columns = [T("login", "Login"), Bo("is_deleted", "Deleted")],
         },
     }.ToDictionary(p => p.Dataset, StringComparer.Ordinal);
 }

@@ -20,7 +20,7 @@
 | Таблица | PK | Смысл |
 |---|---|---|
 | `sysSessions` | `SessionID` | смена: `SessionNum`, `UserName`, `StartDateTime`, `EndDateTime` (NULL — открыта) |
-| `sysLocalSessions` | `LocalSessionID` | смена рабочего места (`SessionID`, `WorkbenchID`) |
+| `sysLocalSessions` | `LocalSessionID` | смена рабочего места (`SessionID`, `WorkbenchID`, `UserID`) — см. «Рабочие места» |
 | `flOrders` | `OrderID` | отпуск топлива: `SessionID`, `DateTime`, `FuelID`, `TankID`, `HoseID`, `PaymentModeID`, `Volume`, `Price`, `Amount`, `AmountCash/Cashless/Discount/Bonuses`, `CardCode`, `FiscalNumber`, `StatusOrder` |
 | `flOrdersExtInfo` | `PumpInfoID` | данные ТРК по заказу (`OrderID` → `flOrders`) |
 | `flSesTanks` | `SessionID, TankID` | резервуар за смену: начало, приход, отпуск, факт, потери, плотность, температура, уровень |
@@ -37,6 +37,16 @@
 | `ProgConfig` | `Name` | настройки: `AZSCode`, `AZSName`, `Version`, … |
 
 `sysDocTypes`: 1 приходная накладная, 2 расходная, 3 ввод остатков товаров, 4 перемещение, 5 чек быстрой продажи, 6 отпуск топлива, 7 приём топлива, 8 ввод остатков взаиморасчётов, 9–10 приём и отпуск через стояки, 11 технический возврат, 12 оприходование излишков, 13 списание потерь, 14–15 внесение и выдача наличных, 16 отпуск газа, 17–18, 21 операции с картами, 19–20 акты оприходования и списания ТМЦ.
+
+## Рабочие места (проверено 12.11.2026 на АЗС «Дизель»)
+
+- В Топазе на одной АЗС может работать несколько рабочих мест (`sysWorkbenchs`, тип — `sysWorkbenchTypes`: 0 «Основное», 3 «Дополнительное», 4 «Доп. торговли», 5 «Администратора»). WorkbenchID 1 «Exchange» — служебное (обмен), смен на нём нет.
+- **Смена одна** (`sysSessions`), но каждое рабочее место открывает свою **локальную смену** (`sysLocalSessions`: `SessionID`, `WorkbenchID`, `UserID`, своё начало и конец). За местом может смениться оператор посреди смены — тогда у места две локальные смены.
+- Каждая операция знает свою локальную смену: `flOrders`, `trFastTradeH`, `flRecepts`, `flTechReturns` — колонка `LocalSessionID`. На «Дизеле» все 311 тыс. заказов и 74 тыс. чеков ссылаются на локальную смену той же смены и попадают в её время.
+- `sysSessions.UserName` — оператор, открывший смену на основном месте. На «Дизеле» через доп. место (OPERATOR2) идёт больше половины продаж, и в 75 из 841 смены там работал другой человек — поэтому оператор продажи берётся из локальной смены.
+- Имя оператора — `sysUsers.Login` (= `sysSessions.UserName`); `sysUsers.Name` у всех «Пользователь 1».
+- У каждого места своя ККТ: на «Дизеле» основное → CashID 2 «ФР Атол (ФЗ 54)», доп. → CashID 3 «КАССА2»; внесения и выдачи в `rgCashes` по каждой кассе отдельно. Обоим местам доступны все рукава, счётчики рукавов и резервуары — общие на смену.
+- В центре: `workplaces`, `workplace_shifts`, `station_users`, колонка `local_session_id` в `fuel_sales`/`shop_receipts`/`fuel_receipts`, представление `v_workplace_shifts`, функция `shift_operators_text` (миграция `030_workplaces.sql`).
 
 ## Что выгружается
 

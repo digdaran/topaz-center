@@ -76,6 +76,11 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
         ("Автотовары", "Трос буксировочный", "4610024550017", 990, 0.15), ("Автотовары", "Набор автомобилиста (не продаётся)", "4610024559999", 3500, 0),
     ];
 
+    // The highway station sells from two workplaces (main + additional), like АЗС «Дизель»; sometimes with two operators.
+    private readonly bool _twoPlaces = p.Name.Contains("Трасса", StringComparison.Ordinal);
+    private int _lsMain, _lsExtra;
+    private int Local() => _twoPlaces && rnd.NextDouble() < 0.55 ? _lsExtra : _lsMain;
+
     private int _orderId, _sessionId, _ftH, _ftD, _rgItem, _rgCash, _receiptId, _eventId, _billH, _billD;
 
     public List<RecordChange> Generate(DateTime from, DateTime to)
@@ -92,6 +97,11 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
         Ref("dcAgents", "0", new() { ["AgentID"] = 0, ["Name"] = " <Не выбрано>", ["PartnerID"] = 0 });
         foreach (var (id, name) in new[] { (1, "Приходная накладная"), (3, "Ввод остатков товаров"), (5, "Чек быстрой продажи"), (6, "Отпуск топлива"), (7, "Прием топлива"), (14, "Внесение наличных"), (15, "Выдача наличных") })
             Ref("sysDocTypes", $"{id}", new() { ["DocTypeID"] = id, ["Name"] = name });
+        Ref("sysWorkbenchs", "2", new() { ["WorkbenchID"] = 2, ["Name"] = "Основное рабочее место", ["ComputerName"] = "OPERATOR1", ["WorkbenchTypeID"] = 0, ["Deleted"] = 0 });
+        if (_twoPlaces)
+            Ref("sysWorkbenchs", "3", new() { ["WorkbenchID"] = 3, ["Name"] = "Дополнительное рабочее место", ["ComputerName"] = "OPERATOR2", ["WorkbenchTypeID"] = 3, ["Deleted"] = 0 });
+        for (var i = 0; i < Operators.Length; i++)
+            Ref("sysUsers", $"{i + 101}", new() { ["UserID"] = i + 101, ["Name"] = "Пользователь 1", ["Login"] = Operators[i], ["Deleted"] = 0 });
         Ref("sysEventCategores", "1", new() { ["EventCategoryID"] = 1, ["EventCategoryName"] = "Смена" });
         Ref("sysEventCategores", "2", new() { ["EventCategoryID"] = 2, ["EventCategoryName"] = "Приём топлива" });
 
@@ -142,6 +152,22 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 ["StartDateTime"] = Ts(start.AddMinutes(rnd.Next(0, 5))), ["EndDateTime"] = sessionEnd is null ? null : Ts(sessionEnd.Value), ["Deleted"] = 0,
             });
             Event(start, 1, $"Открытие смены №{_sessionId}. Оператор: {user}");
+            // Local shifts of the workplaces; on a quarter of the days a second operator works at the additional one.
+            var userIdx = (opIndex + day) % Operators.Length;
+            _lsMain = _twoPlaces ? _sessionId * 2 : _sessionId;
+            _lsExtra = _sessionId * 2 + 1;
+            Add("sysLocalSessions", $"{_lsMain}", _sessionId, new()
+            {
+                ["LocalSessionID"] = _lsMain, ["SessionID"] = _sessionId, ["WorkbenchID"] = 2, ["UserID"] = userIdx + 101, ["RegFault"] = 0,
+                ["StartDateTime"] = Ts(start.AddMinutes(5)), ["EndDateTime"] = sessionEnd is null ? null : Ts(sessionEnd.Value),
+            });
+            if (_twoPlaces)
+                Add("sysLocalSessions", $"{_lsExtra}", _sessionId, new()
+                {
+                    ["LocalSessionID"] = _lsExtra, ["SessionID"] = _sessionId, ["WorkbenchID"] = 3, ["RegFault"] = 0,
+                    ["UserID"] = (rnd.NextDouble() < 0.25 ? (userIdx + 1) % Operators.Length : userIdx) + 101,
+                    ["StartDateTime"] = Ts(start.AddMinutes(8)), ["EndDateTime"] = sessionEnd is null ? null : Ts(sessionEnd.Value.AddMinutes(-1)),
+                });
 
             // price changes (inflation, occasional discounting), weekly-ish chance
             foreach (var f in fuels)
@@ -187,7 +213,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                             ["Price"] = fuel.Price, ["PricePump"] = fuel.Price, ["Amount"] = amount, ["AmountCash"] = cashless ? 0 : (aborted ? 0 : prepaid ?? amount),
                             ["AmountCashless"] = cashless ? amount : 0, ["AmountDiscount"] = Math.Round(vol * discountPerL, 2), ["AmountBonuses"] = 0, ["AccruedBonuses"] = 0,
                             ["Mass"] = 0, ["Density"] = 0, ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["FiscalNumber"] = aborted ? 0 : _orderId,
-                            ["DriverID"] = 0, ["AgentID"] = 0, ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = _sessionId,
+                            ["DriverID"] = 0, ["AgentID"] = 0, ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = Local(),
                         });
                         hose.Counter += vol; fuel.Stock -= vol; pumped[fuel.Id] += vol;
                         if (!cashless && amount > 0)
@@ -213,7 +239,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                                 ["OrderID"] = _orderId, ["SessionID"] = _sessionId, ["OrderNum"] = orderNum, ["DateTime"] = Ts(at), ["TankID"] = fuel.Id, ["FuelID"] = fuel.Id,
                                 ["HoseID"] = hose.Id, ["PaymentModeID"] = 3, ["Remark"] = "", ["Volume"] = 10m, ["VolumeOrdered"] = 10m, ["Price"] = fuel.Price, ["PricePump"] = fuel.Price,
                                 ["Amount"] = 0, ["AmountCash"] = 0, ["AmountCashless"] = 0, ["AmountDiscount"] = 0, ["AmountBonuses"] = 0, ["Mass"] = 0, ["Density"] = 0,
-                                ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = _sessionId,
+                                ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = Local(),
                             });
                             hose.Counter += 10; fuel.Stock -= 10; pumped[fuel.Id] += 10;
                         }));
@@ -246,7 +272,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                     {
                         ["FastTradeHID"] = _ftH, ["SessionID"] = _sessionId, ["NDoc"] = _ftH, ["DateDoc"] = Ts(at), ["IsReturn"] = 0, ["CashID"] = 1, ["StorageID"] = 1,
                         ["PartnerID"] = 1, ["PaymentModeID"] = cashless ? 2 : 1, ["AmountCash"] = cashless ? 0 : total, ["AmountCashless"] = cashless ? total : 0,
-                        ["AmountDiscount"] = 0, ["AmountBonuses"] = 0, ["Status"] = 0, ["FiscalNumber"] = _ftH, ["LocalSessionID"] = _sessionId,
+                        ["AmountDiscount"] = 0, ["AmountBonuses"] = 0, ["Status"] = 0, ["FiscalNumber"] = _ftH, ["LocalSessionID"] = Local(),
                     });
                     foreach (var (it, qty) in lines)
                     {
@@ -282,7 +308,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                             ["ReceptID"] = _receiptId, ["SessionID"] = _sessionId, ["ReceptDateTime"] = Ts(at), ["TankID"] = fuel.Id, ["FuelID"] = fuel.Id, ["PartnerID"] = 1,
                             ["DocNumber"] = $"ТТН-{at:yyMMdd}-{_receiptId}", ["DocCarNumber"] = $"А{rnd.Next(100, 999)}ВС{rnd.Next(10, 99)}", ["DocVolume"] = docVolume,
                             ["MeasuredVolume"] = measured, ["Discrepancy"] = disc, ["DocMass"] = Math.Round(docVolume * 0.74m), ["DocDensity"] = 0.7400m, ["DocTemperature"] = 12.0m,
-                            ["DocFuelPrice"] = 0, ["ReceptNumber"] = _receiptId, ["LocalSessionID"] = _sessionId,
+                            ["DocFuelPrice"] = 0, ["ReceptNumber"] = _receiptId, ["LocalSessionID"] = Local(),
                         });
                         fuel.Stock += measured; received[fuel.Id] += measured;
                         Event(at, 2, $"Приём топлива {fuel.Name}: {docVolume} л по документу, факт {measured} л");

@@ -153,8 +153,9 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         Insert + $"""
         SELECT x.station_id, 'aborted_share', x.session_id::text, r.severity,
                'Прерванные наливы: ' || x.aborted || ' из ' || x.total || ' (' || round(100.0 * x.aborted / x.total) || '%)',
-               format('Смена №%s, оператор %s.', s.session_num, s.user_name), round(100.0 * x.aborted / x.total, 1), x.session_id, s.ended_at
-        FROM (SELECT station_id, session_id, count(*) FILTER (WHERE volume = 0) AS aborted, count(*) AS total FROM fuel_sales GROUP BY 1, 2) x
+               format('Смена №%s, %s.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals)), round(100.0 * x.aborted / x.total, 1), x.session_id, s.ended_at
+        FROM (SELECT station_id, session_id, count(*) FILTER (WHERE volume = 0) AS aborted, count(*) AS total,
+                     array_agg(DISTINCT local_session_id) FILTER (WHERE volume = 0) AS locals FROM fuel_sales GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
         {string.Format(Rule, "aborted_share", "x")}
         WHERE x.aborted >= 5 AND 100.0 * x.aborted / x.total > r.threshold AND {Recent}
@@ -163,9 +164,10 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Unpaid dispensing (tech pumping, overflow) in a closed shift.
         Insert + $"""
         SELECT x.station_id, 'service_volume', x.session_id::text, r.severity,
-               'Отпуск без оплаты: ' || fmt_num(x.liters) || ' л за смену', format('Смена №%s, оператор %s, операций: %s.', s.session_num, s.user_name, x.ops),
+               'Отпуск без оплаты: ' || fmt_num(x.liters) || ' л за смену', format('Смена №%s, %s, операций: %s.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), x.ops),
                x.liters, x.session_id, s.ended_at
-        FROM (SELECT station_id, session_id, sum(volume) AS liters, count(*) AS ops FROM fuel_sales WHERE payment_kind = 'none' AND volume > 0 GROUP BY 1, 2) x
+        FROM (SELECT station_id, session_id, sum(volume) AS liters, count(*) AS ops, array_agg(DISTINCT local_session_id) AS locals
+              FROM fuel_sales WHERE payment_kind = 'none' AND volume > 0 GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
         {string.Format(Rule, "service_volume", "x")}
         WHERE x.liters > r.threshold AND {Recent}
@@ -174,9 +176,11 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Discounts share of fuel revenue in a closed shift.
         Insert + $"""
         SELECT x.station_id, 'discount_share', x.session_id::text, r.severity,
-               'Скидки ' || fmt_num(round(100 * x.discounts / x.revenue, 1)) || '% выручки смены', format('Смена №%s, оператор %s: скидки %s ₽.', s.session_num, s.user_name, fmt_num(x.discounts)),
+               'Скидки ' || fmt_num(round(100 * x.discounts / x.revenue, 1)) || '% выручки смены', format('Смена №%s, %s: скидки %s ₽.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), fmt_num(x.discounts)),
                round(100 * x.discounts / x.revenue, 2), x.session_id, s.ended_at
-        FROM (SELECT station_id, session_id, sum(fuel_discount(amount_discount, price, price_pump, volume)) AS discounts, sum(amount) AS revenue FROM fuel_sales GROUP BY 1, 2) x
+        FROM (SELECT station_id, session_id, sum(fuel_discount(amount_discount, price, price_pump, volume)) AS discounts, sum(amount) AS revenue,
+                     array_agg(DISTINCT local_session_id) FILTER (WHERE fuel_discount(amount_discount, price, price_pump, volume) > 0) AS locals
+              FROM fuel_sales GROUP BY 1, 2) x
         JOIN shifts s ON s.station_id = x.station_id AND s.session_id = x.session_id AND s.ended_at IS NOT NULL
         {string.Format(Rule, "discount_share", "x")}
         WHERE x.revenue > 0 AND 100 * x.discounts / x.revenue > r.threshold AND {Recent}
@@ -188,7 +192,8 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         Insert + $"""
         SELECT x.station_id, 'price_mismatch', x.session_id::text, r.severity,
                'Цена отпуска не сходится: ' || x.orders || ' отпуск(ов)',
-               format('Смена №%s: %s. Например, отпуск №%s: %s л, цена заказа %s ₽, на колонке %s ₽, сумма %s ₽.', s.session_num,
+               format('Смена №%s, %s: %s. Например, отпуск №%s: %s л, цена заказа %s ₽, на колонке %s ₽, сумма %s ₽.', s.session_num,
+                      shift_operators_text(x.station_id, x.session_id, x.locals),
                       concat_ws(', ', CASE WHEN x.overcharge > 0 THEN 'переплата клиента — ' || x.overcharge END,
                                       CASE WHEN x.amount_off > 0 THEN 'сумма ≠ литры × цена колонки — ' || x.amount_off END,
                                       CASE WHEN x.bypass > 0 THEN 'скидка мимо скидок Топаза — ' || x.bypass END),
@@ -199,8 +204,8 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                      count(*) FILTER (WHERE y.bypass) AS bypass,
                      (array_agg(y.order_num ORDER BY y.sold_at))[1] AS order_num, (array_agg(y.volume ORDER BY y.sold_at))[1] AS volume,
                      (array_agg(y.price ORDER BY y.sold_at))[1] AS price, (array_agg(y.price_pump ORDER BY y.sold_at))[1] AS price_pump,
-                     (array_agg(y.amount ORDER BY y.sold_at))[1] AS amount
-              FROM (SELECT f.station_id, f.session_id, f.order_num, f.sold_at, f.volume, f.price, f.price_pump, f.amount,
+                     (array_agg(y.amount ORDER BY y.sold_at))[1] AS amount, array_agg(DISTINCT y.local_session_id) AS locals
+              FROM (SELECT f.station_id, f.session_id, f.local_session_id, f.order_num, f.sold_at, f.volume, f.price, f.price_pump, f.amount,
                            f.price_pump > f.price + rr.threshold AS overcharge,
                            abs(f.amount - round(f.volume * f.price_pump, 2)) > 1 AS amount_off,
                            f.price > f.price_pump + rr.threshold AND COALESCE(f.amount_discount, 0) = 0 AND NOT COALESCE(pm.is_discount, false) AS bypass
@@ -337,7 +342,9 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         Insert + """
         SELECT s.station_id, 'shift_too_long', s.session_id::text, r.severity,
                'Смена №' || s.session_num || ' открыта ' || round(extract(epoch FROM now() - s.started_at) / 3600) || ' ч',
-               'Оператор ' || s.user_name || '. Проверьте, закрыта ли смена в Топазе.', round(extract(epoch FROM now() - s.started_at) / 3600, 1), s.session_id, s.started_at
+               (SELECT upper(left(t, 1)) || substr(t, 2) FROM shift_operators_text(s.station_id, s.session_id,
+                   (SELECT array_agg(w.local_session_id) FROM workplace_shifts w WHERE w.station_id = s.station_id AND w.session_id = s.session_id AND w.ended_at IS NULL)) t)
+                 || '. Проверьте, закрыта ли смена в Топазе.', round(extract(epoch FROM now() - s.started_at) / 3600, 1), s.session_id, s.started_at
         FROM shifts s JOIN v_station_rules r ON r.code = 'shift_too_long' AND r.enabled AND r.station_id = s.station_id
         WHERE s.ended_at IS NULL AND s.started_at < now() - make_interval(hours => r.threshold::int)
         ON CONFLICT DO NOTHING

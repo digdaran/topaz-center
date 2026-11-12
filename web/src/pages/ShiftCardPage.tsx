@@ -10,8 +10,11 @@ import { PAY, PayCategory } from '../lib/payments';
 type Row = Record<string, any>;
 
 interface Card {
-  header: Row & { station: string; time_zone: string; session_num: number; user_name: string; started_at: string; ended_at: string | null; hours: number };
-  tanks: Row[]; hoses: Row[]; fuel: Row[]; cash: Row[]; items: Row[]; rests: Row[]; orders: Row[]; receipts: Row[];
+  header: Row & {
+    station: string; time_zone: string; session_num: number; user_name: string; operators: string; workplaces: number;
+    started_at: string; ended_at: string | null; hours: number;
+  };
+  workplaces: Row[]; tanks: Row[]; hoses: Row[]; fuel: Row[]; cash: Row[]; items: Row[]; rests: Row[]; orders: Row[]; receipts: Row[];
 }
 
 const sum = (rows: Row[], key: string) => rows.reduce((a, r) => a + (Number(r[key]) || 0), 0);
@@ -38,6 +41,8 @@ export default function ShiftCardPage() {
   const { data, error, isLoading } = useQuery({ queryKey: ['shift', station, session], queryFn: () => api<Card>(`/shifts/${station}/${session}`) });
   const h = data?.header;
   const tz = h?.time_zone;
+  const places = data?.workplaces ?? [];
+  const severalPlaces = new Set(places.map((w) => w.workbench_id)).size > 1;
 
   return (
     <QueryState error={error} loading={isLoading}>
@@ -48,7 +53,7 @@ export default function ShiftCardPage() {
             Смена №{h.session_num} · {h.station} {h.ended_at ? null : <Tag color="green">открыта</Tag>}
           </Typography.Title>
           <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} style={{ marginBottom: 12 }} items={[
-            { key: 'u', label: 'Оператор', children: h.user_name },
+            { key: 'u', label: severalPlaces || (h.operators ?? '').includes(',') ? 'Операторы' : 'Оператор', children: h.operators || h.user_name },
             { key: 's', label: 'Начало', children: dateTime(h.started_at, tz) },
             { key: 'e', label: 'Конец', children: h.ended_at ? dateTime(h.ended_at, tz) : '—' },
             { key: 'd', label: 'Длительность', children: duration(h.hours) },
@@ -65,6 +70,28 @@ export default function ShiftCardPage() {
               { title: 'Счётчики ТРК', value: h.hose_counters_delta, format: liters },
             ].map((k) => <Col key={k.title} xs={12} md={8} xl={4}><KpiCard {...k} /></Col>)}
           </Row>
+          {severalPlaces && (
+            <Card size="small" title="Рабочие места" style={{ marginBottom: 12 }}>
+              <Table size="small" rowKey="local_session_id" pagination={false} dataSource={places} scroll={{ x: 900 }}
+                columns={[
+                  {
+                    title: 'Место', dataIndex: 'workplace',
+                    render: (v: string, r) => <>{v === 'основное' ? 'Основное' : 'Дополнительное'} {r.computer_name && <Typography.Text type="secondary">({r.computer_name})</Typography.Text>}</>,
+                  },
+                  { title: 'Оператор', dataIndex: 'operator' },
+                  { title: 'Начало', dataIndex: 'started_at', render: (v: string) => dateTime(v, tz) },
+                  { title: 'Конец', dataIndex: 'ended_at', render: (v: string | null) => (v ? dateTime(v, tz) : <Tag color="green">открыто</Tag>) },
+                  numCol<Row>('Литры', 'liters', liters),
+                  numCol<Row>('Топливо', 'revenue', money),
+                  numCol<Row>('Наличные', 'pay_cash', money),
+                  numCol<Row>('Карты', 'pay_card', money),
+                  numCol<Row>('Договоры', 'pay_contract', money),
+                  numCol<Row>('Заказы', 'orders', int),
+                  numCol<Row>('Прерв.', 'aborted', int),
+                  numCol<Row>('Магазин', 'shop_amount', money),
+                ]} />
+            </Card>
+          )}
           <Tabs items={[
             {
               key: 'fuel', label: 'Сводка по топливу', children: (
@@ -108,6 +135,10 @@ export default function ShiftCardPage() {
                     numCol<Row>('Сумма', 'amount', (v) => money(v, true)),
                     numCol<Row>('Скидка', 'discount', (v) => money(v, true)),
                     { title: 'Карта', dataIndex: 'card_code' },
+                    ...(severalPlaces ? [{
+                      title: 'Место', dataIndex: 'workplace',
+                      render: (v: string | null, r: Row) => (v ? <>{v === 'основное' ? 'осн.' : 'доп.'} · {r.operator}</> : null),
+                    }] : []),
                   ]} />
               ),
             },

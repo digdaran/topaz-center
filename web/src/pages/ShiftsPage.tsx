@@ -6,7 +6,8 @@ import { numCol, PageTitle, QueryState } from '../components/ui';
 import { dateTime, dec, duration, int, liters, money, pct } from '../lib/format';
 
 interface ShiftRow {
-  station_id: string; station: string; session_id: number; session_num: number; user_name: string; started_at: string; ended_at: string | null;
+  station_id: string; station: string; session_id: number; session_num: number; user_name: string; operators: string; workplaces: number;
+  started_at: string; ended_at: string | null;
   hours: number; fuel_volume: number | null; fuel_amount: number | null; fuel_cash: number | null; fuel_cashless: number | null;
   pay_cash: number | null; pay_card: number | null; pay_contract: number | null; pay_fuel_card: number | null;
   shop_amount: number | null; hose_counters_delta: number | null; aborted: number; orders: number;
@@ -42,7 +43,12 @@ function ShiftList() {
             render: (v: string | null, r) => (v ? dateTime(v, tz(r.station_id)) : <Tag color="green">открыта</Tag>),
           },
           { title: 'Длительность', dataIndex: 'hours', key: 'h', render: (v: number) => <Tooltip title={`${dec(v, 1)} ч`}>{duration(v)}</Tooltip> },
-          { title: 'Оператор', dataIndex: 'user_name', key: 'user' },
+          {
+            title: 'Оператор', dataIndex: 'operators', key: 'user',
+            render: (v: string, r) => (r.workplaces > 1
+              ? <Tooltip title={`Продажи шли с ${r.workplaces} рабочих мест`}>{v || r.user_name}</Tooltip>
+              : v || r.user_name),
+          },
           numCol<ShiftRow>('Литры', 'fuel_volume', liters),
           numCol<ShiftRow>('Топливо', 'fuel_amount', money),
           numCol<ShiftRow>('Наличные', 'pay_cash', money),
