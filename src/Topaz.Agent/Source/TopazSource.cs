@@ -1,5 +1,7 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using FirebirdSql.Data.FirebirdClient;
+using Microsoft.Extensions.Logging;
 using Topaz.Agent.Configuration;
 
 namespace Topaz.Agent.Source;
@@ -22,12 +24,24 @@ public interface ITopazReadSession : IAsyncDisposable
     /// <summary>Table name -&gt; column names, to skip datasets missing in this Topaz version.</summary>
     Task<IReadOnlyDictionary<string, HashSet<string>>> GetColumnsAsync(CancellationToken ct);
     Task<SessionWindow> GetSessionWindowAsync(long backfillCursor, int closedWindow, int backfillCount, CancellationToken ct);
-    Task<IReadOnlyList<SourceRow>> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct);
-    Task<IReadOnlyList<SourceRow>> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> sessionIds, CancellationToken ct);
-    Task<IReadOnlyList<SourceRow>> ReadIncrementalAsync(DatasetDefinition d, long fromExclusive, int limit, CancellationToken ct);
+    // Rows are streamed one by one: a table of any size never sits in memory as a whole.
+    IAsyncEnumerable<SourceRow> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct);
+    IAsyncEnumerable<SourceRow> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> sessionIds, CancellationToken ct);
+    IAsyncEnumerable<SourceRow> ReadIncrementalAsync(DatasetDefinition d, long fromExclusive, int limit, CancellationToken ct);
 }
 
-public sealed class FirebirdTopazSource(AgentOptions options) : ITopazSource
+public static class AsyncRows
+{
+    /// <summary>For small reads only (a few rows): collects the stream into a list.</summary>
+    public static async Task<List<T>> ToListAsync<T>(this IAsyncEnumerable<T> source, CancellationToken ct = default)
+    {
+        var list = new List<T>();
+        await foreach (var item in source.WithCancellation(ct)) list.Add(item);
+        return list;
+    }
+}
+
+public sealed class FirebirdTopazSource(AgentOptions options, ILogger<FirebirdTopazSource>? log = null) : ITopazSource
 {
     public async Task<ITopazReadSession> OpenAsync(CancellationToken ct)
     {
@@ -41,7 +55,7 @@ public sealed class FirebirdTopazSource(AgentOptions options) : ITopazSource
             {
                 TransactionBehavior = FbTransactionBehavior.Read | FbTransactionBehavior.Concurrency | FbTransactionBehavior.NoWait,
             }, ct);
-            return new FirebirdReadSession(connection, tx, options.ResolveTimeZone());
+            return new FirebirdReadSession(connection, tx, options.ResolveTimeZone(), options.Collection.MaxBlobBytes, log);
         }
         catch
         {
@@ -51,8 +65,10 @@ public sealed class FirebirdTopazSource(AgentOptions options) : ITopazSource
     }
 }
 
-internal sealed class FirebirdReadSession(FbConnection connection, FbTransaction tx, TimeZoneInfo tz) : ITopazReadSession
+internal sealed class FirebirdReadSession(FbConnection connection, FbTransaction tx, TimeZoneInfo tz, int maxBlobBytes, ILogger? log) : ITopazReadSession
 {
+    private static readonly HashSet<string> WarnedBlobs = new(StringComparer.Ordinal);
+
     public async Task<string> GetServerVersionAsync(CancellationToken ct) =>
         Convert.ToString(await Scalar(SqlBuilder.ServerVersion, ct)) ?? "";
 
@@ -85,24 +101,26 @@ internal sealed class FirebirdReadSession(FbConnection connection, FbTransaction
             latestId is { } l && open.Contains(l));
     }
 
-    public Task<IReadOnlyList<SourceRow>> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) =>
+    public IAsyncEnumerable<SourceRow> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) =>
         Rows(d, SqlBuilder.Snapshot(d), _ => { }, hasScope: false, ct);
 
-    public Task<IReadOnlyList<SourceRow>> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> sessionIds, CancellationToken ct)
+    public IAsyncEnumerable<SourceRow> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> sessionIds, CancellationToken ct)
     {
-        if (sessionIds.Count == 0) return Task.FromResult<IReadOnlyList<SourceRow>>([]);
+        if (sessionIds.Count == 0) return Empty();
         return Rows(d, SqlBuilder.Session(d, sessionIds.Count), cmd =>
         {
             for (var i = 0; i < sessionIds.Count; i++)
                 cmd.Parameters.Add($"@s{i}", FbDbType.BigInt).Value = sessionIds[i];
         }, hasScope: true, ct);
+
+        static async IAsyncEnumerable<SourceRow> Empty() { await Task.CompletedTask; yield break; }
     }
 
-    public Task<IReadOnlyList<SourceRow>> ReadIncrementalAsync(DatasetDefinition d, long fromExclusive, int limit, CancellationToken ct) =>
+    public IAsyncEnumerable<SourceRow> ReadIncrementalAsync(DatasetDefinition d, long fromExclusive, int limit, CancellationToken ct) =>
         Rows(d, SqlBuilder.Incremental(d, limit),
             cmd => cmd.Parameters.Add("@from", FbDbType.BigInt).Value = fromExclusive, hasScope: true, ct);
 
-    private async Task<IReadOnlyList<SourceRow>> Rows(DatasetDefinition d, string sql, Action<FbCommand> bind, bool hasScope, CancellationToken ct)
+    private async IAsyncEnumerable<SourceRow> Rows(DatasetDefinition d, string sql, Action<FbCommand> bind, bool hasScope, [EnumeratorCancellation] CancellationToken ct)
     {
         await using var cmd = Command(sql);
         bind(cmd);
@@ -127,17 +145,23 @@ internal sealed class FirebirdReadSession(FbConnection connection, FbTransaction
         }
         if (hasScope && scopeOrdinal < 0) throw new InvalidOperationException($"{d.DatasetName}: scope column missing");
 
-        var rows = new List<SourceRow>();
         var keyValues = new object?[keyOrdinals.Length];
         while (await reader.ReadAsync(ct))
         {
             for (var k = 0; k < keyOrdinals.Length; k++) keyValues[k] = reader.GetValue(keyOrdinals[k]);
-            var data = RowSerializer.ReadRow(reader, dataOrdinals, tz);
+            var data = RowSerializer.ReadRow(reader, dataOrdinals, tz, maxBlobBytes, (column, bytes) => Oversized(d, column, bytes));
             var json = data.ToJsonString(RowSerializer.CanonicalJson);
             long? scope = hasScope && !reader.IsDBNull(scopeOrdinal) ? Convert.ToInt64(reader.GetValue(scopeOrdinal)) : null;
-            rows.Add(new SourceRow(RowSerializer.KeyOf(keyValues), scope, RowSerializer.Hash(json), data));
+            yield return new SourceRow(RowSerializer.KeyOf(keyValues), scope, RowSerializer.Hash(json), data);
         }
-        return rows;
+    }
+
+    /// <summary>An attachment larger than Collection:MaxBlobBytes is sent as null; said once per table and column.</summary>
+    private void Oversized(DatasetDefinition d, string column, long bytes)
+    {
+        lock (WarnedBlobs)
+            if (!WarnedBlobs.Add(d.DatasetName + "." + column)) return;
+        log?.LogWarning("{Dataset}.{Column}: a value of {Bytes} bytes is over Collection:MaxBlobBytes and is sent as null", d.DatasetName, column, bytes);
     }
 
     private async Task<List<long>> Ids(string sql, Action<FbCommand>? bind, CancellationToken ct)

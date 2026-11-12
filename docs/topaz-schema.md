@@ -44,7 +44,7 @@
 
 **Не выгружаются:** служебные таблицы синхронизации и журналы изменений (`sysDataChangeLogs`, `sysDataChangeLogTables`, `sysDataChangeTypes`, `syncData`, `syncGlobalErrors`, `sysExportExceptions`), служебные (`sysModules`, `sysConsts`, `sysDescriptions`, `sysUsersLaw`), таблицы без PK (`rgDCWebOfficeTransaction`, `rgOEMediaTransaction`).
 
-**Исключённые колонки:** `dcAgents.Password`, `sysUsers.PswHash`, `sysUsers.Psw`, `sysUsers.SecurityData`, `dcPaymentModes.Config`.
+**Исключённые колонки:** `dcAgents.Password`, `sysUsers.PswHash`, `sysUsers.Psw`, `sysUsers.SecurityData`, `dcPaymentModes.Config`, `ipRemitPackets.Packet` (пакет обмена с офисом — BLOB до сотен КБ на строку; на GoodOil Кетченеры 54 тыс. строк, 131 МБ; 32-битный агент на АЗС «Дизель» с базой 1 ГБ падал с OutOfMemory, читая его целиком). Любой BLOB больше `Collection:MaxBlobBytes` (64 КБ) агент отправляет как `null`.
 
 ## Сверка с отчётами Топаза (2026-10-31)
 

@@ -24,9 +24,13 @@ public sealed class EndToEndTests(CentralFixture fx) : IClassFixture<CentralFixt
         public Task<IReadOnlyDictionary<string, HashSet<string>>> GetColumnsAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyDictionary<string, HashSet<string>>>(new Dictionary<string, HashSet<string>> { ["flOrders"] = ["OrderID", "SessionID"] });
         public Task<SessionWindow> GetSessionWindowAsync(long c, int w, int b, CancellationToken ct) => Task.FromResult(new SessionWindow([1], c < 1 ? 1 : null, 1, true));
-        public Task<IReadOnlyList<SourceRow>> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) => Task.FromResult<IReadOnlyList<SourceRow>>([]);
-        public Task<IReadOnlyList<SourceRow>> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> ids, CancellationToken ct) => Task.FromResult<IReadOnlyList<SourceRow>>(Rows);
-        public Task<IReadOnlyList<SourceRow>> ReadIncrementalAsync(DatasetDefinition d, long f, int l, CancellationToken ct) => Task.FromResult<IReadOnlyList<SourceRow>>([]);
+        public IAsyncEnumerable<SourceRow> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) => Stream([]);
+        public IAsyncEnumerable<SourceRow> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> ids, CancellationToken ct) => Stream(Rows);
+        public IAsyncEnumerable<SourceRow> ReadIncrementalAsync(DatasetDefinition d, long f, int l, CancellationToken ct) => Stream([]);
+        private static async IAsyncEnumerable<SourceRow> Stream(IReadOnlyList<SourceRow> rows)
+        {
+            foreach (var r in rows) { await Task.Yield(); yield return r; }
+        }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

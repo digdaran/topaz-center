@@ -91,7 +91,7 @@ public sealed class FirebirdIntegrationTests : IAsyncLifetime
         Assert.Equal([1L, 2L], window.SessionIds);
         Assert.True(window.LatestOpen);
 
-        var orders = await db.ReadSessionsAsync(new DatasetDefinition { Table = "flOrders", Kind = DatasetKind.Session, Key = ["OrderID"] }, [1, 2], default);
+        var orders = await db.ReadSessionsAsync(new DatasetDefinition { Table = "flOrders", Kind = DatasetKind.Session, Key = ["OrderID"] }, [1, 2], default).ToListAsync();
         var o10 = orders.Single(o => o.Key == "10");
         Assert.Equal(1, o10.Scope);
         Assert.Equal("2026-10-30T09:15:00.5000+03:00", o10.Data["DateTime"]!.GetValue<string>());
@@ -100,10 +100,10 @@ public sealed class FirebirdIntegrationTests : IAsyncLifetime
         Assert.Equal("23.03", o10.Data["Volume"]!.ToJsonString());
         Assert.False(o10.Data.ContainsKey(SqlBuilder.ScopeAlias));
 
-        var agents = await db.ReadSnapshotAsync(new DatasetDefinition { Table = "dcAgents", Kind = DatasetKind.Snapshot, Key = ["AgentID"], Exclude = ["Password"] }, default);
+        var agents = await db.ReadSnapshotAsync(new DatasetDefinition { Table = "dcAgents", Kind = DatasetKind.Snapshot, Key = ["AgentID"], Exclude = ["Password"] }, default).ToListAsync();
         Assert.False(agents.Single().Data.ContainsKey("Password"));
 
-        var events = await db.ReadIncrementalAsync(new DatasetDefinition { Table = "sysEvents", Kind = DatasetKind.Incremental, Key = ["EventID"] }, 5, 100, default);
+        var events = await db.ReadIncrementalAsync(new DatasetDefinition { Table = "sysEvents", Kind = DatasetKind.Incremental, Key = ["EventID"] }, 5, 100, default).ToListAsync();
         Assert.Equal("6", Assert.Single(events).Key);
     }
 
@@ -112,9 +112,9 @@ public sealed class FirebirdIntegrationTests : IAsyncLifetime
     {
         var def = new DatasetDefinition { Table = "flOrders", Kind = DatasetKind.Session, Key = ["OrderID"] };
         await using var a = await new FirebirdTopazSource(_options).OpenAsync(default);
-        var first = (await a.ReadSessionsAsync(def, [1, 2], default)).ToDictionary(r => r.Key, r => r.Hash);
+        var first = (await a.ReadSessionsAsync(def, [1, 2], default).ToListAsync()).ToDictionary(r => r.Key, r => r.Hash);
         await using var b = await new FirebirdTopazSource(_options).OpenAsync(default);
-        var second = (await b.ReadSessionsAsync(def, [1, 2], default)).ToDictionary(r => r.Key, r => r.Hash);
+        var second = (await b.ReadSessionsAsync(def, [1, 2], default).ToListAsync()).ToDictionary(r => r.Key, r => r.Hash);
         Assert.Equal(first, second);
     }
 

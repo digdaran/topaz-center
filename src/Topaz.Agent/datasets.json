@@ -75,7 +75,7 @@
     {"table": "flDosePass", "key": ["DosePassID"], "kind": "snapshot"},
     {"table": "flLockHoses", "key": ["LockHoseID"], "kind": "snapshot"},
     {"table": "ipNPOrders", "key": ["NPOrderID"], "kind": "snapshot"},
-    {"table": "ipRemitPackets", "key": ["RemitPacketID"], "kind": "snapshot"},
+    {"table": "ipRemitPackets", "key": ["RemitPacketID"], "kind": "snapshot", "exclude": ["Packet"]},
     {"table": "mtVerificationD", "key": ["VerificationDID"], "kind": "snapshot"},
     {"table": "mtVerificationH", "key": ["VerificationHID"], "kind": "snapshot"},
     {"table": "ProgConfig", "key": ["Name"], "kind": "snapshot"},

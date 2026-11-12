@@ -61,7 +61,9 @@ public static class OrganizationEndpoints
         return Results.Ok(await c.QueryAsync("""
             WITH s AS (SELECT f.station_id, f.payment_mode_id, f.order_id FROM fuel_sales f
                        WHERE f.station_id = ANY(@st) AND f.sold_at > now() - interval '90 days' AND f.volume > 0 AND f.payment_kind <> 'none'),
-                 reg AS (SELECT DISTINCT r.station_id, r.data->>'DocID' AS doc FROM records r
+                 -- MATERIALIZED: computed once. Inlined, the planner (no statistics yet for a just connected station)
+                 -- re-ran it for every sale: 30+ s and a 500 on prod (1.10.1).
+                 reg AS MATERIALIZED (SELECT DISTINCT r.station_id, r.data->>'DocID' AS doc FROM records r
                          WHERE r.station_id = ANY(@st) AND r.dataset = 'rgCashes' AND r.data->>'DocTypeID' = '6' AND NOT r.deleted
                            AND r.updated_at > now() - interval '92 days' -- written at or after the sale: uses the (dataset, updated_at) index
                            AND r.data->>'Date' >= to_char(now() - interval '92 days', 'YYYY-MM-DD')),

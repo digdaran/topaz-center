@@ -4,13 +4,20 @@ using Npgsql;
 
 namespace Topaz.Central.Monitoring;
 
-/// <summary>Every 30 s: refreshes per-station gauges, warns about silent stations; hourly: retention cleanup.</summary>
+/// <summary>
+/// Every 30 s: refreshes per-station gauges, warns about silent stations, removes a portion of old duplicate
+/// history rows (until done); hourly: retention cleanup.
+/// </summary>
 public sealed class StationMonitor(NpgsqlDataSource db, IOptions<CentralOptions> options, ILogger<StationMonitor> log) : BackgroundService
 {
     private sealed record Row(string Name, double? SilentSeconds, int? QueuePending, int? QueueDead, string Status);
 
     private readonly HashSet<string> _stale = new(StringComparer.Ordinal);
     private DateTimeOffset _lastCleanup = DateTimeOffset.MinValue;
+    private bool _dedupDone;
+
+    /// <summary>History rows checked per round by the duplicate cleanup (by id range: a bounded, index-only cost).</summary>
+    internal const int DedupRange = 20_000;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -20,6 +27,7 @@ public sealed class StationMonitor(NpgsqlDataSource db, IOptions<CentralOptions>
             try
             {
                 await RefreshAsync(stoppingToken);
+                if (!_dedupDone) _dedupDone = await DedupVersionsAsync(stoppingToken);
                 if (DateTimeOffset.UtcNow - _lastCleanup > TimeSpan.FromHours(1))
                 {
                     await CleanupAsync(stoppingToken);
@@ -72,5 +80,31 @@ public sealed class StationMonitor(NpgsqlDataSource db, IOptions<CentralOptions>
             WHERE status = 'processed' AND payload IS NOT NULL AND received_at < now() - make_interval(days => @days)
             """, new { days = options.Value.RawRetentionDays }, cancellationToken: ct, commandTimeout: 600));
         if (n > 0) log.LogInformation("Retention: cleared payload of {Count} processed raw batch(es)", n);
+    }
+
+    /// <summary>
+    /// Before 1.10.1 record_versions also stored a copy of the current state of every row (as much as records).
+    /// Walks those old rows by id in ranges and deletes the ones equal to the current version in records;
+    /// earlier states stay. Progress is kept in maintenance_state, so a restart continues where it stopped.
+    /// Returns true when everything written before the change was checked.
+    /// </summary>
+    internal async Task<bool> DedupVersionsAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenConnectionAsync(ct);
+        var state = await conn.QuerySingleOrDefaultAsync<string>("SELECT value FROM maintenance_state WHERE key = 'versions_dedup'");
+        if (state is null or "done") return true;
+        var parts = state.Split(';').Select(p => p.Split(':')).ToDictionary(p => p[0], p => long.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture));
+        long upTo = parts["up_to"], cursor = parts["cursor"];
+        var to = Math.Min(cursor + DedupRange, upTo);
+        var n = await conn.ExecuteAsync(new CommandDefinition("""
+            DELETE FROM record_versions v USING records r
+            WHERE v.id > @cursor AND v.id <= @to
+              AND r.station_id = v.station_id AND r.dataset = v.dataset AND r.key = v.key AND r.version = v.version
+            """, new { cursor, to }, cancellationToken: ct, commandTimeout: 120));
+        var done = to >= upTo;
+        await conn.ExecuteAsync("UPDATE maintenance_state SET value = @v WHERE key = 'versions_dedup'",
+            new { v = done ? "done" : $"up_to:{upTo};cursor:{to}" });
+        if (n > 0 || done) log.LogInformation("History cleanup: removed {Count} duplicate row(s) up to id {To} of {UpTo}{Done}", n, to, upTo, done ? " (done)" : "");
+        return done;
     }
 }

@@ -123,13 +123,13 @@ public sealed class Connection(
             info.LastSessionId = window.LatestSessionId;
             if (window.LatestSessionId is { } last && catalog.Datasets.FirstOrDefault(d => d.Table == "sysSessions") is { } sessions)
             {
-                var row = (await db.ReadSessionsAsync(sessions, [last], cts.Token)).FirstOrDefault()?.Data;
+                var row = (await db.ReadSessionsAsync(sessions, [last], cts.Token).ToListAsync(cts.Token)).FirstOrDefault()?.Data;
                 info.LastSessionNum = long.TryParse(row?["SessionNum"]?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var num) ? num : null;
                 info.LastSessionOperator = row?["UserName"]?.ToString();
                 info.LastSessionStart = DateTimeOffset.TryParse(row?["StartDateTime"]?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var t) ? t : null;
             }
             if (catalog.Datasets.FirstOrDefault(d => d.Table == "dcFuels") is { } fuels)
-                info.Fuels = (await db.ReadSnapshotAsync(fuels, cts.Token))
+                info.Fuels = (await db.ReadSnapshotAsync(fuels, cts.Token).ToListAsync(cts.Token))
                     .Where(r => r.Data["Deleted"]?.ToString() is null or "0" && r.Data["Name"]?.ToString() is { Length: > 0 } n && !n.StartsWith('<'))
                     .Select(r => r.Data["Name"]!.ToString()).Order(StringComparer.Ordinal).Take(20).ToList();
             return info;

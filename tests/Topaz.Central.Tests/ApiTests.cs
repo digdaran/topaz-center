@@ -119,7 +119,33 @@ public sealed class ApiTests(CentralFixture fx) : IClassFixture<CentralFixture>
         Assert.Equal(0, await fx.QueryAsync<long>("SELECT count(*) FROM fuel_sales WHERE station_id = @s AND order_id = 2", args));
         Assert.True(await fx.QueryAsync<bool>("SELECT deleted FROM records WHERE station_id = @s AND dataset = 'flOrders' AND key = '2'", args));
         Assert.Equal(2, await fx.QueryAsync<int>("SELECT version FROM records WHERE station_id = @s AND dataset = 'flOrders' AND key = '1'", args));
-        Assert.Equal(4, await fx.QueryAsync<long>("SELECT count(*) FROM record_versions WHERE station_id = @s", args));
+        // History holds the replaced states only (the current ones are in records): order 1 before fuelling, order 2 before the delete.
+        Assert.Equal(2, await fx.QueryAsync<long>("SELECT count(*) FROM record_versions WHERE station_id = @s", args));
+        Assert.Equal("0", await fx.QueryAsync<string>("SELECT data->>'Volume' FROM record_versions WHERE station_id = @s AND dataset = 'flOrders' AND key = '1' AND version = 1", args));
+        Assert.Equal("5", await fx.QueryAsync<string>("SELECT data->>'Volume' FROM record_versions WHERE station_id = @s AND dataset = 'flOrders' AND key = '2' AND version = 1", args));
+
+        // The row comes back after the delete: the deleted state goes to history without data.
+        (await client.PostAsync("/api/v1/batches", Gzip(Batch(4, Order(2, 6m))))).EnsureSuccessStatusCode();
+        await fx.WaitProcessedAsync();
+        Assert.Equal("delete", await fx.QueryAsync<string>("SELECT op || coalesce(data::text, '') FROM record_versions WHERE station_id = @s AND key = '2' AND version = 2", args));
+        Assert.Equal(3, await fx.QueryAsync<int>("SELECT version FROM records WHERE station_id = @s AND dataset = 'flOrders' AND key = '2'", args));
+
+        // Rows of the old scheme duplicating the current state are removed by the background cleanup; earlier states stay.
+        await using (var c = new Npgsql.NpgsqlConnection(fx.ConnectionString))
+        {
+            await c.OpenAsync();
+            await using var cmd = new Npgsql.NpgsqlCommand("""
+                INSERT INTO record_versions (station_id, dataset, key, version, op, hash, data, raw_batch_id)
+                SELECT station_id, dataset, key, version, 'upsert', hash, data, last_batch_id FROM records WHERE station_id = @s;
+                UPDATE maintenance_state SET value = 'up_to:' || (SELECT max(id) FROM record_versions) || ';cursor:0' WHERE key = 'versions_dedup';
+                """, c);
+            cmd.Parameters.AddWithValue("s", st.StationId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        var monitor = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetServices<Microsoft.Extensions.Hosting.IHostedService>(fx.Factory!.Services).OfType<Topaz.Central.Monitoring.StationMonitor>().Single();
+        while (!await monitor.DedupVersionsAsync(CancellationToken.None)) { }
+        Assert.Equal(3, await fx.QueryAsync<long>("SELECT count(*) FROM record_versions WHERE station_id = @s", args));
+        Assert.Equal("done", await fx.QueryAsync<string>("SELECT value FROM maintenance_state WHERE key = 'versions_dedup'"));
     }
 
     /// <summary>Rules found by reconciling with a real Topaz shift export (docs/topaz-schema.md).</summary>

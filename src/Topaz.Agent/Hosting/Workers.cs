@@ -13,6 +13,8 @@ namespace Topaz.Agent.Hosting;
 public sealed class CollectorWorker(Collector collector, StateStore state, AgentOptions options, AgentStatus status, ILogger<CollectorWorker> log)
     : BackgroundService
 {
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var interval = TimeSpan.FromSeconds(options.Collection.IntervalSeconds);
@@ -33,7 +35,8 @@ public sealed class CollectorWorker(Collector collector, StateStore state, Agent
                     var started = DateTimeOffset.UtcNow;
                     var result = await collector.RunCycleAsync(stoppingToken);
                     status.LastCollectAt = DateTimeOffset.UtcNow;
-                    status.LastCollectError = null;
+                    // Tables that could not be read are named in the status; the rest of the data keeps flowing.
+                    status.LastCollectError = result.Failures is { Count: > 0 } f ? Truncate(string.Join("; ", f), 1000) : null;
                     failures = 0;
                     if (result.Batches > 0) status.QueueSignal.Release();
                     log.LogDebug("Cycle done in {Ms} ms: {Datasets} datasets, {Changes} changes, {Batches} batches",

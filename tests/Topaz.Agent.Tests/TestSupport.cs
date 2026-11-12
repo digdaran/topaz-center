@@ -29,6 +29,7 @@ public sealed class FakeTopaz : ITopazSource
     public Dictionary<string, List<SourceRow>> Tables { get; } = new();
     public SortedDictionary<long, bool> Sessions { get; } = new(); // id -> open
     public bool Fail { get; set; }
+    public Dictionary<string, int> FailAfter { get; } = new();
     public List<IReadOnlyList<long>> SessionReads { get; } = new();
 
     public static SourceRow Row(string key, long? scope, object fields)
@@ -61,18 +62,31 @@ public sealed class FakeTopaz : ITopazSource
             return Task.FromResult(new SessionWindow(all, backfill.Count > 0 ? backfill.Max() : null, latest, latest is { } l && t.Sessions[l]));
         }
 
-        public Task<IReadOnlyList<SourceRow>> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<SourceRow>>(t.Tables.GetValueOrDefault(d.Table, []).ToList());
+        public IAsyncEnumerable<SourceRow> ReadSnapshotAsync(DatasetDefinition d, CancellationToken ct) =>
+            Stream(d, t.Tables.GetValueOrDefault(d.Table, []).ToList());
 
-        public Task<IReadOnlyList<SourceRow>> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> ids, CancellationToken ct)
+        public IAsyncEnumerable<SourceRow> ReadSessionsAsync(DatasetDefinition d, IReadOnlyList<long> ids, CancellationToken ct)
         {
             t.SessionReads.Add(ids);
-            return Task.FromResult<IReadOnlyList<SourceRow>>(t.Tables.GetValueOrDefault(d.Table, []).Where(r => r.Scope is { } s && ids.Contains(s)).ToList());
+            return Stream(d, t.Tables.GetValueOrDefault(d.Table, []).Where(r => r.Scope is { } s && ids.Contains(s)).ToList());
         }
 
-        public Task<IReadOnlyList<SourceRow>> ReadIncrementalAsync(DatasetDefinition d, long from, int limit, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<SourceRow>>(t.Tables.GetValueOrDefault(d.Table, [])
-                .Where(r => r.Scope > from).OrderBy(r => r.Scope).Take(limit).ToList());
+        public IAsyncEnumerable<SourceRow> ReadIncrementalAsync(DatasetDefinition d, long from, int limit, CancellationToken ct) =>
+            Stream(d, t.Tables.GetValueOrDefault(d.Table, []).Where(r => r.Scope > from).OrderBy(r => r.Scope).Take(limit).ToList());
+
+        /// <summary>Yields rows one by one; FailAfter[table] = n throws after n rows (a broken read mid-table).</summary>
+        private async IAsyncEnumerable<SourceRow> Stream(DatasetDefinition d, List<SourceRow> rows)
+        {
+            var n = 0;
+            foreach (var r in rows)
+            {
+                if (t.FailAfter.TryGetValue(d.Table, out var limit) && n >= limit) throw new InvalidOperationException($"read of {d.Table} broke");
+                n++;
+                await Task.Yield();
+                yield return r;
+            }
+            if (t.FailAfter.TryGetValue(d.Table, out var l) && n >= l) throw new InvalidOperationException($"read of {d.Table} broke");
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

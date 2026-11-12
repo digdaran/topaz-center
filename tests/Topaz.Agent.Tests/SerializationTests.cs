@@ -25,6 +25,8 @@ public sealed class SerializationTests
         Assert.Equal("АИ   ", RowSerializer.ToJsonValue("АИ   ", "VARCHAR", Moscow)!.GetValue<string>());
         Assert.Equal("ab", RowSerializer.ToJsonValue("a\0b", "VARCHAR", Moscow)!.GetValue<string>());
         Assert.Equal("23.03", RowSerializer.ToJsonValue(23.03m, "NUMERIC", Moscow)!.ToJsonString());
+        Assert.Equal("AQID", RowSerializer.ToJsonValue(new byte[] { 1, 2, 3 }, "BLOB", Moscow, maxBlobBytes: 3)!.GetValue<string>());
+        Assert.Null(RowSerializer.ToJsonValue(new byte[] { 1, 2, 3, 4 }, "BLOB", Moscow, maxBlobBytes: 3)); // attachment over the limit
         Assert.Null(RowSerializer.ToJsonValue(DBNull.Value, "INTEGER", Moscow));
     }
 
@@ -86,6 +88,7 @@ public sealed class SerializationTests
         // Secrets are never exported.
         Assert.Contains("Password", catalog.Datasets.Single(d => d.Table == "dcAgents").Exclude);
         Assert.Contains("PswHash", catalog.Datasets.Single(d => d.Table == "sysUsers").Exclude);
+        Assert.Contains("Packet", catalog.Datasets.Single(d => d.Table == "ipRemitPackets").Exclude); // exchange packets: big BLOBs, not needed centrally
     }
 
     [Fact]

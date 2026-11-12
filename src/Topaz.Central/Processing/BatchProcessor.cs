@@ -128,6 +128,8 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
                     await conn.ExecuteAsync(new CommandDefinition(
                         "DELETE FROM held_deletes WHERE station_id = @station AND dataset = @dataset AND key = @key",
                         new { station = batch.StationId, dataset = item.Dataset, key = item.Key }, tx, cancellationToken: ct));
+                // History keeps the state being replaced (records holds the current one): no copy of every row.
+                await ArchiveAsync(conn, tx, batch, item, "(records.hash IS DISTINCT FROM @hash OR records.deleted)", ct);
                 var version = await conn.QuerySingleOrDefaultAsync<int?>(new CommandDefinition("""
                     INSERT INTO records (station_id, dataset, key, session_id, hash, data, last_batch_id)
                     VALUES (@station, @dataset, @key, @session, @hash, @data::jsonb, @batch)
@@ -141,7 +143,6 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
                 if (version is null) continue; // same content already stored (re-sent after agent state loss)
 
                 dirty.Add(item.Dataset, item.Data);
-                await InsertVersion(conn, tx, batch, item, version.Value, data, ct);
                 if (projection is not null)
                     await conn.ExecuteAsync(new CommandDefinition(projection.UpsertSql, new { station = batch.StationId, data }, tx, cancellationToken: ct));
                 AppMetrics.RecordsApplied.WithLabels("upsert").Inc();
@@ -154,6 +155,7 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
                     AppMetrics.RecordsApplied.WithLabels("delete_held").Inc();
                     continue;
                 }
+                await ArchiveAsync(conn, tx, batch, item, "NOT records.deleted", ct);
                 var deleted = await conn.QuerySingleOrDefaultAsync<DeletedRow>(new CommandDefinition("""
                     UPDATE records SET deleted = true, version = version + 1, updated_at = now(), last_batch_id = @batch
                     WHERE station_id = @station AND dataset = @dataset AND key = @key AND NOT deleted
@@ -162,7 +164,6 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
                 if (deleted is null) continue;
 
                 if (deleted.Data is not null) dirty.Add(item.Dataset, System.Text.Json.Nodes.JsonNode.Parse(deleted.Data)?.AsObject());
-                await InsertVersion(conn, tx, batch, item, deleted.Version, null, ct);
                 if (projection is not null && deleted.Data is not null)
                     await conn.ExecuteAsync(new CommandDefinition(projection.DeleteSql, new { station = batch.StationId, data = deleted.Data }, tx, cancellationToken: ct));
                 AppMetrics.RecordsApplied.WithLabels("delete").Inc();
@@ -231,10 +232,20 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
                        received = DateTime.SpecifyKind(batch.ReceivedAt, DateTimeKind.Utc), days },
             tx, cancellationToken: ct)) > 0;
 
-    private static Task InsertVersion(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, RecordChange item, int version, string? data, CancellationToken ct) =>
-        conn.ExecuteAsync(new CommandDefinition("""
-            INSERT INTO record_versions (station_id, dataset, key, version, op, hash, data, raw_batch_id)
-            VALUES (@station, @dataset, @key, @version, @op, @hash, @data::jsonb, @batch)
-            """, new { station = batch.StationId, dataset = item.Dataset, key = item.Key, version, op = item.Op, hash = item.Hash, data, batch = batch.Id },
-            tx, cancellationToken: ct));
+    /// <summary>
+    /// Moves the current state of the row to record_versions before it is replaced (a changed row or a delete):
+    /// record_versions holds every earlier state, records the current one. A deleted state is kept without data
+    /// (the data is in the version before it). changed_at is when that state arrived.
+    /// </summary>
+    private static Task ArchiveAsync(NpgsqlConnection conn, NpgsqlTransaction tx, PendingBatch batch, RecordChange item, string when, CancellationToken ct) =>
+        conn.ExecuteAsync(new CommandDefinition($"""
+            INSERT INTO record_versions (station_id, dataset, key, version, op, hash, data, raw_batch_id, changed_at)
+            SELECT records.station_id, records.dataset, records.key, records.version,
+                   CASE WHEN records.deleted THEN 'delete' ELSE 'upsert' END,
+                   CASE WHEN records.deleted THEN NULL ELSE records.hash END,
+                   CASE WHEN records.deleted THEN NULL ELSE records.data END,
+                   records.last_batch_id, records.updated_at
+            FROM records
+            WHERE records.station_id = @station AND records.dataset = @dataset AND records.key = @key AND {when}
+            """, new { station = batch.StationId, dataset = item.Dataset, key = item.Key, hash = item.Hash }, tx, cancellationToken: ct));
 }

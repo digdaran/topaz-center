@@ -46,6 +46,10 @@ public sealed class AgentOptions
             yield return "Firebird:Database is required (path to the Topaz .fdb file or alias).";
         if (Collection.IntervalSeconds < 10)
             yield return "Collection:IntervalSeconds must be >= 10.";
+        if (Collection.ChunkRows is < 10 or > 100_000)
+            yield return "Collection:ChunkRows must be 10..100000.";
+        if (Collection.MaxBlobBytes < 0)
+            yield return "Collection:MaxBlobBytes must be >= 0.";
         if (Collection.MaxItemsPerBatch is < 1 or > Contracts.Protocol.MaxItemsPerBatch)
             yield return $"Collection:MaxItemsPerBatch must be 1..{Contracts.Protocol.MaxItemsPerBatch}.";
         if (!string.IsNullOrWhiteSpace(Station.TimeZone) && !TryFindTimeZone(Station.TimeZone, out _))
@@ -130,6 +134,13 @@ public sealed class CollectionOptions
     /// <summary>Every N hours all shifts are re-walked (hash diff, so only real changes are sent).</summary>
     public int FullRescanHours { get; set; } = 24;
     public int MaxItemsPerBatch { get; set; } = 500;
+    /// <summary>
+    /// Rows are diffed and queued in portions of this size, so memory does not grow with the table
+    /// (a big Topaz database on a 32-bit agent ran out of memory reading whole tables).
+    /// </summary>
+    public int ChunkRows { get; set; } = 1000;
+    /// <summary>Binary values (attachments) larger than this are sent as null.</summary>
+    public int MaxBlobBytes { get; set; } = 64 * 1024;
     /// <summary>Max rows read per cycle from an incremental dataset.</summary>
     public int IncrementalRowsPerCycle { get; set; } = 5000;
     /// <summary>Collection pauses (data stays in Topaz) while the unsent queue is larger than this.</summary>

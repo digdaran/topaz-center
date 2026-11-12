@@ -17,7 +17,7 @@ raw_batches  →  records (+ record_versions)  →  нормализованны
 | `stations` | `id uuid`; `name_normalized` уникально | АЗС: название, `token_hash` (SHA-256), `status` (`active` / `reenroll` / `revoked`), `last_seen_at`, `agent_version`, `last_heartbeat jsonb` |
 | `raw_batches` | `id bigserial`; **`UNIQUE (station_id, batch_id)`** — ключ идемпотентности | пакет как пришёл: `seq`, `schema_version`, `created_at` (часы агента), `received_at` (часы сервера), `payload jsonb`, `payload_sha256`, `status` (`received` / `processed` / `failed`), `attempts`, `error`, `processed_at`. `payload` очищается через `RawRetentionDays` (90), сама строка остаётся для аудита. |
 | `records` | `(station_id, dataset, key)` | текущее состояние строки любой выгружаемой таблицы: `session_id`, `hash`, `data jsonb`, `deleted` (мягкое удаление), `version`, `first_seen_at`, `updated_at`, `last_batch_id` |
-| `record_versions` | `id`; индекс `(station_id, dataset, key, version)` | история каждого изменения (`upsert` / `delete`) со ссылкой на пакет. Видны правки уже закрытых смен. |
+| `record_versions` | `id`; индекс `(station_id, dataset, key, version)` | прежние состояния строк: при изменении или удалении строки сюда переносится её состояние до изменения (`upsert` с данными или `delete` без данных), `changed_at` — когда то состояние пришло, `raw_batch_id` — его пакет. Текущее состояние только в `records` (с 1.10.1; раньше сюда копировалась и каждая новая строка — такие дубли фоном удаляет `StationMonitor`, прогресс в `maintenance_state`). Видны правки уже закрытых смен. |
 
 `dataset` — имя таблицы Топаза (`flOrders`, `sysEvents`, …), `key` — её первичный ключ (составной через `|`: `82|233`).
 
@@ -74,9 +74,10 @@ JOIN stations s ON s.id = t.station_id
 JOIN LATERAL (SELECT max(session_id) AS sid FROM shifts sh
               WHERE sh.station_id = t.station_id AND sh.ended_at IS NOT NULL) last ON last.sid = t.session_id;
 
--- Что изменилось в закрытых сменах задним числом
-SELECT v.station_id, v.dataset, v.key, v.version, v.op, v.changed_at
-FROM record_versions v WHERE v.version > 1 ORDER BY v.changed_at DESC LIMIT 100;
+-- Что изменилось задним числом: прежнее состояние (v) и текущее (r)
+SELECT v.station_id, v.dataset, v.key, v.version, v.op, v.changed_at, r.updated_at AS replaced_at
+FROM record_versions v JOIN records r USING (station_id, dataset, key)
+ORDER BY r.updated_at DESC LIMIT 100;
 ```
 
 ## Доступ для BI (только чтение)
@@ -94,4 +95,4 @@ PostgreSQL находится во внутренней сети Docker. Для 
 
 ## Объёмы
 
-На реальной АЗС за 8 месяцев набралось около 16 тыс. строк, из них примерно 7 тыс. — события. Для 20 АЗС это около 0,5 млн строк в год в `records` и примерно столько же в `record_versions`. Это небольшой объём для PostgreSQL: партиционирование не нужно. Если понадобится, `record_versions` и `raw_batches` можно партиционировать по месяцам.
+На реальной АЗС за 8 месяцев набралось около 16 тыс. строк, из них примерно 7 тыс. — события. Для 20 АЗС это около 0,5 млн строк в год в `records` а в `record_versions` — только исправленные строки (заказ, дописанный после вставки, правки закрытых смен). Это небольшой объём для PostgreSQL: партиционирование не нужно. Если понадобится, `record_versions` и `raw_batches` можно партиционировать по месяцам.

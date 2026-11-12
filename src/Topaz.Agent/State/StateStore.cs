@@ -20,6 +20,8 @@ public sealed class DatasetCommit
     /// <summary>row_state upserts (key -&gt; new hash/scope).</summary>
     public Dictionary<string, RowStateEntry> StateUpserts { get; } = new(StringComparer.Ordinal);
     public List<string> StateDeletes { get; } = new();
+    /// <summary>Keys read in the current pass of the dataset (scan_seen): what is not there at the end was deleted.</summary>
+    public List<string> SeenKeys { get; } = new();
     /// <summary>Incremental datasets: forget row hashes with scope below this (outside overlap).</summary>
     public long? PruneScopeBelow { get; set; }
     public Dictionary<string, string> KvUpdates { get; } = new(StringComparer.Ordinal);
@@ -90,6 +92,12 @@ public sealed class StateStore : IDisposable
                 last_error      TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_outbox_status ON outbox (status, seq);
+            -- Keys seen during the current pass over a dataset (read in portions); cleared before and after the pass.
+            CREATE TABLE IF NOT EXISTS scan_seen (
+                dataset TEXT NOT NULL,
+                key     TEXT NOT NULL,
+                PRIMARY KEY (dataset, key)
+            ) WITHOUT ROWID;
             """);
         SetKv(c, null, "schema_version", "1");
     }
@@ -119,19 +127,65 @@ public sealed class StateStore : IDisposable
     public Dictionary<string, RowStateEntry> LoadRowState(string dataset) =>
         LoadRowState(dataset, "", _ => { });
 
-    public Dictionary<string, RowStateEntry> LoadRowStateForScopes(string dataset, IReadOnlyCollection<long> scopes)
+    /// <summary>Last sent state of the given keys only (one portion of a pass).</summary>
+    public Dictionary<string, RowStateEntry> LookupRowState(string dataset, IReadOnlyCollection<string> keys)
     {
-        if (scopes.Count == 0) return new(StringComparer.Ordinal);
-        var names = scopes.Select((_, i) => $"$s{i}").ToArray();
-        return LoadRowState(dataset, $" AND scope IN ({string.Join(',', names)})", cmd =>
+        var result = new Dictionary<string, RowStateEntry>(StringComparer.Ordinal);
+        using var c = Open();
+        foreach (var part in keys.Distinct(StringComparer.Ordinal).Chunk(500)) // well below SQLite's parameter limit
         {
-            var i = 0;
-            foreach (var s in scopes) cmd.Parameters.AddWithValue(names[i++], s);
-        });
+            using var cmd = c.CreateCommand();
+            var names = part.Select((_, i) => $"$k{i}").ToArray();
+            cmd.CommandText = $"SELECT key, hash, scope FROM row_state WHERE dataset = $d AND key IN ({string.Join(',', names)})";
+            cmd.Parameters.AddWithValue("$d", dataset);
+            for (var i = 0; i < part.Length; i++) cmd.Parameters.AddWithValue(names[i], part[i]);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                result[r.GetString(0)] = new RowStateEntry(r.GetString(1), r.IsDBNull(2) ? null : r.GetInt64(2));
+        }
+        return result;
     }
 
-    public Dictionary<string, RowStateEntry> LoadRowStateFromScope(string dataset, long minScopeInclusive) =>
-        LoadRowState(dataset, " AND scope >= $min", cmd => cmd.Parameters.AddWithValue("$min", minScopeInclusive));
+    /// <summary>Starts or ends a pass over a dataset: forgets the keys seen so far.</summary>
+    public void ClearSeen(string dataset)
+    {
+        using var c = Open();
+        using var cmd = Cmd(c, null, "DELETE FROM scan_seen WHERE dataset = $d");
+        cmd.Parameters.AddWithValue("$d", dataset);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Up to <paramref name="limit"/> sent rows that this pass did not see (deleted in Topaz); for shift datasets
+    /// only rows of the given shifts. Called after the whole dataset was read; deleting them from row_state
+    /// makes the next call return the next ones.
+    /// </summary>
+    public List<(string Key, long? Scope)> MissingKeys(string dataset, IReadOnlyCollection<long>? scopes, int limit)
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        var scopeFilter = "";
+        if (scopes is not null)
+        {
+            if (scopes.Count == 0) return [];
+            var names = scopes.Select((_, i) => $"$s{i}").ToArray();
+            scopeFilter = $" AND r.scope IN ({string.Join(',', names)})";
+            var i = 0;
+            foreach (var sc in scopes) cmd.Parameters.AddWithValue(names[i++], sc);
+        }
+        cmd.CommandText = $"""
+            SELECT r.key, r.scope FROM row_state r
+            WHERE r.dataset = $d{scopeFilter}
+              AND NOT EXISTS (SELECT 1 FROM scan_seen s WHERE s.dataset = r.dataset AND s.key = r.key)
+            LIMIT $n
+            """;
+        cmd.Parameters.AddWithValue("$d", dataset);
+        cmd.Parameters.AddWithValue("$n", limit);
+        using var r = cmd.ExecuteReader();
+        var result = new List<(string, long?)>();
+        while (r.Read()) result.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1)));
+        return result;
+    }
 
     private Dictionary<string, RowStateEntry> LoadRowState(string dataset, string filter, Action<SqliteCommand> bind)
     {
@@ -163,24 +217,45 @@ public sealed class StateStore : IDisposable
                 Enqueue(c, tx, chunk, agentVersion, now);
                 batches++;
             }
-            foreach (var (key, entry) in commit.StateUpserts)
+            if (commit.StateUpserts.Count > 0)
             {
                 using var cmd = Cmd(c, tx, """
                     INSERT INTO row_state (dataset, key, scope, hash) VALUES ($d, $k, $s, $h)
                     ON CONFLICT (dataset, key) DO UPDATE SET scope = excluded.scope, hash = excluded.hash
                     """);
                 cmd.Parameters.AddWithValue("$d", commit.Dataset);
-                cmd.Parameters.AddWithValue("$k", key);
-                cmd.Parameters.AddWithValue("$s", (object?)entry.Scope ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$h", entry.Hash);
-                cmd.ExecuteNonQuery();
+                var k = cmd.Parameters.Add("$k", SqliteType.Text);
+                var sc = cmd.Parameters.Add("$s", SqliteType.Integer);
+                var h = cmd.Parameters.Add("$h", SqliteType.Text);
+                foreach (var (key, entry) in commit.StateUpserts)
+                {
+                    k.Value = key;
+                    sc.Value = (object?)entry.Scope ?? DBNull.Value;
+                    h.Value = entry.Hash;
+                    cmd.ExecuteNonQuery();
+                }
             }
-            foreach (var key in commit.StateDeletes)
+            if (commit.StateDeletes.Count > 0)
             {
                 using var cmd = Cmd(c, tx, "DELETE FROM row_state WHERE dataset = $d AND key = $k");
                 cmd.Parameters.AddWithValue("$d", commit.Dataset);
-                cmd.Parameters.AddWithValue("$k", key);
-                cmd.ExecuteNonQuery();
+                var k = cmd.Parameters.Add("$k", SqliteType.Text);
+                foreach (var key in commit.StateDeletes)
+                {
+                    k.Value = key;
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            if (commit.SeenKeys.Count > 0)
+            {
+                using var cmd = Cmd(c, tx, "INSERT OR IGNORE INTO scan_seen (dataset, key) VALUES ($d, $k)");
+                cmd.Parameters.AddWithValue("$d", commit.Dataset);
+                var k = cmd.Parameters.Add("$k", SqliteType.Text);
+                foreach (var key in commit.SeenKeys)
+                {
+                    k.Value = key;
+                    cmd.ExecuteNonQuery();
+                }
             }
             if (commit.PruneScopeBelow is { } below)
             {

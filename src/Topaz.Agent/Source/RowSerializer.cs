@@ -22,7 +22,11 @@ public static class RowSerializer
     };
 
     /// <summary>Topaz stores local wall-clock time without offset; attach the station zone offset.</summary>
-    public static JsonNode? ToJsonValue(object? value, string dataTypeName, TimeZoneInfo tz) => value switch
+    /// <summary>
+    /// A column value as JSON. Binary values (BLOBs) longer than <paramref name="maxBlobBytes"/> become null:
+    /// attachments such as exchange packets are not needed centrally and would blow up memory and traffic.
+    /// </summary>
+    public static JsonNode? ToJsonValue(object? value, string dataTypeName, TimeZoneInfo tz, int maxBlobBytes = int.MaxValue) => value switch
     {
         null or DBNull => null,
         DateTime dt when IsDate(dataTypeName) => JsonValue.Create(dt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
@@ -39,6 +43,7 @@ public static class RowSerializer
         short sh => JsonValue.Create(sh),
         bool b => JsonValue.Create(b),
         Guid g => JsonValue.Create(g.ToString()),
+        byte[] bytes when bytes.Length > maxBlobBytes => null,
         byte[] bytes => JsonValue.Create(Convert.ToBase64String(bytes)),
         _ => JsonValue.Create(Convert.ToString(value, CultureInfo.InvariantCulture)),
     };
@@ -67,11 +72,16 @@ public static class RowSerializer
         }));
 
     /// <summary>Builds the row object from the given reader columns, in order.</summary>
-    public static JsonObject ReadRow(DbDataReader reader, IReadOnlyList<int> ordinals, TimeZoneInfo tz)
+    public static JsonObject ReadRow(DbDataReader reader, IReadOnlyList<int> ordinals, TimeZoneInfo tz,
+                                     int maxBlobBytes = int.MaxValue, Action<string, long>? oversized = null)
     {
         var obj = new JsonObject();
         foreach (var i in ordinals)
-            obj[reader.GetName(i)] = ToJsonValue(reader.IsDBNull(i) ? null : reader.GetValue(i), reader.GetDataTypeName(i), tz);
+        {
+            var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            if (value is byte[] b && b.Length > maxBlobBytes) oversized?.Invoke(reader.GetName(i), b.Length);
+            obj[reader.GetName(i)] = ToJsonValue(value, reader.GetDataTypeName(i), tz, maxBlobBytes);
+        }
         return obj;
     }
 

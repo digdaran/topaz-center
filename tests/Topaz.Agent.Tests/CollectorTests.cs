@@ -174,6 +174,81 @@ public sealed class CollectorTests : IDisposable
         Assert.Single(Drain());
     }
 
+    [Fact]
+    public async Task A_big_table_goes_in_portions_and_deletes_come_after_a_full_read()
+    {
+        _options.Collection.ChunkRows = 100;
+        _options.Collection.MaxItemsPerBatch = 500;
+        _topaz.Tables["dcFuels"] = Enumerable.Range(1, 5000).Select(i => FakeTopaz.Row($"{i}", null, new { FuelID = i, Name = "Т" + i })).ToList();
+        var c = NewCollector();
+        await c.RunCycleAsync(default);
+        var first = Drain();
+        Assert.Equal(5000, first.Count);
+        Assert.All(first, i => Assert.Equal(Protocol.OpUpsert, i.Op));
+        Assert.Equal(5000, _state.LoadRowState("dcFuels").Count);
+
+        // Unchanged: nothing goes out.
+        _time.Advance(TimeSpan.FromHours(1));
+        await c.RunCycleAsync(default);
+        Assert.Empty(Drain());
+
+        // One row vanished and the read breaks in the middle: no delete is sent from a half-read table.
+        _topaz.Tables["dcFuels"].RemoveAt(4321);
+        _topaz.FailAfter["dcFuels"] = 2500;
+        _time.Advance(TimeSpan.FromHours(1));
+        var broken = await c.RunCycleAsync(default);
+        Assert.Contains(broken.Failures!, f => f.StartsWith("dcFuels:", StringComparison.Ordinal));
+        Assert.Empty(Drain());
+
+        // The next full read sends exactly that delete.
+        _topaz.FailAfter.Clear();
+        _time.Advance(TimeSpan.FromHours(1));
+        var ok = await c.RunCycleAsync(default);
+        Assert.Empty(ok.Failures!);
+        var del = Assert.Single(Drain());
+        Assert.Equal(Protocol.OpDelete, del.Op);
+        Assert.Equal("4322", del.Key);
+    }
+
+    [Fact]
+    public async Task An_unreadable_table_does_not_stop_shifts_or_other_tables()
+    {
+        _catalog.Datasets.Insert(0, new DatasetDefinition { Table = "ipBroken", Kind = DatasetKind.Snapshot, Key = ["ID"] });
+        _topaz.Tables["ipBroken"] = [FakeTopaz.Row("1", null, new { ID = 1 })];
+        _topaz.FailAfter["ipBroken"] = 0;
+        for (var i = 1; i <= 4; i++) _topaz.Sessions[i] = false;
+        _topaz.Tables["flOrders"] = Enumerable.Range(1, 4).Select(i => FakeTopaz.Row($"{i}", i, new { OrderID = i })).ToList();
+        _topaz.Tables["dcFuels"] = [FakeTopaz.Row("186", null, new { FuelID = 186 })];
+        _topaz.Tables["sysEvents"] = [FakeTopaz.Row("100", 100, new { EventID = 100 })];
+
+        var result = await NewCollector().RunCycleAsync(default);
+        Assert.Equal("ipBroken: read of ipBroken broke", Assert.Single(result.Failures!));
+        var sent = Drain();
+        Assert.Contains(sent, i => i.Dataset == "dcFuels");
+        Assert.Contains(sent, i => i.Dataset == "sysEvents");
+        Assert.Contains(sent, i => i.Dataset == "flOrders");
+        Assert.Equal("2", _state.GetKv(Collector.SessionCursorKey)); // backfill moved on
+    }
+
+    [Fact]
+    public async Task Incremental_watermark_moves_only_with_the_last_portion()
+    {
+        _options.Collection.ChunkRows = 10;
+        _options.Collection.MaxItemsPerBatch = 100;
+        _topaz.Tables["sysEvents"] = Enumerable.Range(1, 35).Select(i => FakeTopaz.Row($"{i}", i, new { EventID = i })).ToList();
+        _topaz.FailAfter["sysEvents"] = 25;
+        var c = NewCollector();
+        var broken = await c.RunCycleAsync(default);
+        Assert.Single(broken.Failures!);
+        Assert.Null(_state.GetKv(Collector.WatermarkKey("sysEvents")));
+        Assert.Equal(20, Drain().Count); // two full portions were already safe to send
+
+        _topaz.FailAfter.Clear();
+        await c.RunCycleAsync(default);
+        Assert.Equal(15, Drain().Count); // the rest; the first 20 are not sent twice
+        Assert.Equal("35", _state.GetKv(Collector.WatermarkKey("sysEvents")));
+    }
+
     public void Dispose()
     {
         _state.Dispose();
