@@ -31,7 +31,7 @@ curl https://$DOMAIN/health/live      # 200
 docker compose exec -it central dotnet Topaz.Central.dll create-user --login admin --role superadmin
 ```
 
-Для уведомлений в Telegram впишите токен бота в `TOPAZ_TELEGRAM_BOT_TOKEN` и выполните `docker compose up -d`, затем добавьте чаты в разделе «Контроль → Уведомления». Подробности — в [docs/web.md](../../docs/web.md).
+Для уведомлений в Telegram впишите токен бота в `TOPAZ_TELEGRAM_BOT_TOKEN` и выполните `docker compose up -d`, затем подключите чаты по ссылке: лично — «Настройки → Вход и защита → Уведомления в Telegram», группу — «Контроль → Уведомления → Добавить бота в группу». Подробности — в [docs/web.md](../../docs/web.md).
 
 ## Работа
 

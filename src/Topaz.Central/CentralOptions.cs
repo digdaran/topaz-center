@@ -30,6 +30,10 @@ public sealed class CentralOptions
     /// <summary>Telegram bot token (from @BotFather) for alert notifications; empty = notifications off.</summary>
     public string? TelegramBotToken { get; set; }
     public string TelegramApiBase { get; set; } = "https://api.telegram.org";
+    /// <summary>The bot reads "/start &lt;code&gt;" (Telegram by link) by long polling; false = off (tests drive it by hand).</summary>
+    public bool TelegramPolling { get; set; } = true;
+    /// <summary>How long one getUpdates call waits for news.</summary>
+    public int TelegramPollSeconds { get; set; } = 50;
     /// <summary>A superadmin without two-factor login can only set it up (and log out) until it is on.</summary>
     public bool RequireTotpForSuperadmin { get; set; } = true;
     /// <summary>

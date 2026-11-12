@@ -8,13 +8,11 @@ import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
 import { PageTitle, QueryState } from '../components/ui';
 import { dateTime } from '../lib/format';
+import { SEVERITY, severityOptions } from '../lib/severity';
+import { openTelegram } from '../components/TelegramPersonal';
 
 type R = Record<string, any>;
-export const SEVERITY: Record<string, { color: string; label: string }> = {
-  critical: { color: 'red', label: 'критично' },
-  warning: { color: 'orange', label: 'внимание' },
-  info: { color: 'blue', label: 'информация' },
-};
+export { SEVERITY };
 
 function Alerts() {
   const qc = useQueryClient();
@@ -138,9 +136,16 @@ function Notifications() {
   const me = useMe();
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { data, isLoading } = useQuery({ queryKey: ['channels'], queryFn: () => api<{ token_configured: boolean; channels: R[] }>('/notifications') });
+  const [groupLink, setGroupLink] = useState<string | null>(null);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['channels'],
+    queryFn: () => api<{ token_configured: boolean; channels: R[] }>('/notifications'),
+    refetchInterval: groupLink ? 3000 : false, // the group appears once the bot is added there
+  });
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
+  const [groupForm] = Form.useForm();
   const add = async () => {
     const v = await form.validateFields();
     try {
@@ -151,6 +156,17 @@ function Notifications() {
       message.error((e as Error).message);
     }
   };
+  const linkGroup = async () => {
+    const v = await groupForm.validateFields();
+    try {
+      const r = await api<{ url: string }>('/notifications/link-group', { method: 'POST', body: v });
+      setGroupLink(r.url);
+      openTelegram(r.url);
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  };
+  const closeGroup = () => { setGroupOpen(false); setGroupLink(null); };
   const test = async (id: number) => {
     try {
       await api(`/notifications/${id}/test`, { method: 'POST' });
@@ -159,6 +175,18 @@ function Notifications() {
       message.error((e as Error).message);
     }
   };
+  const severityAndDigest = (
+    <>
+      <Form.Item name="min_severity" label="Присылать события с важностью от"><Select options={severityOptions} /></Form.Item>
+      <Form.Item name="daily_digest" label="Утренняя сводка" valuePropName="checked"><Switch /></Form.Item>
+      {isSuper(me) && (
+        <Form.Item name="platform" label="Чат платформы" valuePropName="checked"
+          extra="Заявки на подключение АЗС и ошибки обновления агентов. Иначе чат получает события АЗС организации, выбранной в шапке.">
+          <Switch />
+        </Form.Item>
+      )}
+    </>
+  );
   return (
     <>
       {data && !data.token_configured && (
@@ -167,12 +195,25 @@ function Notifications() {
       )}
       <Typography.Paragraph type="secondary">
         Сразу приходят события с важностью не ниже выбранной (только за последние сутки); утром в 9:00 по Москве — сводка за сутки.
-        Chat id: добавьте бота в чат и откройте <code>https://api.telegram.org/bot&lt;токен&gt;/getUpdates</code>, либо используйте бота @userinfobot для личного чата.
+        Каждый сотрудник может получать события по своим АЗС лично: <b>Настройки → Вход и защита → Уведомления в Telegram</b>.
       </Typography.Paragraph>
-      <Button type="primary" onClick={() => { setOpen(true); form.setFieldsValue({ min_severity: 'warning', daily_digest: true }); }} style={{ marginBottom: 12 }}>Добавить чат</Button>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Button type="primary" icon={<SendOutlined />} disabled={!data?.token_configured}
+          onClick={() => { setGroupOpen(true); groupForm.setFieldsValue({ min_severity: 'warning', daily_digest: true }); }}>Добавить бота в группу</Button>
+        <Button onClick={() => { setOpen(true); form.setFieldsValue({ min_severity: 'warning', daily_digest: true }); }}>Добавить по номеру чата</Button>
+      </Space>
       <Table size="small" rowKey="id" loading={isLoading} dataSource={data?.channels} pagination={false}
         columns={[
-          { title: 'Чат', dataIndex: 'title', render: (v, r) => <>{v ?? '—'} <Typography.Text type="secondary">{r.target}</Typography.Text> {r.platform && <Tag color="purple">платформа</Tag>}</> },
+          {
+            title: 'Чат', dataIndex: 'title', render: (v, r) => (
+              <>
+                {v ?? '—'} <Typography.Text type="secondary">{r.target}</Typography.Text>
+                {r.platform && <Tag color="purple">платформа</Tag>}
+                {r.user_id && <Tag color="cyan">личный</Tag>}
+                {!r.enabled && <Tag>выключен</Tag>}
+              </>
+            ),
+          },
           { title: 'Важность от', dataIndex: 'min_severity', render: (v: string) => <Tag color={SEVERITY[v]?.color}>{SEVERITY[v]?.label}</Tag> },
           { title: 'Сводка в 9:00', dataIndex: 'daily_digest', render: (v: boolean) => (v ? 'да' : 'нет') },
           {
@@ -184,20 +225,25 @@ function Notifications() {
             ),
           },
         ]} />
-      <Modal open={open} title="Чат Telegram для уведомлений" onOk={add} onCancel={() => setOpen(false)} okText="Добавить" destroyOnClose>
+      <Modal open={groupOpen} title="Добавить бота в группу Telegram" onCancel={closeGroup} destroyOnClose
+        footer={groupLink ? <Button onClick={closeGroup}>Готово</Button> : undefined} onOk={linkGroup} okText="Открыть Telegram">
+        {groupLink ? (
+          <Typography.Paragraph>
+            В Telegram выберите группу и подтвердите добавление бота. Группа появится в списке сама.
+            Если Telegram не открылся — <a href={groupLink} target="_blank" rel="noopener noreferrer">откройте ссылку</a>.
+            Ссылка одноразовая и действует 15 минут.
+          </Typography.Paragraph>
+        ) : (
+          <Form form={groupForm} layout="vertical">{severityAndDigest}</Form>
+        )}
+      </Modal>
+      <Modal open={open} title="Чат Telegram по номеру" onOk={add} onCancel={() => setOpen(false)} okText="Добавить" destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item name="title" label="Название"><Input placeholder="например, Дежурные" /></Form.Item>
-          <Form.Item name="target" label="Chat id" rules={[{ required: true }]}><Input placeholder="-1001234567890" /></Form.Item>
-          <Form.Item name="min_severity" label="Присылать события с важностью от">
-            <Select options={Object.entries(SEVERITY).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Form.Item name="target" label="Номер чата (chat id)" rules={[{ required: true }]} extra="Бот должен уже быть в этом чате.">
+            <Input placeholder="-1001234567890" />
           </Form.Item>
-          <Form.Item name="daily_digest" label="Утренняя сводка" valuePropName="checked"><Switch /></Form.Item>
-          {isSuper(me) && (
-            <Form.Item name="platform" label="Чат платформы" valuePropName="checked"
-              extra="Заявки на подключение АЗС и ошибки обновления агентов. Иначе чат получает события АЗС организации, выбранной в шапке.">
-              <Switch />
-            </Form.Item>
-          )}
+          {severityAndDigest}
         </Form>
       </Modal>
     </>

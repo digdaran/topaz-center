@@ -10,6 +10,8 @@ public sealed record TankSettingsBody(decimal MinLiters, decimal LeadTimeDays, d
 public sealed record AlertStatusBody(string Status);
 public sealed record RuleBody(bool Enabled, decimal? Threshold, string? Severity);
 public sealed record ChannelBody(string Target, string? Title, string MinSeverity, bool DailyDigest, bool? Platform = null);
+public sealed record TelegramLinkBody(string MinSeverity, bool DailyDigest, bool? Platform = null);
+public sealed record TelegramMeBody(string MinSeverity, bool DailyDigest, bool Enabled);
 
 /// <summary>Stage 4: fuel stock planning, alerts (anomalies), alert rules, notification channels.</summary>
 public static class ControlEndpoints
@@ -32,6 +34,13 @@ public static class ControlEndpoints
         owner.MapPost("/notifications", AddChannel);
         owner.MapDelete("/notifications/{id:long}", DeleteChannel);
         owner.MapPost("/notifications/{id:long}/test", TestChannel);
+        owner.MapPost("/notifications/link-group", LinkGroup);
+        // The user's own Telegram: every role, events of the user's stations only.
+        ui.MapGet("/telegram/me", TelegramMe);
+        ui.MapPost("/telegram/me/link", LinkPersonal);
+        ui.MapPut("/telegram/me", UpdatePersonal);
+        ui.MapDelete("/telegram/me", DeletePersonal);
+        ui.MapPost("/telegram/me/test", TestPersonal);
     }
 
     // ---------------------------------------------------------------- tanks
@@ -249,8 +258,11 @@ public static class ControlEndpoints
     {
         await using var c = await db.OpenConnectionAsync();
         var rows = await c.QueryAsync("""
-            SELECT id, kind, target, title, min_severity, daily_digest, enabled, last_digest, created_at, organization_id IS NULL AS platform
-            FROM notification_channels WHERE organization_id = @org OR (organization_id IS NULL AND @super) ORDER BY organization_id IS NULL, id
+            SELECT ch.id, ch.kind, ch.target, ch.title, ch.min_severity, ch.daily_digest, ch.enabled, ch.last_digest, ch.created_at,
+                   ch.organization_id IS NULL AND ch.user_id IS NULL AS platform, ch.user_id, u.name AS user_name
+            FROM notification_channels ch LEFT JOIN users u ON u.id = ch.user_id
+            WHERE ch.organization_id = @org OR (ch.organization_id IS NULL AND @super)
+            ORDER BY ch.organization_id IS NULL, ch.user_id IS NOT NULL, ch.id
             """, new { org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin) });
         return Results.Ok(new { token_configured = !string.IsNullOrWhiteSpace(options.Value.TelegramBotToken), channels = rows });
     }
@@ -264,7 +276,12 @@ public static class ControlEndpoints
         if (!platform && org is null) return Results.Problem(statusCode: 400, title: "Выберите организацию");
         await using var c = await db.OpenConnectionAsync();
         var id = await c.ExecuteScalarAsync<long>(
-            "INSERT INTO notification_channels (target, title, min_severity, daily_digest, organization_id) VALUES (@Target, @Title, @MinSeverity, @DailyDigest, @org) RETURNING id",
+            """
+            INSERT INTO notification_channels (target, title, min_severity, daily_digest, organization_id) VALUES (@Target, @Title, @MinSeverity, @DailyDigest, @org)
+            ON CONFLICT (organization_id, target) WHERE user_id IS NULL
+            DO UPDATE SET title = EXCLUDED.title, min_severity = EXCLUDED.min_severity, daily_digest = EXCLUDED.daily_digest, enabled = true
+            RETURNING id
+            """,
             new { Target = body.Target.Trim(), body.Title, body.MinSeverity, body.DailyDigest, org });
         await Audit.WriteAsync(db, user, "channel_added", "channel:" + id, body);
         return Results.Ok(new { id });
@@ -281,13 +298,86 @@ public static class ControlEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> TestChannel(long id, ClaimsPrincipal user, UiDb db, AnomalyDetector detector, IOptions<CentralOptions> options, CancellationToken ct)
+    private static async Task<IResult> TestChannel(long id, ClaimsPrincipal user, UiDb db, TelegramApi telegram, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(options.Value.TelegramBotToken)) return Results.Problem(statusCode: 400, title: "Токен бота не задан (Topaz__TelegramBotToken)");
+        if (!telegram.Configured) return Results.Problem(statusCode: 400, title: "Токен бота не задан (Topaz__TelegramBotToken)");
         await using var c = await db.OpenConnectionAsync();
         var target = await c.QuerySingleOrDefaultAsync<string>($"SELECT target FROM notification_channels WHERE {OwnChannel}", new { id, org = user.OrganizationId(), super = user.IsInRole(Roles.Superadmin) });
         if (target is null) return Results.NotFound();
-        var ok = await detector.SendAsync(options.Value.TelegramBotToken, target, "✅ Topaz Center: тестовое сообщение. Уведомления работают.", ct);
-        return ok ? Results.NoContent() : Results.Problem(statusCode: 502, title: "Telegram не принял сообщение: проверьте chat id и что бот добавлен в чат");
+        return await TestAsync(telegram, target, ct);
+    }
+
+    private static async Task<IResult> TestAsync(TelegramApi telegram, string target, CancellationToken ct)
+    {
+        var r = await telegram.SendAsync(target, "✅ Topaz Center: тестовое сообщение. Уведомления работают.", ct);
+        return r.Ok ? Results.NoContent() : Results.Problem(statusCode: 502, title: "Telegram не принял сообщение: проверьте, что бот есть в чате и не заблокирован");
+    }
+
+    /// <summary>A one-time t.me link (15 minutes) that the bot turns into a channel (Processing/TelegramBot).</summary>
+    private static async Task<IResult> NewLinkAsync(UiDb db, TelegramApi telegram, ClaimsPrincipal user, string kind, Guid? org, TelegramLinkBody body, CancellationToken ct)
+    {
+        if (!AnomalyDetector.SeverityRank.ContainsKey(body.MinSeverity)) return Results.Problem(statusCode: 400, title: "min_severity: critical | warning | info");
+        if (!telegram.Configured) return Results.Problem(statusCode: 400, title: "Бот Telegram ещё не подключён: попросите администратора задать токен бота");
+        var bot = await telegram.UsernameAsync(ct);
+        if (bot is null) return Results.Problem(statusCode: 502, title: "Не удалось связаться с Telegram, попробуйте позже");
+        var code = TelegramBot.NewCode();
+        var expires = DateTime.UtcNow.Add(TelegramBot.CodeLifetime);
+        await using var c = await db.OpenConnectionAsync(ct);
+        await c.ExecuteAsync("DELETE FROM telegram_link_codes WHERE expires_at < now() - interval '1 day'");
+        await c.ExecuteAsync("""
+            INSERT INTO telegram_link_codes (code_hash, kind, user_id, organization_id, min_severity, daily_digest, expires_at)
+            VALUES (@hash, @kind, @uid, @org, @MinSeverity, @DailyDigest, @expires)
+            """, new { hash = TelegramBot.HashCode(code), kind, uid = user.UserId(), org, body.MinSeverity, body.DailyDigest, expires });
+        var url = $"https://t.me/{bot}?{(kind == "personal" ? "start" : "startgroup")}={code}";
+        return Results.Ok(new { url, bot_username = bot, expires_at = expires });
+    }
+
+    private static Task<IResult> LinkGroup(TelegramLinkBody body, ClaimsPrincipal user, UiDb db, TelegramApi telegram, CancellationToken ct)
+    {
+        var platform = body.Platform == true && user.IsInRole(Roles.Superadmin);
+        var org = platform ? null : user.OrganizationId();
+        if (!platform && org is null) return Task.FromResult(Results.Problem(statusCode: 400, title: "Выберите организацию"));
+        return NewLinkAsync(db, telegram, user, "group", org, body, ct);
+    }
+
+    /// <summary>The organization of the user's own chat: none for a superadmin (it hears about everything).</summary>
+    private static Guid? PersonalOrg(ClaimsPrincipal user) => user.IsInRole(Roles.Superadmin) ? null : user.OrganizationId();
+
+    private static Task<IResult> LinkPersonal(TelegramLinkBody body, ClaimsPrincipal user, UiDb db, TelegramApi telegram, CancellationToken ct) =>
+        NewLinkAsync(db, telegram, user, "personal", PersonalOrg(user), body with { Platform = null }, ct);
+
+    private static async Task<IResult> TelegramMe(ClaimsPrincipal user, UiDb db, TelegramApi telegram, CancellationToken ct)
+    {
+        await using var c = await db.OpenConnectionAsync(ct);
+        var channel = await c.QuerySingleOrDefaultAsync("""
+            SELECT title, min_severity, daily_digest, enabled, created_at FROM notification_channels WHERE user_id = @uid
+            """, new { uid = user.UserId() });
+        return Results.Ok(new { bot_configured = telegram.Configured, bot_username = await telegram.UsernameAsync(ct), channel });
+    }
+
+    private static async Task<IResult> UpdatePersonal(TelegramMeBody body, ClaimsPrincipal user, UiDb db)
+    {
+        if (!AnomalyDetector.SeverityRank.ContainsKey(body.MinSeverity)) return Results.Problem(statusCode: 400, title: "min_severity: critical | warning | info");
+        await using var c = await db.OpenConnectionAsync();
+        var n = await c.ExecuteAsync("UPDATE notification_channels SET min_severity = @MinSeverity, daily_digest = @DailyDigest, enabled = @Enabled WHERE user_id = @uid",
+            new { body.MinSeverity, body.DailyDigest, body.Enabled, uid = user.UserId() });
+        return n == 0 ? Results.NotFound() : Results.NoContent();
+    }
+
+    private static async Task<IResult> DeletePersonal(ClaimsPrincipal user, UiDb db)
+    {
+        await using var c = await db.OpenConnectionAsync();
+        var n = await c.ExecuteAsync("DELETE FROM notification_channels WHERE user_id = @uid", new { uid = user.UserId() });
+        if (n == 0) return Results.NotFound();
+        await Audit.WriteAsync(db, user, "telegram_unlinked", "telegram:personal", null);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> TestPersonal(ClaimsPrincipal user, UiDb db, TelegramApi telegram, CancellationToken ct)
+    {
+        if (!telegram.Configured) return Results.Problem(statusCode: 400, title: "Бот Telegram ещё не подключён");
+        await using var c = await db.OpenConnectionAsync(ct);
+        var target = await c.QuerySingleOrDefaultAsync<string>("SELECT target FROM notification_channels WHERE user_id = @uid", new { uid = user.UserId() });
+        return target is null ? Results.NotFound() : await TestAsync(telegram, target, ct);
     }
 }

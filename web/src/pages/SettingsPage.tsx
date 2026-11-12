@@ -12,6 +12,7 @@ import { OrganizationSettings, PaymentModes } from './OrgSettings';
 import { dateTime } from '../lib/format';
 import { TotpStatus } from '../components/TotpSetup';
 import { Passkeys } from '../components/Passkeys';
+import { TelegramPersonal } from '../components/TelegramPersonal';
 
 interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; totp_enabled: boolean; passkeys: number; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
 interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string; organization?: string | null }
@@ -163,6 +164,9 @@ function Profile() {
     </Card>
     <Card size="small" title="Вход по отпечатку или лицу" style={{ width: 560, maxWidth: '100%' }}>
       <Passkeys />
+    </Card>
+    <Card size="small" title="Уведомления в Telegram" style={{ width: 560, maxWidth: '100%' }}>
+      <TelegramPersonal />
     </Card>
     </Flex>
   );

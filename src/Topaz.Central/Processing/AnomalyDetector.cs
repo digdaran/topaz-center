@@ -12,7 +12,7 @@ namespace Topaz.Central.Processing;
 /// Every 5 minutes: evaluates the alert rules (alert_rules) over the last 30 days and stores new alerts
 /// (deduplicated by rule + station + object), then sends fresh ones to the Telegram channels and a daily digest.
 /// </summary>
-public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http, IOptions<CentralOptions> options, ILogger<AnomalyDetector> log) : BackgroundService
+public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, ILogger<AnomalyDetector> log) : BackgroundService
 {
     public static readonly Dictionary<string, int> SeverityRank = new() { ["info"] = 1, ["warning"] = 2, ["critical"] = 3 };
     private readonly SemaphoreSlim _runLock = new(1, 1);
@@ -480,37 +480,72 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
 
     // ---------------------------------------------------------------- notifications
 
-    private sealed record Channel(long Id, string Target, string MinSeverity, bool DailyDigest, DateTime? LastDigest, Guid? OrganizationId);
-    private sealed record Pending(long Id, string Station, string Severity, string Title, string? Details, DateTime? OccurredAt, string RuleCode, Guid? OrganizationId);
+    /// <summary>
+    /// A notification chat. UserId set = a user's own chat: Stations are the stations this user can see
+    /// (null for a superadmin: everything, platform events included).
+    /// </summary>
+    private sealed class Channel
+    {
+        public long Id { get; init; }
+        public string Target { get; init; } = "";
+        public string MinSeverity { get; init; } = "warning";
+        public bool DailyDigest { get; init; }
+        public DateTime? LastDigest { get; init; }
+        public Guid? OrganizationId { get; init; }
+        public Guid? UserId { get; init; }
+        public Guid[]? Stations { get; init; } // Dapper cannot pass uuid[] to a record constructor
+    }
+    private sealed record Pending(long Id, string Station, string Severity, string Title, string? Details, DateTime? OccurredAt, string RuleCode, Guid? OrganizationId, Guid? StationId);
 
     /// <summary>Platform events (connection requests, agent updates) go to the superadmin's chats only.</summary>
     private static bool IsPlatform(Pending p) => p.OrganizationId is null || p.RuleCode is "agent_update_failed" or "station_registration";
 
-    /// <summary>A chat of an organization hears only about its stations; a platform chat (no organization) about platform events.</summary>
-    private static bool Routes(Channel ch, Pending p) => ch.OrganizationId is { } org ? !IsPlatform(p) && p.OrganizationId == org : IsPlatform(p);
+    /// <summary>
+    /// A chat of an organization hears only about its stations; a platform chat (no organization) about platform events;
+    /// a user's own chat about the stations the user sees (a superadmin's: everything).
+    /// </summary>
+    private static bool Routes(Channel ch, Pending p)
+    {
+        if (ch.UserId is not null)
+            return ch.Stations is null || (!IsPlatform(p) && p.StationId is { } s && ch.Stations.Contains(s));
+        return ch.OrganizationId is { } org ? !IsPlatform(p) && p.OrganizationId == org : IsPlatform(p);
+    }
+
+    /// <summary>
+    /// Enabled chats. A user's own chat is read with the user's current access (same rules as StationScope):
+    /// a blocked user or a removed station stops the messages at the next round.
+    /// </summary>
+    private const string ChannelsSql = """
+        SELECT ch.id, ch.target, ch.min_severity AS MinSeverity, ch.daily_digest AS DailyDigest, ch.last_digest AS LastDigest,
+               ch.organization_id AS OrganizationId, ch.user_id AS UserId,
+               CASE WHEN u.id IS NULL OR u.role = 'superadmin' THEN NULL
+                    WHEN u.role = 'owner' THEN ARRAY(SELECT s.id FROM stations s WHERE s.organization_id = u.organization_id)
+                    ELSE ARRAY(SELECT us.station_id FROM user_stations us JOIN stations s ON s.id = us.station_id
+                               WHERE us.user_id = u.id AND s.organization_id = u.organization_id AND s.status <> 'revoked') END AS Stations
+        FROM notification_channels ch LEFT JOIN users u ON u.id = ch.user_id
+        WHERE ch.enabled AND (ch.user_id IS NULL OR u.is_active)
+        """;
 
     private async Task NotifyAsync(NpgsqlConnection c, CancellationToken ct)
     {
-        var token = options.Value.TelegramBotToken;
         var pending = (await c.QueryAsync<Pending>("""
             SELECT a.id, COALESCE(sn.station, 'Новая АЗС') AS station, a.severity, a.title, a.details, a.occurred_at AS OccurredAt,
-                   a.rule_code AS RuleCode, st.organization_id AS OrganizationId
+                   a.rule_code AS RuleCode, st.organization_id AS OrganizationId, a.station_id AS StationId
             FROM alerts a LEFT JOIN v_station_names sn ON sn.station_id = a.station_id LEFT JOIN stations st ON st.id = a.station_id
             WHERE a.notified_at IS NULL ORDER BY a.id
             """)).ToList();
-        var channels = (await c.QueryAsync<Channel>(
-            "SELECT id, target, min_severity AS MinSeverity, daily_digest AS DailyDigest, last_digest AS LastDigest, organization_id AS OrganizationId FROM notification_channels WHERE enabled")).ToList();
+        var channels = (await c.QueryAsync<Channel>(ChannelsSql)).ToList();
 
-        var canSend = !string.IsNullOrWhiteSpace(token) && channels.Count > 0;
+        var canSend = telegram.Configured && channels.Count > 0;
         if (canSend)
         {
             // Only fresh events go out immediately; history found on the first run is not replayed.
             var fresh = pending.Where(p => p.OccurredAt is null || p.OccurredAt > DateTime.UtcNow.AddDays(-1)).ToList();
-            await DigestAsync(c, token!, channels, ct);
+            await DigestAsync(c, channels, ct);
             foreach (var ch in channels)
             {
                 var mine = fresh.Where(p => Routes(ch, p) && SeverityRank[p.Severity] >= SeverityRank[ch.MinSeverity]).ToList();
-                if (mine.Count > 0) await SendAsync(token!, ch.Target, Format(mine), ct);
+                if (mine.Count > 0) await SendAsync(c, ch, Format(mine), ct);
             }
         }
         // Without a bot token or channels, fresh alerts wait (a channel added later still gets the last day);
@@ -518,6 +553,26 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
         var done = canSend ? pending : pending.Where(p => p.OccurredAt is { } at && at < DateTime.UtcNow.AddDays(-1)).ToList();
         if (done.Count > 0)
             await c.ExecuteAsync("UPDATE alerts SET notified_at = now() WHERE id = ANY(@ids)", new { ids = done.Select(p => p.Id).ToArray() });
+    }
+
+    /// <summary>
+    /// Sends to a channel and keeps the channel list right: a group that became a supergroup gets its new id
+    /// (and the message is resent there); a chat that blocked or removed the bot is switched off.
+    /// </summary>
+    private async Task<bool> SendAsync(NpgsqlConnection c, Channel ch, string html, CancellationToken ct)
+    {
+        var r = await telegram.SendAsync(ch.Target, html, ct);
+        if (r.MigratedTo is { } to)
+        {
+            await c.ExecuteAsync("UPDATE notification_channels SET target = @to WHERE id = @id", new { to, id = ch.Id });
+            r = await telegram.SendAsync(to, html, ct);
+        }
+        if (r.Gone)
+        {
+            await c.ExecuteAsync("UPDATE notification_channels SET enabled = false WHERE id = @id", new { id = ch.Id });
+            log.LogInformation("Telegram channel {Id} switched off: the bot was blocked or removed from the chat", ch.Id);
+        }
+        return r.Ok;
     }
 
     private static string Format(IReadOnlyList<Pending> alerts)
@@ -532,47 +587,30 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, IHttpClientFactory http
     }
 
     /// <summary>Daily summary at 09:00 Moscow time: new alerts of the last 24 hours by severity.</summary>
-    private async Task DigestAsync(NpgsqlConnection c, string token, List<Channel> channels, CancellationToken ct)
+    private async Task DigestAsync(NpgsqlConnection c, List<Channel> channels, CancellationToken ct)
     {
         var msk = DateTime.UtcNow.AddHours(3);
         if (msk.Hour < 9) return;
         foreach (var ch in channels.Where(ch => ch.DailyDigest && (ch.LastDigest is null || ch.LastDigest.Value.Date < msk.Date)))
         {
-            // The organization's own stations; a platform chat gets the whole picture (counts only, no data).
-            var org = ch.OrganizationId;
+            // The organization's own stations (a user's own chat: the user's stations); a platform chat or a
+            // superadmin's own chat gets the whole picture (counts only, no data).
+            var org = ch.UserId is not null && ch.Stations is null ? null : ch.OrganizationId;
+            var ids = ch.Stations;
             var counts = (await c.QueryAsync<(string Severity, long Count)>("""
                 SELECT a.severity, count(*) FROM alerts a LEFT JOIN stations s ON s.id = a.station_id
-                WHERE a.detected_at > now() - interval '24 hours' AND (@org::uuid IS NULL OR s.organization_id = @org) GROUP BY 1
-                """, new { org })).ToDictionary(x => x.Severity, x => x.Count);
+                WHERE a.detected_at > now() - interval '24 hours' AND (@org::uuid IS NULL OR s.organization_id = @org)
+                  AND (@ids::uuid[] IS NULL OR a.station_id = ANY(@ids)) GROUP BY 1
+                """, new { org, ids })).ToDictionary(x => x.Severity, x => x.Count);
             var stations = await c.QuerySingleAsync<(long Total, long Silent)>("""
                 SELECT count(*), count(*) FILTER (WHERE v.silent_for > interval '15 minutes' OR v.silent_for IS NULL)
                 FROM v_station_status v JOIN stations s ON s.id = v.id WHERE v.status = 'active' AND (@org::uuid IS NULL OR s.organization_id = @org)
-                """, new { org });
+                  AND (@ids::uuid[] IS NULL OR s.id = ANY(@ids))
+                """, new { org, ids });
             var text = $"<b>Topaz Center: сводка за сутки</b>\nСобытий: 🔴 {counts.GetValueOrDefault("critical")} · 🟠 {counts.GetValueOrDefault("warning")} · 🔵 {counts.GetValueOrDefault("info")}\n" +
                        $"АЗС на связи: {stations.Total - stations.Silent} из {stations.Total}";
-            if (await SendAsync(token, ch.Target, text, ct))
+            if (await SendAsync(c, ch, text, ct))
                 await c.ExecuteAsync("UPDATE notification_channels SET last_digest = @d WHERE id = @id", new { d = msk.Date, id = ch.Id });
-        }
-    }
-
-    public async Task<bool> SendAsync(string token, string chat, string html, CancellationToken ct)
-    {
-        try
-        {
-            var client = http.CreateClient("telegram");
-            var url = $"{options.Value.TelegramApiBase.TrimEnd('/')}/bot{token}/sendMessage";
-            var res = await client.PostAsJsonAsync(url, new Dictionary<string, object>
-            {
-                ["chat_id"] = chat, ["text"] = html, ["parse_mode"] = "HTML", ["disable_web_page_preview"] = true,
-            }, ct);
-            if (!res.IsSuccessStatusCode)
-                log.LogWarning("Telegram send to {Chat} failed: {Status} {Body}", chat, (int)res.StatusCode, await res.Content.ReadAsStringAsync(ct));
-            return res.IsSuccessStatusCode;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            log.LogWarning("Telegram send to {Chat} failed: {Error}", chat, ex.Message); // never log the token (it is in the URL)
-            return false;
         }
     }
 }
