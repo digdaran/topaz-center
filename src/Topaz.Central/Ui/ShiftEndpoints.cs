@@ -17,12 +17,20 @@ public static class ShiftEndpoints
         AND (t.started_at AT TIME ZONE sn.time_zone)::date BETWEEN @from::date AND @to::date
         """;
 
-    /// <summary>Fuel revenue of a shift by payment category (the Topaz-like totals keep Topaz's own cash/cashless rules).</summary>
+    /// <summary>
+/// Fuel (p) and shop (sp, returns subtracted) revenue of a shift by payment category (the Topaz-like totals keep Topaz's
+/// own cash/cashless rules).
+/// </summary>
     private const string PayByShift = """
         LEFT JOIN LATERAL (
             SELECT sum(v.amount) FILTER (WHERE v.pay_category = 'cash') AS pay_cash, sum(v.amount) FILTER (WHERE v.pay_category = 'card') AS pay_card,
                    sum(v.amount) FILTER (WHERE v.pay_category = 'contract') AS pay_contract, sum(v.amount) FILTER (WHERE v.pay_category = 'fuel_card') AS pay_fuel_card
             FROM v_fuel_sales_local v WHERE v.station_id = t.station_id AND v.session_id = t.session_id) p ON true
+        LEFT JOIN LATERAL (
+            SELECT sum(v.amount) AS shop_total, count(DISTINCT v.receipt_id) AS shop_receipts,
+                   sum(v.amount) FILTER (WHERE v.pay_category = 'cash') AS shop_cash, sum(v.amount) FILTER (WHERE v.pay_category = 'card') AS shop_card,
+                   sum(v.amount) FILTER (WHERE v.pay_category = 'contract') AS shop_contract, sum(v.amount) FILTER (WHERE v.pay_category = 'fuel_card') AS shop_fuel_card
+            FROM v_shop_lines_local v WHERE v.station_id = t.station_id AND v.session_id = t.session_id) sp ON true
         """;
 
     /// <summary>
@@ -48,7 +56,7 @@ public static class ShiftEndpoints
                    COALESCE(wo.operators, t.user_name) AS operators, COALESCE(wo.workplaces, 1) AS workplaces,
                    round(extract(epoch FROM COALESCE(t.ended_at, now()) - t.started_at) / 3600.0, 1) AS hours,
                    t.fuel_volume, t.fuel_amount, t.fuel_cash, t.fuel_cashless, t.fuel_mixed, t.shop_amount, t.hose_counters_delta,
-                   p.pay_cash, p.pay_card, p.pay_contract, p.pay_fuel_card,
+                   p.pay_cash, p.pay_card, p.pay_contract, p.pay_fuel_card, sp.shop_total, sp.shop_cash,
                    (SELECT count(*) FROM fuel_sales fs WHERE fs.station_id = t.station_id AND fs.session_id = t.session_id AND fs.volume = 0) AS aborted,
                    (SELECT count(*) FROM fuel_sales fs WHERE fs.station_id = t.station_id AND fs.session_id = t.session_id AND fs.volume > 0) AS orders
             FROM v_shift_totals t JOIN v_station_names sn ON sn.station_id = t.station_id
@@ -114,11 +122,25 @@ public static class ShiftEndpoints
         var header = await c.QuerySingleOrDefaultAsync($"""
             SELECT t.station_id, t.session_id, t.session_num, t.user_name, t.started_at, t.ended_at, t.fuel_volume, t.fuel_amount,
                    t.fuel_cash, t.fuel_cashless, t.fuel_mixed, t.shop_amount, t.hose_counters_delta,
-                   sn.station, sn.time_zone, p.*, COALESCE(wo.operators, t.user_name) AS operators, COALESCE(wo.workplaces, 1) AS workplaces,
-                   round(extract(epoch FROM COALESCE(t.ended_at, now()) - t.started_at) / 3600.0, 1) AS hours
+                   sn.station, sn.time_zone, p.*, sp.*, COALESCE(wo.operators, t.user_name) AS operators, COALESCE(wo.workplaces, 1) AS workplaces,
+                   round(extract(epoch FROM COALESCE(t.ended_at, now()) - t.started_at) / 3600.0, 1) AS hours,
+                   k.orders, k.aborted, k.discounts, m.*
             FROM v_shift_totals t JOIN v_station_names sn ON sn.station_id = t.station_id
             {PayByShift}
             {OperatorsByShift}
+            LEFT JOIN LATERAL (
+                SELECT count(*) FILTER (WHERE fs.volume > 0) AS orders, count(*) FILTER (WHERE fs.volume = 0) AS aborted,
+                       sum(fuel_discount(fs.amount_discount, fs.price, fs.price_pump, fs.volume)) AS discounts
+                FROM fuel_sales fs WHERE fs.station_id = t.station_id AND fs.session_id = t.session_id) k ON true
+            -- Cash in the till (Topaz money register rgCashes): 14 cash put in, 15 cash taken out (negative), 6 fuel, 5 shop.
+            LEFT JOIN LATERAL (
+                SELECT COALESCE(sum(cm.amount) FILTER (WHERE cm.doc_type_id = 14), 0) AS cash_in,
+                       COALESCE(sum(cm.amount) FILTER (WHERE cm.doc_type_id = 15), 0) AS cash_out,
+                       COALESCE(sum(cm.amount) FILTER (WHERE cm.doc_type_id = 6), 0) AS cash_fuel,
+                       COALESCE(sum(cm.amount) FILTER (WHERE cm.doc_type_id = 5), 0) AS cash_shop,
+                       COALESCE(sum(cm.amount) FILTER (WHERE cm.doc_type_id NOT IN (5, 6, 14, 15)), 0) AS cash_other,
+                       COALESCE(sum(cm.amount), 0) AS cash_end, count(*) AS cash_moves
+                FROM cash_moves cm WHERE cm.station_id = t.station_id AND cm.session_id = t.session_id) m ON true
             WHERE t.station_id = @station AND t.session_id = @session
             """, args);
         if (header is null) return Results.NotFound();

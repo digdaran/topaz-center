@@ -10,7 +10,9 @@ interface ShiftRow {
   started_at: string; ended_at: string | null;
   hours: number; fuel_volume: number | null; fuel_amount: number | null; fuel_cash: number | null; fuel_cashless: number | null;
   pay_cash: number | null; pay_card: number | null; pay_contract: number | null; pay_fuel_card: number | null;
-  shop_amount: number | null; hose_counters_delta: number | null; aborted: number; orders: number;
+  shop_amount: number | null; shop_total: number | null; shop_cash: number | null; hose_counters_delta: number | null; aborted: number; orders: number;
+  /** Computed here: fuel + shop. */
+  total?: number; cash_total?: number;
 }
 
 interface OperatorRow {
@@ -20,18 +22,25 @@ interface OperatorRow {
 
 function ShiftList() {
   const { data, error, isLoading } = useFiltered<ShiftRow[]>('/shifts');
+  const rows = data?.map((r) => ({
+    ...r,
+    total: (Number(r.fuel_amount) || 0) + (Number(r.shop_total) || 0),
+    cash_total: (Number(r.pay_cash) || 0) + (Number(r.shop_cash) || 0),
+  }));
   const navigate = useNavigate();
   const location = useLocation();
   const meta = useMeta();
   const tz = (id: string) => meta.data?.stations.find((s) => s.id === id)?.time_zone;
   const many = (meta.data?.stations.length ?? 0) > 1;
+  const hasContract = rows?.some((r) => Number(r.pay_contract) > 0) ?? false;
   return (
     <QueryState error={error} loading={isLoading}>
       <Table<ShiftRow>
         size="small"
         rowKey={(r) => `${r.station_id}/${r.session_id}`}
-        dataSource={data}
-        scroll={{ x: 1100 }}
+        dataSource={rows}
+        bordered
+        scroll={{ x: 'max-content' }}
         pagination={{ pageSize: 50, showSizeChanger: false }}
         onRow={(r) => ({ onClick: () => navigate(`/shifts/${r.station_id}/${r.session_id}${location.search}`), style: { cursor: 'pointer' } })}
         columns={[
@@ -49,12 +58,22 @@ function ShiftList() {
               ? <Tooltip title={`Продажи шли с ${r.workplaces} рабочих мест`}>{v || r.user_name}</Tooltip>
               : v || r.user_name),
           },
-          numCol<ShiftRow>('Литры', 'fuel_volume', liters),
-          numCol<ShiftRow>('Топливо', 'fuel_amount', money),
-          numCol<ShiftRow>('Наличные', 'pay_cash', money),
-          numCol<ShiftRow>('Карты', 'pay_card', money),
-          numCol<ShiftRow>('Договоры', 'pay_contract', money),
-          numCol<ShiftRow>('Магазин', 'shop_amount', money),
+          {
+            title: 'Всего', key: 'all', children: [
+              { ...numCol<ShiftRow>('Выручка', 'total', money), title: <Tooltip title="Топливо + магазин">Выручка</Tooltip> },
+              { ...numCol<ShiftRow>('Наличные', 'cash_total', money), title: <Tooltip title="Наличные за топливо и за магазин">Наличные</Tooltip> },
+            ],
+          },
+          {
+            title: 'Топливо', key: 'fuel', children: [
+              numCol<ShiftRow>('Литры', 'fuel_volume', liters),
+              numCol<ShiftRow>('Выручка', 'fuel_amount', money),
+              numCol<ShiftRow>('Наличные', 'pay_cash', money),
+              numCol<ShiftRow>('Карты', 'pay_card', money),
+              ...(hasContract ? [numCol<ShiftRow>('Договоры', 'pay_contract', money)] : []),
+            ],
+          },
+          { title: 'Магазин', key: 'shop', children: [numCol<ShiftRow>('Выручка', 'shop_total', money)] },
           numCol<ShiftRow>('Заказы', 'orders', int),
           { ...numCol<ShiftRow>('Прерв.', 'aborted', int), render: (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : '0') },
           {

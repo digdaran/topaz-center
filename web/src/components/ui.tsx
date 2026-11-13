@@ -59,6 +59,40 @@ export function KpiCard({ title, value, previous, format, hint, inverse }: KpiPr
   );
 }
 
+export interface Figure {
+  key: string;
+  label: ReactNode;
+  value: ReactNode;
+  /** A coloured dot before the label (payment method). */
+  dot?: string;
+  hint?: ReactNode;
+  strong?: boolean;
+  /** Indented: a part of the row above ("в том числе"). */
+  sub?: boolean;
+}
+
+/** Label — value lines (a figure list in a card); an optional total under a rule. */
+export function FigureList({ rows, total }: { rows: Figure[]; total?: Figure }) {
+  const { token } = theme.useToken();
+  const line = (r: Figure, isTotal = false) => (
+    <Flex key={r.key} justify="space-between" align="baseline" gap={12}
+      style={{
+        padding: isTotal ? '8px 0 0' : '3px 0', paddingLeft: r.sub ? 16 : 0,
+        borderTop: isTotal ? `1px solid ${token.colorBorderSecondary}` : undefined, marginTop: isTotal ? 6 : 0,
+      }}>
+      <Typography.Text type={r.strong || isTotal ? undefined : 'secondary'} strong={isTotal} style={{ minWidth: 0 }}>
+        {r.dot && <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: r.dot, marginRight: 8 }} />}
+        {r.label}
+        {r.hint && <>{' '}<Tooltip title={r.hint}><InfoCircleOutlined style={{ color: token.colorTextTertiary }} /></Tooltip></>}
+      </Typography.Text>
+      <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontWeight: r.strong || isTotal ? 600 : undefined, fontSize: isTotal ? 16 : undefined }}>
+        {r.value}
+      </span>
+    </Flex>
+  );
+  return <div>{rows.map((r) => line(r))}{total && line(total, true)}</div>;
+}
+
 /** ECharts in a card, themed for light/dark. */
 export function ChartCard({ title, option, height = 320, loading, extra, empty }: {
   title: ReactNode;

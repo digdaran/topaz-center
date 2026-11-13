@@ -1,16 +1,17 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Col, Descriptions, Row, Table, Tabs, Tag, Typography } from 'antd';
+import { Button, Card, Col, Descriptions, Row, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { KpiCard, numCol, QueryState } from '../components/ui';
+import { ShiftMoney, ShiftSummary } from '../components/ShiftSummary';
+import { numCol, QueryState } from '../components/ui';
 import { dateTime, dec, duration, int, liters, money, Num, toNum } from '../lib/format';
 import { PAY, PayCategory } from '../lib/payments';
 
 type Row = Record<string, any>;
 
 interface Card {
-  header: Row & {
+  header: Row & ShiftMoney & {
     station: string; time_zone: string; session_num: number; user_name: string; operators: string; workplaces: number;
     started_at: string; ended_at: string | null; hours: number;
   };
@@ -58,18 +59,7 @@ export default function ShiftCardPage() {
             { key: 'e', label: 'Конец', children: h.ended_at ? dateTime(h.ended_at, tz) : '—' },
             { key: 'd', label: 'Длительность', children: duration(h.hours) },
           ]} />
-          <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-            {[
-              { title: 'Отпущено топлива', value: h.fuel_volume, format: liters },
-              { title: 'Выручка топливо', value: h.fuel_amount, format: money },
-              { title: 'Наличные', value: h.pay_cash, format: money },
-              { title: 'Банковские карты', value: h.pay_card, format: money },
-              ...(Number(h.pay_contract ?? 0) > 0 ? [{ title: 'По договорам', value: h.pay_contract, format: money }] : []),
-              ...(Number(h.pay_fuel_card ?? 0) > 0 ? [{ title: 'Топливные карты', value: h.pay_fuel_card, format: money }] : []),
-              { title: 'Магазин', value: h.shop_amount, format: money },
-              { title: 'Счётчики ТРК', value: h.hose_counters_delta, format: liters },
-            ].map((k) => <Col key={k.title} xs={12} md={8} xl={4}><KpiCard {...k} /></Col>)}
-          </Row>
+          <ShiftSummary h={h} />
           {severalPlaces && (
             <Card size="small" title="Рабочие места" style={{ marginBottom: 12 }}>
               <Table size="small" rowKey="local_session_id" pagination={false} dataSource={places} scroll={{ x: 900 }}
@@ -115,7 +105,7 @@ export default function ShiftCardPage() {
                     numCol<Row>('Заказов', 'order_count', int),
                     paidPriceCol(),
                     numCol<Row>('Скидки', 'discount', (v) => money(v, true)),
-                    numCol<Row>('Предоплата нал.', 'amount_cash', (v) => money(v, true)),
+                    numCol<Row>('Предоплата нал.', 'amount_cash', (v) => money(v, true), { title: <Tooltip title="Сколько клиент внёс наличными заранее, до скидки за литр — как в сменном отчёте Топаза">Предоплата нал.</Tooltip> }),
                   ]} />
               ),
             },
