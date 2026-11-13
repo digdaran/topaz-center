@@ -96,7 +96,8 @@ public static partial class MoneyEndpoints
                         FROM v_agg_fuel WHERE {AnalyticsSql.AggWhere} GROUP BY 1),
                  sh AS (SELECT local_date, sum(amount) FILTER (WHERE pay_category = 'cash') AS shop_cash,
                                sum(amount) FILTER (WHERE pay_category = 'card') AS shop_card,
-                               sum(amount) FILTER (WHERE pay_category IN ('contract', 'fuel_card')) AS shop_contract
+                               sum(amount) FILTER (WHERE pay_category = 'contract') AS shop_contract,
+                               sum(amount) FILTER (WHERE pay_category = 'fuel_card') AS shop_fuel_card
                         FROM v_agg_shop WHERE {AnalyticsSql.AggWhere} GROUP BY 1),
                  rg AS (SELECT (m.moved_at AT TIME ZONE sn.time_zone)::date AS local_date,
                                sum(m.amount) FILTER (WHERE m.doc_type_id = 14) AS cash_in, -sum(m.amount) FILTER (WHERE m.doc_type_id = 15) AS cash_out
@@ -105,7 +106,7 @@ public static partial class MoneyEndpoints
             SELECT d::date::text AS day,
                    COALESCE(fu.fuel_cash, 0) AS fuel_cash, COALESCE(fu.fuel_card, 0) AS fuel_card,
                    COALESCE(fu.fuel_contract, 0) AS fuel_contract, COALESCE(fu.fuel_fuel_card, 0) AS fuel_fuel_card,
-                   COALESCE(sh.shop_cash, 0) AS shop_cash, COALESCE(sh.shop_card, 0) AS shop_card, COALESCE(sh.shop_contract, 0) AS shop_contract,
+                   COALESCE(sh.shop_cash, 0) AS shop_cash, COALESCE(sh.shop_card, 0) AS shop_card, COALESCE(sh.shop_contract, 0) AS shop_contract, COALESCE(sh.shop_fuel_card, 0) AS shop_fuel_card,
                    COALESCE(rg.cash_in, 0) AS cash_in, COALESCE(rg.cash_out, 0) AS cash_out
             FROM generate_series(@from::date, @to::date, interval '1 day') d
             LEFT JOIN fu ON fu.local_date = d::date LEFT JOIN sh ON sh.local_date = d::date LEFT JOIN rg ON rg.local_date = d::date
