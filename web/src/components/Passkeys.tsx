@@ -8,7 +8,7 @@ import { createPasskey, CreationOptionsJson, passkeyError, passkeysSupported } f
 
 interface Passkey { id: string; name: string; created_at: string; last_used_at: string | null }
 
-/** «Настройки → Вход и защита»: passkeys of the user — add this device, see where they are, remove a lost one. */
+/** «Профиль»: passkeys of the user — add this device, see where they are, remove a lost one. */
 export function Passkeys() {
   const { message } = App.useApp();
   const qc = useQueryClient();

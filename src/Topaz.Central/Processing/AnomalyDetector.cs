@@ -224,7 +224,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         Insert + """
         SELECT f.station_id, 'receipt_without_cost', f.receipt_id::text, r.severity,
                'Не введена цена слива: ' || COALESCE(sf.fuel_name, 'топливо') || ', ' || fmt_num(f.doc_volume) || ' л',
-               format('Слив %s, резервуар %s, документ %s. Введите закупочную цену в разделе «Себестоимость» — пока её нет, слив считается по средней цене резервуара.',
+               format('Слив %s, резервуар %s, документ %s. Введите закупочную цену в «Деньги → Себестоимость» — пока её нет, слив считается по средней цене резервуара.',
                       to_char(f.received_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY HH24:MI'), COALESCE(t.num::text, f.tank_id::text), COALESCE(NULLIF(f.doc_number, ''), 'без номера')),
                f.doc_volume, f.session_id, f.received_at
         FROM fuel_receipts f
@@ -408,7 +408,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                'АЗС ожидает подключения: «' || g.station_name || '»',
                concat_ws(', ', 'ПК ' || g.machine_name, 'IP ' || g.ip, 'агент ' || g.agent_version)
                    || CASE WHEN p.id IS NOT NULL THEN '. Повторное подключение АЗС «' || COALESCE(NULLIF(p.display_name, ''), p.name) || '»' ELSE '' END
-                   || '. Одобрите в «АЗС → Подключение», сверив код подтверждения с тем, кто устанавливал агент.',
+                   || '. Одобрите в «Платформа → Подключение АЗС», сверив код подтверждения с тем, кто устанавливал агент.',
                NULL, NULL, g.created_at
         FROM station_registrations g
         LEFT JOIN stations p ON p.id = g.previous_station_id

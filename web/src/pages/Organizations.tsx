@@ -42,7 +42,7 @@ export default function Organizations() {
     <>
       <Typography.Paragraph type="secondary">
         Каждая организация — отдельный хозяин АЗС: видит только свои АЗС, своих пользователей, свои чаты Telegram и свои пороги правил.
-        Новую АЗС вы относите к организации при одобрении заявки (АЗС → Подключение). Данные любой организации вы смотрите, выбрав её в шапке.
+        Новую АЗС вы относите к организации при одобрении заявки (Платформа → Подключение АЗС). Данные любой организации вы смотрите, выбрав её в шапке.
       </Typography.Paragraph>
       <Space wrap style={{ marginBottom: 12 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setName(''); setAdding(true); }}>Добавить организацию</Button>

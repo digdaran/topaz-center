@@ -122,7 +122,7 @@ var app = builder.Build();
 if (string.IsNullOrEmpty(options.AdminToken) || options.AdminToken.Length < 24)
     app.Logger.LogWarning("Topaz__AdminToken is not set or shorter than 24 chars: admin and export API are unusable");
 if (!string.IsNullOrEmpty(options.EnrollmentKey))
-    app.Logger.LogWarning("Topaz__EnrollmentKey is set but no longer used: stations connect by request (АЗС → Подключение). Remove it from .env");
+    app.Logger.LogWarning("Topaz__EnrollmentKey is set but no longer used: stations connect by request (Платформа → Подключение АЗС). Remove it from .env");
 
 await app.Services.GetRequiredService<Migrator>().MigrateAsync(CancellationToken.None);
 await app.Services.GetRequiredService<Topaz.Central.Updates.AgentReleases>().ScanAsync(CancellationToken.None);

@@ -1,9 +1,9 @@
 import { DownloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Row, Space, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Row, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { csvUrl, useFilter, useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
+import { CHART_COLORS, ChartCard, KpiCard, numCol, QueryState } from '../components/ui';
 import { bucketLabel, compact, int, liters, money, Num, pct } from '../lib/format';
 
 type R = Record<string, any>;
@@ -11,7 +11,7 @@ interface Finance { filter: { g: string }; vat: { mode: string; rate: number }; 
 
 const coverageWarn = (v: Num) => (v != null && Number(v) < 0.999 ? ` · себестоимость известна для ${pct(v)}` : '');
 
-export default function FinancePage() {
+export default function FinancePage({ view = 'margin' }: { view?: 'margin' | 'contracts' }) {
   const { data, error, isLoading, isFetching } = useFiltered<Finance>('/analytics/finance');
   const g = data?.filter.g ?? 'day';
   const fuel = data?.fuel ?? {};
@@ -25,9 +25,8 @@ export default function FinancePage() {
 
   return (
     <>
-      <PageTitle title="Финансы" />
       <FilterBar compare={false} fuel pay />
-      <Tabs destroyInactiveTabPane items={[{ key: 'money', label: 'Маржа и деньги', children: (
+      {view === 'contracts' ? <ContractSales /> : (
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
@@ -130,7 +129,7 @@ export default function FinancePage() {
           </>
         )}
       </QueryState>
-      ) }, { key: 'contracts', label: 'Продажи по договорам', children: <ContractSales /> }]} />
+      )}
     </>
   );
 }

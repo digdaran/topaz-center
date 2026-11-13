@@ -8,15 +8,23 @@ import { change, Num, pct, toNum } from '../lib/format';
 import { ApiError } from '../api/client';
 import { useThemeMode } from './theme';
 
-export function PageTitle({ title, extra }: { title: string; extra?: ReactNode }) {
+export function PageTitle({ title, extra, description }: { title: string; extra?: ReactNode; description?: ReactNode }) {
   return (
     <Flex justify="space-between" align="center" wrap gap={8} style={{ marginBottom: 12 }}>
-      <Typography.Title level={3} style={{ margin: 0 }}>
-        {title}
-      </Typography.Title>
+      <div>
+        <Typography.Title level={3} style={{ margin: 0 }}>
+          {title}
+        </Typography.Title>
+        {description && <Typography.Text type="secondary">{description}</Typography.Text>}
+      </div>
       {extra}
     </Flex>
   );
+}
+
+/** Controls of a tab (metric switch, month), right-aligned above its content. */
+export function Toolbar({ children }: { children: ReactNode }) {
+  return <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 12 }}>{children}</Flex>;
 }
 
 interface KpiProps {

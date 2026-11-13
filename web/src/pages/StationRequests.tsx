@@ -2,8 +2,7 @@ import { CheckOutlined, CloseOutlined, StopOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Col, Descriptions, Empty, Form, Input, Modal, Radio, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api, isSuper, useMeta } from '../api/client';
+import { api, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { QueryState } from '../components/ui';
 import { dateTime } from '../lib/format';
@@ -162,13 +161,3 @@ export default function StationRequests() {
   );
 }
 
-/** Overview hint for owners and superadmins: stations waiting to be connected. */
-export function PendingStationsBanner() {
-  const me = useMe();
-  const n = useMeta().data?.pending_registrations ?? 0;
-  if (!isSuper(me) || n === 0) return null;
-  return (
-    <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-      message={<>АЗС ожидают подключения: {n}. Агенты уже установлены и копят данные. <Link to="/stations?tab=connect">Открыть заявки</Link></>} />
-  );
-}

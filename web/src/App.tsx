@@ -1,7 +1,4 @@
-import {
-  AimOutlined, AlertOutlined, AppstoreOutlined, ExperimentOutlined, BarChartOutlined, CalculatorOutlined, WalletOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FireOutlined, LineChartOutlined, LogoutOutlined, MenuOutlined,
-  QuestionCircleOutlined, ScheduleOutlined, SettingOutlined, ShopOutlined, ShoppingOutlined, UserOutlined,
-} from '@ant-design/icons';
+import { BarChartOutlined, BulbOutlined, LogoutOutlined, MenuOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
 import { api, isOwner, isSuper, Me, useMeta } from './api/client';
@@ -13,47 +10,26 @@ import { useThemeMode } from './components/theme';
 import { lazyPage, PageErrorBoundary, UpdateBanner, useReloadOnNavigateWhenOutdated, VersionLabel } from './components/appUpdate';
 import { Spin } from 'antd';
 import { pathAfterOrgSwitch } from './lib/orgSwitch';
+import { legacyPath } from './lib/legacyPaths';
+import { allowed, NavSection, SECTIONS, sectionOf } from './nav';
 
 const LoginPage = lazyPage(() => import('./pages/LoginPage'));
 const OverviewPage = lazyPage(() => import('./pages/OverviewPage'));
 const ShiftsPage = lazyPage(() => import('./pages/ShiftsPage'));
 const ShiftCardPage = lazyPage(() => import('./pages/ShiftCardPage'));
-const DataPage = lazyPage(() => import('./pages/DataPage'));
-const FuelPage = lazyPage(() => import('./pages/FuelPage'));
-const DemandPage = lazyPage(() => import('./pages/DemandPage'));
-const ItemsPage = lazyPage(() => import('./pages/ItemsPage'));
-const FinancePage = lazyPage(() => import('./pages/FinancePage'));
-const PlansPage = lazyPage(() => import('./pages/PlansPage'));
-const CostsPage = lazyPage(() => import('./pages/CostsPage'));
-const TanksPage = lazyPage(() => import('./pages/TanksPage'));
+const SalesSection = lazyPage(() => import('./pages/SalesSection'));
+const MoneySection = lazyPage(() => import('./pages/MoneySection'));
+const StockSection = lazyPage(() => import('./pages/StockSection'));
 const ControlPage = lazyPage(() => import('./pages/ControlPage'));
-const StationsPage = lazyPage(() => import('./pages/StationsPage'));
+const StationsSection = lazyPage(() => import('./pages/StationsSection'));
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'));
+const PlatformPage = lazyPage(() => import('./pages/PlatformPage'));
+const ProfilePage = lazyPage(() => import('./pages/ProfilePage'));
 const HelpPage = lazyPage(() => import('./pages/HelpPage'));
 
-interface NavItem {
-  key: string;
-  label: string;
-  icon: ReactNode;
-  roles?: string[];
-}
-
-export const NAV: NavItem[] = [
-  { key: '/', label: 'Обзор', icon: <DashboardOutlined /> },
-  { key: '/fuel', label: 'Топливо', icon: <FireOutlined /> },
-  { key: '/demand', label: 'Спрос', icon: <LineChartOutlined /> },
-  { key: '/items', label: 'Товары', icon: <ShoppingOutlined /> },
-  { key: '/finance', label: 'Финансы', icon: <WalletOutlined />, roles: ['superadmin', 'owner', 'manager'] },
-  { key: '/plans', label: 'План-факт', icon: <AimOutlined /> },
-  { key: '/tanks', label: 'Запасы топлива', icon: <ExperimentOutlined /> },
-  { key: '/control', label: 'Контроль', icon: <AlertOutlined /> },
-  { key: '/shifts', label: 'Смены', icon: <ScheduleOutlined /> },
-  { key: '/stations', label: 'АЗС', icon: <ShopOutlined /> },
-  { key: '/data', label: 'Данные', icon: <DatabaseOutlined /> },
-  { key: '/costs', label: 'Себестоимость', icon: <CalculatorOutlined />, roles: ['superadmin', 'owner', 'manager'] },
-  { key: '/settings', label: 'Настройки', icon: <SettingOutlined /> },
-  { key: '/help', label: 'Помощь', icon: <QuestionCircleOutlined /> },
-];
+/** A menu label with its counter on the right. */
+const withBadge = (label: string, count: number | string | undefined, color: string, title?: string) =>
+  count ? <Flex justify="space-between" align="center">{label}<Badge count={count} color={color} overflowCount={99} title={title} /></Flex> : label;
 
 function Shell({ children }: { children: ReactNode }) {
   const me = useMe();
@@ -63,30 +39,37 @@ function Shell({ children }: { children: ReactNode }) {
   const screens = Grid.useBreakpoint();
   const [drawer, setDrawer] = useState(false);
   const { mode, setMode } = useThemeMode();
-  const selected = NAV.filter((n) => n.key !== '/' && location.pathname.startsWith(n.key)).map((n) => n.key)[0] ?? '/';
+  const selected = sectionOf(location.pathname)?.path ?? '';
   const alerts = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: { new: number; critical: number } }>('/alerts/summary'), refetchInterval: 60_000 });
   const meta = useMeta();
   const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
   const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
   const unpriced = meta.data?.unpriced_receipts ?? 0;
   const helpNew = useHelpUnseen();
-  const items = NAV.filter((n) => !n.roles || n.roles.includes(me.role)).map((n) => ({
-    key: n.key, icon: n.icon,
-    label: n.key === '/control' && (alerts.data?.counts.new ?? 0) > 0
-      ? <Flex justify="space-between" align="center">{n.label}<Badge count={alerts.data!.counts.new} color={alerts.data!.counts.critical > 0 ? 'red' : 'orange'} overflowCount={99} /></Flex>
-      : n.key === '/stations' && requests > 0
-        ? <Flex justify="space-between" align="center">{n.label}<Badge count={requests} color="red" overflowCount={99} title="АЗС ожидают подключения" /></Flex>
-      : n.key === '/costs' && unpriced > 0
-        ? <Flex justify="space-between" align="center">{n.label}<Badge count={unpriced} color="orange" overflowCount={99} title="Сливы топлива без закупочной цены" /></Flex>
-      : n.key === '/help' && helpNew
-        ? <Flex justify="space-between" align="center">{n.label}<Badge count="новое" color="blue" title="Вышло обновление — посмотрите «Что нового»" /></Flex>
-      : n.key === '/settings' && unmapped > 0
-        ? <Flex justify="space-between" align="center">{n.label}<Badge count={unmapped} color="orange" overflowCount={99} title="Топливо АЗС ждёт сопоставления со справочником" /></Flex>
-        : n.label,
-  }));
+  const counts = alerts.data?.counts;
+  const badge: Record<string, ReactNode> = {
+    '/control': withBadge('Контроль', counts?.new, counts && counts.critical > 0 ? 'red' : 'orange', 'Новые события'),
+    '/money': withBadge('Деньги', unpriced, 'orange', 'Сливы топлива без закупочной цены'),
+    '/settings': withBadge('Настройки', unmapped, 'orange', 'Топливо АЗС ждёт сопоставления со справочником'),
+    '/platform': withBadge('Платформа', requests, 'red', 'АЗС ожидают подключения'),
+    '/help': withBadge('Помощь', helpNew ? 'новое' : undefined, 'blue', 'Вышло обновление — посмотрите «Что нового»'),
+  };
+  const visible = SECTIONS.filter((s) => allowed(s.roles, me.role));
+  const item = (s: NavSection) => ({ key: s.path, icon: s.icon, label: badge[s.path] ?? s.label });
+  const platform = visible.filter((s) => s.group === 'platform');
+  const items = [
+    ...visible.filter((s) => s.group === 'main').map(item),
+    { type: 'divider' as const },
+    ...visible.filter((s) => s.group === 'service').map(item),
+    ...(platform.length ? [{ type: 'group' as const, label: 'Сервер', children: platform.map(item) }] : []),
+  ];
+  // Report sections keep the period and stations; settings-like ones start clean.
+  const keepsFilter = (path: string) => !['/settings', '/help', '/platform'].includes(path);
   const menu = (
-    <Menu mode="inline" selectedKeys={[selected]} items={items} onClick={(e) => { navigate(e.key === '/help' && helpNew ? '/help/changes' : e.key + (e.key === '/settings' || e.key === '/help' ? '' : location.search)); setDrawer(false); }} style={{ borderInlineEnd: 0 }} />
+    <Menu mode="inline" selectedKeys={[selected]} items={items} style={{ borderInlineEnd: 0 }}
+      onClick={(e) => { navigate(e.key === '/help' && helpNew ? '/help/changes' : e.key + (keepsFilter(e.key) ? location.search : '')); setDrawer(false); }} />
   );
+  const moved = legacyPath(location.pathname, location.search);
   const desktop = !!screens.lg;
   useReloadOnNavigateWhenOutdated();
 
@@ -120,7 +103,7 @@ function Shell({ children }: { children: ReactNode }) {
             menu={{
               items: [
                 { key: 'role', label: `Роль: ${{ superadmin: 'суперадминистратор', owner: 'владелец', manager: 'управляющий', viewer: 'просмотр' }[me.role]}`, disabled: true },
-                { key: 'profile', label: 'Сменить пароль', icon: <AppstoreOutlined />, onClick: () => navigate('/settings/profile') },
+                { key: 'profile', label: 'Профиль: пароль и защита входа', icon: <SafetyOutlined />, onClick: () => navigate('/profile') },
                 { key: 'logout', label: 'Выйти', icon: <LogoutOutlined />, onClick: logout },
               ],
             }}
@@ -130,7 +113,7 @@ function Shell({ children }: { children: ReactNode }) {
         </Layout.Header>
         <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>
           <UpdateBanner />
-          <PageErrorBoundary resetKey={location.pathname}>{children}</PageErrorBoundary>
+          <PageErrorBoundary resetKey={location.pathname}>{moved ? <Navigate to={moved} replace /> : children}</PageErrorBoundary>
         </Layout.Content>
       </Layout>
       <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="Topaz Center" styles={{ body: { padding: 0 } }}
@@ -173,19 +156,16 @@ export default function App() {
                 <Suspense fallback={<Loading />}>
                   <Routes>
                     <Route path="/" element={<OverviewPage />} />
-                    <Route path="/fuel" element={<FuelPage />} />
-                    <Route path="/demand" element={<DemandPage />} />
-                    <Route path="/items" element={<ItemsPage />} />
-                    <Route path="/finance" element={<FinancePage />} />
-                    <Route path="/plans" element={<PlansPage />} />
-                    <Route path="/costs" element={<CostsPage />} />
-                    <Route path="/tanks" element={<TanksPage />} />
-                    <Route path="/control" element={<ControlPage />} />
                     <Route path="/shifts" element={<ShiftsPage />} />
                     <Route path="/shifts/:station/:session" element={<ShiftCardPage />} />
-                    <Route path="/stations" element={<StationsPage />} />
-                    <Route path="/data" element={<DataPage />} />
-                    <Route path="/settings/*" element={<SettingsPage />} />
+                    <Route path="/sales/:tab?" element={<SalesSection />} />
+                    <Route path="/money/:tab?" element={<MoneySection />} />
+                    <Route path="/stock/:tab?" element={<StockSection />} />
+                    <Route path="/control/:tab?" element={<ControlPage />} />
+                    <Route path="/stations/:tab?" element={<StationsSection />} />
+                    <Route path="/settings/:tab?" element={<SettingsPage />} />
+                    <Route path="/platform/:tab?" element={<PlatformPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/help/*" element={<HelpPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>

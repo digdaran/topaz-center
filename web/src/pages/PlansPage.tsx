@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { useMe } from '../auth/auth';
-import { ChartCard, CHART_COLORS, numCol, PageTitle, QueryState } from '../components/ui';
+import { ChartCard, CHART_COLORS, numCol, QueryState, Toolbar } from '../components/ui';
 import { bucketLabel, compact, liters, money, Num, pct } from '../lib/format';
 
 type R = Record<string, any>;
@@ -43,12 +43,10 @@ export default function PlansPage() {
 
   return (
     <>
-      <PageTitle title="План-факт" extra={
-        <>
-          <Select style={{ width: 200 }} value={metric} onChange={setMetric} options={Object.entries(METRIC).map(([k, v]) => ({ value: k, label: v.label }))} />{' '}
-          <DatePicker picker="month" allowClear={false} format="MMMM YYYY" value={dayjs(month + '-01')} onChange={(d) => d && setMonth(d.format('YYYY-MM'))} />
-        </>
-      } />
+      <Toolbar>
+        <Select style={{ width: 200 }} value={metric} onChange={setMetric} options={Object.entries(METRIC).map(([k, v]) => ({ value: k, label: v.label }))} />
+        <DatePicker picker="month" allowClear={false} format="MMMM YYYY" value={dayjs(month + '-01')} onChange={(d) => d && setMonth(d.format('YYYY-MM'))} />
+      </Toolbar>
       <QueryState error={error} loading={isLoading}>
         <Row gutter={[12, 12]}>
           <Col xs={24} lg={8}>

@@ -135,7 +135,7 @@ public static class PasskeyEndpoints
         await using var c = await db.OpenConnectionAsync();
         var key = await c.QuerySingleOrDefaultAsync<StoredKey>(
             "SELECT user_id AS UserId, public_key AS PublicKey, sign_count AS SignCount FROM user_passkeys WHERE credential_id = @id", new { id });
-        if (key is null) return Refused("Этот ключ доступа не найден: войдите по паролю и добавьте ключ заново в «Настройки → Вход и защита»");
+        if (key is null) return Refused("Этот ключ доступа не найден: войдите по паролю и добавьте ключ заново в «Профиль» (меню справа вверху)");
         // The device names the account it made the passkey for; it must be the passkey's owner.
         if (WebAuthn.FromBase64Url(body.Response?.UserHandle) is { } handle && !handle.AsSpan().SequenceEqual(key.UserId.ToByteArray()))
             return Refused();

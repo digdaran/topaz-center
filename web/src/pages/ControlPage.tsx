@@ -1,21 +1,23 @@
 import { DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, isOwner, isSuper, useFilter, useFiltered } from '../api/client';
 import { filterQuery } from '../lib/filter';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
-import { PageTitle, QueryState } from '../components/ui';
+import { QueryState } from '../components/ui';
+import { Section } from '../components/Section';
+import { section } from '../nav';
 import { dateTime } from '../lib/format';
 import { SEVERITY, severityOptions } from '../lib/severity';
-import { openTelegram } from '../components/TelegramPersonal';
+import { openTelegram, TelegramPersonal } from '../components/TelegramPersonal';
 
 type R = Record<string, any>;
 export { SEVERITY };
 
-function Alerts() {
+export function Alerts() {
   const qc = useQueryClient();
   const location = useLocation();
   const [status, setStatus] = useState('open');
@@ -73,7 +75,7 @@ function Alerts() {
                   {r.details && <div style={{ opacity: 0.75, fontSize: 13 }}>{r.details}</div>}
                   {r.session_id != null && <Link to={`/shifts/${r.station_id}/${r.session_id}${location.search}`}>карточка смены</Link>}
                   {r.rule_code === 'fuel_unmapped' && <Link to={`/settings/fuels?station=${r.station_id}`}>сопоставить топливо</Link>}
-                  {r.rule_code === 'station_registration' && <Link to="/stations?tab=connect">открыть заявку</Link>}
+                  {r.rule_code === 'station_registration' && <Link to="/platform/connect">открыть заявку</Link>}
                 </>
               ),
             },
@@ -93,7 +95,7 @@ function Alerts() {
   );
 }
 
-function Rules() {
+export function Rules() {
   const qc = useQueryClient();
   const { message } = App.useApp();
   const { data, isLoading } = useQuery({ queryKey: ['alert-rules'], queryFn: () => api<R[]>('/alert-rules') });
@@ -221,7 +223,7 @@ function Notifications() {
       )}
       <Typography.Paragraph type="secondary">
         Сразу приходят события с важностью не ниже выбранной (только за последние сутки); утром в 9:00 по Москве — сводка за сутки.
-        Каждый сотрудник может получать события по своим АЗС лично: <b>Настройки → Вход и защита → Уведомления в Telegram</b>.
+        Каждый сотрудник может получать события по своим АЗС и лично — блок «Мой Telegram» выше.
       </Typography.Paragraph>
       <Space style={{ marginBottom: 12 }} wrap>
         <Button type="primary" icon={<SendOutlined />} disabled={!data?.token_configured}
@@ -276,38 +278,26 @@ function Notifications() {
   );
 }
 
-export default function ControlPage() {
+/** «Контроль → Telegram»: the user's own chat for everyone; the organization's chats for owners. */
+export function Telegram() {
   const me = useMe();
   return (
     <>
-      <PageTitle title="Контроль" />
-      <Tabs destroyInactiveTabPane items={[
-        { key: 'alerts', label: 'События', children: <Alerts /> },
-        ...(isOwner(me) ? [
-          { key: 'rules', label: 'Правила', children: <Rules /> },
-          { key: 'notify', label: 'Уведомления в Telegram', children: <Notifications /> },
-        ] : []),
-      ]} />
+      <Card size="small" title="Мой Telegram" style={{ marginBottom: 16, maxWidth: 720 }}>
+        <TelegramPersonal />
+      </Card>
+      {isOwner(me) && (
+        <>
+          <Typography.Title level={5}>Чаты и группы организации</Typography.Title>
+          <Notifications />
+        </>
+      )}
     </>
   );
 }
 
-/** Latest new alerts for the overview page. */
-export function LatestAlerts() {
-  const { data } = useQuery({ queryKey: ['alerts-summary'], queryFn: () => api<{ counts: R; latest: R[] }>('/alerts/summary'), refetchInterval: 60_000 });
-  const location = useLocation();
-  if (!data || data.latest.length === 0) return null;
-  return (
-    <Card size="small" style={{ marginTop: 12 }} title={<>Новые события <Tag color={data.counts.critical > 0 ? 'red' : 'orange'}>{data.counts.new}</Tag></>}
-      extra={<Link to={`/control${location.search}`}>все события</Link>}>
-      <Row gutter={[8, 8]}>
-        {data.latest.map((a) => (
-          <Col key={a.id} xs={24} md={12}>
-            <Tag color={SEVERITY[a.severity]?.color}>{SEVERITY[a.severity]?.label}</Tag> <b>{a.station}</b>: {a.title}
-            {a.session_id != null && <> · <Link to={`/shifts/${a.station_id}/${a.session_id}`}>смена</Link></>}
-          </Col>
-        ))}
-      </Row>
-    </Card>
-  );
+/** «Контроль»: events, rules (owners), Telegram. */
+export default function ControlPage() {
+  return <Section section={section('/control')} panes={{ alerts: () => <Alerts />, rules: () => <Rules />, telegram: () => <Telegram /> }} />;
 }
+

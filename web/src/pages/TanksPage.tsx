@@ -1,11 +1,11 @@
 import { SettingOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Col, Form, InputNumber, Modal, Progress, Row, Table, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Card, Col, Empty, Form, InputNumber, Modal, Progress, Row, Table, Tag, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { api, useFiltered } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
+import { CHART_COLORS, ChartCard, numCol, QueryState } from '../components/ui';
 import { dateTime, dec, int, liters, pct } from '../lib/format';
 
 type R = Record<string, any>;
@@ -16,7 +16,7 @@ const STATUS: Record<string, { color: string; label: string }> = {
   idle: { color: 'default', label: 'нет продаж' },
 };
 
-export default function TanksPage() {
+export default function TanksPage({ view = 'tanks' }: { view?: 'tanks' | 'receipts' | 'losses' }) {
   const me = useMe();
   const qc = useQueryClient();
   const { message } = App.useApp();
@@ -45,10 +45,9 @@ export default function TanksPage() {
   }).slice(0, 6);
   return (
     <>
-      <PageTitle title="Запасы топлива" />
       <FilterBar granularity={false} compare={false} />
       <QueryState error={error} loading={isLoading}>
-        {data && (
+        {data && view === 'tanks' && (
           <>
             <Typography.Paragraph type="secondary">
               Остаток — по учёту Топаза: начало смены + приход − отпуск. В резервуарах с электронным уровнемером Топаз в начале каждой смены
@@ -102,6 +101,14 @@ export default function TanksPage() {
                   }),
                 }} />
               </Col>
+            </Row>
+          </>
+        )}
+        {data && view === 'losses' && (
+          <Row gutter={[12, 12]}>
+              {!data.losses.length && !data.measures.length && (
+                <Col xs={24}><Empty description="Замеров при закрытии смен за период нет: потери считаются только по резервуарам с уровнемером или ручным замером" /></Col>
+              )}
               {data.losses.length > 0 && (
                 <Col xs={24}>
                   <Card size="small" title="Потери по замерам за период">
@@ -174,6 +181,10 @@ export default function TanksPage() {
                   </Card>
                 </Col>
               )}
+          </Row>
+        )}
+        {data && view === 'receipts' && (
+          <Row gutter={[12, 12]}>
               <Col xs={24}>
                 <Card size="small" title="Приём топлива">
                   <Table size="small" rowKey={(r) => `${r.station_id}/${r.receipt_id}`} dataSource={data.receipts} pagination={{ pageSize: 15 }} scroll={{ x: 900 }}
@@ -195,8 +206,7 @@ export default function TanksPage() {
                     ]} />
                 </Card>
               </Col>
-            </Row>
-          </>
+          </Row>
         )}
       </QueryState>
       <Modal open={!!edit} title={`Резервуар ${edit?.tank_num} · ${edit?.fuel_name} · ${edit?.station}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>

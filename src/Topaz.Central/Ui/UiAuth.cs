@@ -281,7 +281,7 @@ public static class UiAuthSetup
     /// </summary>
     public sealed class TotpRequiredFilter(UserService users, Microsoft.Extensions.Options.IOptions<CentralOptions> options) : IEndpointFilter
     {
-        public const string SetupRequired = "Включите двухфакторную защиту входа: Настройки → Вход и защита";
+        public const string SetupRequired = "Включите двухфакторную защиту входа: Профиль (меню справа вверху)";
 
         public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
         {

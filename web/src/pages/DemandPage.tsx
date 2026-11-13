@@ -2,7 +2,7 @@ import { Card, Col, Row, Segmented, Table, Typography } from 'antd';
 import { useState } from 'react';
 import { useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
+import { CHART_COLORS, ChartCard, numCol, QueryState, Toolbar } from '../components/ui';
 import { bucketLabel, compact, int, liters, money, MONTHS, WEEKDAYS } from '../lib/format';
 
 type R = Record<string, any>;
@@ -46,9 +46,9 @@ export default function DemandPage() {
 
   return (
     <>
-      <PageTitle title="Спрос" extra={
+      <Toolbar>
         <Segmented<Metric> value={metric} onChange={setMetric} options={(Object.keys(METRIC) as Metric[]).map((k) => ({ value: k, label: METRIC[k].label }))} />
-      } />
+      </Toolbar>
       <FilterBar granularity={false} compare={false} fuel pay />
       <QueryState error={error} loading={isLoading}>
         {data && (

@@ -16,26 +16,42 @@ export async function signIn(page: Page, user = login, pass = password) {
 
 /** Every page opens without JS errors or failed API calls; a screenshot is kept for review. */
 const PAGES: { path: string; title: string; wait?: string }[] = [
-  { path: '/', title: 'Обзор', wait: 'Выручка и литры' },
-  { path: '/fuel', title: 'Топливо', wait: 'Цена по дням' },
-  { path: '/demand', title: 'Спрос', wait: 'Тренд и прогноз' },
-  { path: '/items', title: 'Товары', wait: 'Выручка по группам' },
-  { path: '/finance', title: 'Финансы', wait: 'Выручка и маржа' },
-  { path: '/plans', title: 'План-факт', wait: 'Нарастающим итогом' },
-  { path: '/costs', title: 'Себестоимость', wait: 'Текущие цены' },
-  { path: '/tanks', title: 'Запасы топлива', wait: 'Приём топлива' },
-  { path: '/control', title: 'Контроль' },
+  { path: '/', title: 'Сводка', wait: 'Требует внимания' },
   { path: '/shifts', title: 'Смены' },
-  { path: '/stations', title: 'АЗС' },
-  { path: '/data', title: 'Данные' },
+  { path: '/sales/fuel', title: 'Продажи', wait: 'Цена по дням' },
+  { path: '/sales/shop', title: 'Продажи', wait: 'Выручка по группам' },
+  { path: '/sales/demand', title: 'Продажи', wait: 'Тренд и прогноз' },
+  { path: '/sales/stations', title: 'Продажи' },
+  { path: '/sales/plans', title: 'Продажи', wait: 'Нарастающим итогом' },
+  { path: '/money/margin', title: 'Деньги', wait: 'Выручка и маржа' },
+  { path: '/money/contracts', title: 'Деньги' },
+  { path: '/money/costs', title: 'Деньги', wait: 'Текущие цены' },
+  { path: '/stock/tanks', title: 'Склад', wait: 'Хватит на' },
+  { path: '/stock/receipts', title: 'Склад', wait: 'Приём топлива' },
+  { path: '/stock/losses', title: 'Склад' },
+  { path: '/stock/items', title: 'Склад' },
+  { path: '/control/alerts', title: 'Контроль' },
+  { path: '/control/rules', title: 'Контроль' },
+  { path: '/control/telegram', title: 'Контроль', wait: 'Мой Telegram' },
+  { path: '/stations/status', title: 'АЗС', wait: 'ПК АЗС' },
+  { path: '/stations/data', title: 'АЗС' },
   { path: '/help', title: 'Помощь', wait: 'Утренняя проверка за 5 минут' },
   { path: '/help/changes', title: 'Помощь', wait: 'Себестоимость топлива по средней цене резервуара' },
-  { path: '/settings/organizations', title: 'Настройки', wait: 'Добавить организацию' },
+  { path: '/profile', title: 'Профиль', wait: 'Двухфакторная защита' },
+  { path: '/platform/organizations', title: 'Платформа', wait: 'Добавить организацию' },
+  { path: '/platform/connect', title: 'Платформа', wait: 'Решения за 30 дней' },
+  { path: '/platform/updates', title: 'Платформа', wait: 'Раскатка' },
   { path: '/settings/users', title: 'Настройки' },
   { path: '/settings/organization', title: 'Настройки', wait: 'Маржа и наценка' },
   { path: '/settings/payment-modes', title: 'Настройки', wait: 'Дисконтный' },
   { path: '/settings/fuels', title: 'Настройки', wait: 'Подтвердить все предложения' },
   { path: '/settings/fuels?view=reference', title: 'Настройки', wait: 'Добавить вид' },
+];
+
+/** Addresses of the menu before 1.14 still open the right section (bookmarks, old messages). */
+const MOVED: [string, RegExp][] = [
+  ['/fuel', /\/sales\/fuel/], ['/items', /\/sales\/shop/], ['/finance', /\/money\/margin/], ['/costs', /\/money\/costs/],
+  ['/tanks', /\/stock\/tanks/], ['/data', /\/stations\/data/], ['/stations?tab=connect', /\/platform\/connect/], ['/settings/profile', /\/profile$/],
 ];
 
 test('login rejects a wrong password', async ({ page }) => {
@@ -52,7 +68,7 @@ for (const p of PAGES) {
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
     await signIn(page);
-    await page.goto(p.path + (p.path.startsWith('/settings') ? '' : period));
+    await page.goto(p.path + (/^\/(settings|platform|profile|help)/.test(p.path) ? '' : period));
     await expect(page.getByRole('heading', { name: p.title, level: 3 })).toBeVisible();
     if (p.wait) await expect(page.getByText(p.wait).first()).toBeVisible();
     await page.waitForLoadState('networkidle');
@@ -61,6 +77,15 @@ for (const p of PAGES) {
     expect(errors).toEqual([]);
   });
 }
+
+test('old addresses open the new sections', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'one run is enough');
+  await signIn(page);
+  for (const [from, to] of MOVED) {
+    await page.goto(from);
+    await expect(page, from).toHaveURL(to);
+  }
+});
 
 test('shift card opens from the list', async ({ page }, info) => {
   await signIn(page);
@@ -71,7 +96,7 @@ test('shift card opens from the list', async ({ page }, info) => {
   await page.screenshot({ path: `test-results/screens/${info.project.name}_shift_card.png`, fullPage: true });
 });
 
-test('a viewer sees no money: no finance/costs menu, no margin', async ({ page, request }, info) => {
+test('a viewer sees no money: no «Деньги» in the menu, no margin', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop', 'one run is enough');
   // Owner creates (or reuses) a viewer through the API.
   const ownerLogin = await request.post('/api/v1/ui/auth/login', { headers: { 'X-Topaz-Ui': '1' }, data: { login, password } });
@@ -84,9 +109,12 @@ test('a viewer sees no money: no finance/costs menu, no margin', async ({ page, 
   await signIn(page, 'e2e-viewer', 'viewer-password-1');
   await page.goto('/' + period);
   await expect(page.getByText('Выручка и литры').first()).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'Финансы' })).toHaveCount(0);
-  await expect(page.getByRole('menuitem', { name: 'Себестоимость' })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: /Деньги/ })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: /Платформа/ })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: /Настройки/ })).toHaveCount(0);
   await expect(page.getByText('Валовая маржа')).toHaveCount(0);
+  await page.goto('/money/margin' + period);
+  await expect(page).toHaveURL(/\/(\?|$)/); // sent back to the summary
 });
 
 test('owner confirms suggested fuel types in one click (then the test undoes it)', async ({ page }, info) => {
@@ -112,8 +140,7 @@ test('owner confirms suggested fuel types in one click (then the test undoes it)
 
 test('owner sees the agent update rollout', async ({ page }, info) => {
   await signIn(page);
-  await page.goto('/stations');
-  await page.getByRole('tab', { name: 'Обновление агентов' }).click();
+  await page.goto('/platform/updates');
   await expect(page.getByText('Раскатка')).toBeVisible();
   await expect(page.getByText('автоматическое обновление')).toBeVisible();
   await page.waitForLoadState('networkidle');
@@ -122,8 +149,7 @@ test('owner sees the agent update rollout', async ({ page }, info) => {
 
 test('station list shows the PC health column', async ({ page }, info) => {
   await signIn(page);
-  await page.goto('/stations');
-  await page.getByRole('tab', { name: 'Состояние и настройки' }).click();
+  await page.goto('/stations/status');
   await expect(page.getByRole('columnheader', { name: 'ПК АЗС' })).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_stations_status.png`, fullPage: true });
@@ -131,7 +157,7 @@ test('station list shows the PC health column', async ({ page }, info) => {
 
 test('superadmin sees connection requests', async ({ page }, info) => {
   await signIn(page);
-  await page.goto('/stations?tab=connect');
+  await page.goto('/platform/connect');
   await expect(page.getByText('Решения за 30 дней')).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_station_requests.png`, fullPage: true });
@@ -155,7 +181,7 @@ test('an owner of another organization sees none of the stations; the superadmin
   });
 
   await signIn(page, 'e2e-other-owner', 'other-password-1');
-  await page.goto('/stations');
+  await page.goto('/stations/status');
   await expect(page.getByText('E2E Другой хозяин').first()).toBeVisible();
   for (const s of main.stations) await expect(page.getByText(s.name, { exact: true })).toHaveCount(0);
   const meta = await (await page.request.get('/api/v1/ui/meta')).json();
@@ -164,7 +190,7 @@ test('an owner of another organization sees none of the stations; the superadmin
   // superadmin: switcher in the header
   await page.context().clearCookies();
   await signIn(page);
-  await page.goto('/stations');
+  await page.goto('/stations/status');
   await expect(page.getByText(main.stations[0].name).first()).toBeVisible();
   await page.screenshot({ path: `test-results/screens/${info.project.name}_org_switcher.png` });
   const back = await page.request.post('/api/v1/ui/session/organization', { headers, data: { id: other.id } });
@@ -193,9 +219,9 @@ test('an owner of another organization sees none of the stations; the superadmin
 
 test('payment filter and contract sales', async ({ page }, info) => {
   await signIn(page);
-  await page.goto('/finance' + (period || '') + (period ? '&' : '?') + 'pay=card');
+  await page.goto('/money/margin' + (period || '') + (period ? '&' : '?') + 'pay=card');
   await expect(page.getByText('Банковская карта').first()).toBeVisible();
-  await page.getByRole('tab', { name: 'Продажи по договорам' }).click();
+  await page.getByRole('tab', { name: 'Договоры' }).click();
   await expect(page.getByRole('link', { name: /Скачать CSV/ })).toBeVisible();
   await page.goto('/settings/payment-modes');
   await expect(page.getByRole('columnheader', { name: 'Способ оплаты' })).toBeVisible();

@@ -1,14 +1,10 @@
 import { EditOutlined, MoreOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Badge, Button, Dropdown, Form, Input, Modal, Progress, Select, Table, Tabs, Tag, Tooltip } from 'antd';
-import StationCompare from './StationCompare';
-import AgentUpdates from './AgentUpdates';
-import StationRequests from './StationRequests';
+import { App, Badge, Button, Dropdown, Form, Input, Modal, Progress, Select, Table, Tag, Tooltip } from 'antd';
 import { useState } from 'react';
-import { api, isOwner, isSuper, useMeta } from '../api/client';
-import { useSearchParams } from 'react-router-dom';
+import { api, isOwner, isSuper } from '../api/client';
 import { useMe } from '../auth/auth';
-import { PageTitle, QueryState } from '../components/ui';
+import { QueryState } from '../components/ui';
 import { dateTime, dec, int } from '../lib/format';
 
 interface StationRow {
@@ -69,7 +65,7 @@ const ZONES = ['Europe/Kaliningrad', 'Europe/Moscow', 'Europe/Samara', 'Asia/Yek
 function status(r: StationRow) {
   if (r.status !== 'active') return r.status === 'revoked'
     ? <Badge status="error" text="заблокирована" />
-    : <Tooltip title="Доступ перевыпущен: агент пришлёт новую заявку, её нужно одобрить во вкладке «Подключение»."><Badge status="warning" text="ждёт новой заявки" /></Tooltip>;
+    : <Tooltip title="Доступ перевыпущен: агент пришлёт новую заявку, её нужно одобрить в «Платформа → Подключение АЗС»."><Badge status="warning" text="ждёт новой заявки" /></Tooltip>;
   if (r.silent_seconds === null) return <Badge status="default" text="не выходила на связь" />;
   if (r.silent_seconds > 900) return <Badge status="error" text={`нет связи ${Math.round(r.silent_seconds / 60)} мин`} />;
   if (r.topaz_db_ok === false) return <Tooltip title={r.last_collect_error}><Badge status="error" text="нет доступа к базе Топаза" /></Tooltip>;
@@ -86,10 +82,6 @@ export default function StationsPage() {
   const { message } = App.useApp();
   const { data, error, isLoading } = useQuery({ queryKey: ['stations'], queryFn: () => api<StationRow[]>('/stations'), refetchInterval: 30_000 });
   const [edit, setEdit] = useState<StationRow | null>(null);
-  const meta = useMeta();
-  const [params, setParams] = useSearchParams();
-  const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
-  const tab = params.get('tab') ?? (requests > 0 ? 'connect' : 'compare');
   const { modal } = App.useApp();
 
   /** The station changes owner: its whole history moves with it (superadmin). */
@@ -149,10 +141,6 @@ export default function StationsPage() {
 
   return (
     <>
-      <PageTitle title="АЗС" />
-      <Tabs destroyInactiveTabPane activeKey={tab} onChange={(k) => { const p = new URLSearchParams(params); p.set('tab', k); setParams(p, { replace: true }); }} items={[
-        { key: 'compare', label: 'Сравнение', children: <StationCompare /> },
-        { key: 'status', label: 'Состояние и настройки', children: (
       <QueryState error={error} loading={isLoading}>
         <Table<StationRow>
           size="small"
@@ -192,10 +180,6 @@ export default function StationsPage() {
           ]}
         />
       </QueryState>
-        ) },
-        ...(isSuper(me) ? [{ key: 'connect', label: <>Подключение {requests > 0 && <Badge count={requests} size="small" />}</>, children: <StationRequests /> }] : []),
-        ...(isSuper(me) ? [{ key: 'updates', label: 'Обновление агентов', children: <AgentUpdates /> }] : []),
-      ]} />
       <Modal open={!!edit} title={`АЗС: ${edit?.topaz_name}`} onOk={save} onCancel={() => setEdit(null)} okText="Сохранить" destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item name="display_name" label="Название в интерфейсе" extra="Пусто — как в Топазе / при установке агента"><Input maxLength={100} /></Form.Item>

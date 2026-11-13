@@ -101,7 +101,7 @@ export default function LoginPage() {
               <Divider plain style={{ margin: '16px 0' }}>или</Divider>
               <Button block size="large" icon={<KeyOutlined />} onClick={passkey} loading={loading}>Войти по отпечатку или лицу</Button>
               <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, textAlign: 'center' }}>
-                Сначала добавьте устройство: Настройки → Вход и защита
+                Сначала добавьте устройство: Профиль (меню справа вверху)
               </Typography.Paragraph>
             </>
           )}

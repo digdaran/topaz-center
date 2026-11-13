@@ -1,7 +1,7 @@
 import { Card, Col, Row, Table, Tag, Tooltip, Typography } from 'antd';
 import { useFiltered, useFuelTypeName } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
+import { CHART_COLORS, ChartCard, numCol, QueryState } from '../components/ui';
 import { bucketLabel, compact, dec, int, liters, money, pct } from '../lib/format';
 import { PAY, PayCategory } from '../lib/payments';
 
@@ -24,7 +24,6 @@ export default function FuelPage() {
 
   return (
     <>
-      <PageTitle title="Топливо" />
       <FilterBar compare={false} pay />
       <QueryState error={error} loading={isLoading}>
         {data && (

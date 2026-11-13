@@ -4,7 +4,7 @@ import type { SorterResult } from 'antd/es/table/interface';
 import { useState } from 'react';
 import { csvUrl, useFilter, useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { PageTitle, QueryState } from '../components/ui';
+import { QueryState } from '../components/ui';
 import { dec, int, liters, money, PAYMENT_KIND } from '../lib/format';
 
 interface Page { total: number; page: number; page_size: number; columns: string[]; rows: Record<string, any>[] }
@@ -75,7 +75,6 @@ function DataTable({ kind }: { kind: string }) {
 export default function DataPage() {
   return (
     <>
-      <PageTitle title="Данные" />
       <FilterBar granularity={false} compare={false} />
       <Tabs destroyInactiveTabPane items={[
         { key: 'fuel-sales', label: 'Отпуск топлива', children: <DataTable kind="fuel-sales" /> },

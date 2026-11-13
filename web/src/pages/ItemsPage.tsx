@@ -2,7 +2,7 @@ import { Alert, Card, Col, Flex, InputNumber, Row, Select, Table, Tabs, Tag, Too
 import { useState } from 'react';
 import { useFiltered, useMeta } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, numCol, PageTitle, QueryState } from '../components/ui';
+import { CHART_COLORS, ChartCard, numCol, QueryState } from '../components/ui';
 import { dateTime, dec, int, money, pct } from '../lib/format';
 
 type R = Record<string, any>;
@@ -87,18 +87,39 @@ function Stock({ data, cover, setCover, dead, setDead }: { data: Items; cover: n
   );
 }
 
-export default function ItemsPage() {
+function Returns({ data }: { data: Items }) {
+  return (
+    <Row gutter={[12, 12]}>
+      <Col xs={24} lg={12}>
+        <Card size="small" title="Возвраты покупателей">
+          <Table size="small" rowKey="item_name" pagination={false} dataSource={data.returns} locale={{ emptyText: 'Возвратов нет' }}
+            columns={[{ title: 'Товар', dataIndex: 'item_name' }, numCol<R>('Кол-во', 'quantity', (v) => dec(v, 0)), numCol<R>('Сумма', 'amount', money)]} />
+        </Card>
+      </Col>
+      <Col xs={24} lg={12}>
+        <Card size="small" title="Списания (акты ТМЦ)">
+          <Table size="small" rowKey={(r) => `${r.station}/${r.name}`} pagination={false} dataSource={data.write_offs} locale={{ emptyText: 'Списаний нет' }}
+            columns={[{ title: 'АЗС', dataIndex: 'station' }, { title: 'Товар', dataIndex: 'name' }, numCol<R>('Кол-во', 'quantity', (v) => dec(v, 0)), numCol<R>('Актов', 'acts', int)]} />
+        </Card>
+      </Col>
+    </Row>
+  );
+}
+
+export default function ItemsPage({ view = 'sales' }: { view?: 'sales' | 'stock' }) {
   const [cover, setCover] = useState(14);
   const [dead, setDead] = useState(30);
   const { data, error, isLoading } = useFiltered<Items>('/analytics/items', { cover_days: cover, dead_days: dead });
 
   return (
     <>
-      <PageTitle title="Товары" />
       <FilterBar granularity={false} compare={false} />
       <QueryState error={error} loading={isLoading}>
         {data && (
-          <Tabs items={[
+          <Tabs items={view === 'stock' ? [
+            { key: 'stock', label: `Остатки${data.stock.some((s) => s.status === 'out' || s.status === 'low') ? ' ⚠' : ''}`, children: <Stock data={data} cover={cover} setCover={setCover} dead={dead} setDead={setDead} /> },
+            { key: 'returns', label: 'Возвраты и списания', children: <Returns data={data} /> },
+          ] : [
             {
               key: 'sales', label: 'Продажи', children: (
                 <Row gutter={[12, 12]}>
@@ -144,25 +165,6 @@ export default function ItemsPage() {
               ),
             },
             { key: 'abc', label: 'ABC / XYZ', children: <Matrix data={data} /> },
-            { key: 'stock', label: `Запасы${data.stock.some((s) => s.status === 'out' || s.status === 'low') ? ' ⚠' : ''}`, children: <Stock data={data} cover={cover} setCover={setCover} dead={dead} setDead={setDead} /> },
-            {
-              key: 'returns', label: 'Возвраты и списания', children: (
-                <Row gutter={[12, 12]}>
-                  <Col xs={24} lg={12}>
-                    <Card size="small" title="Возвраты покупателей">
-                      <Table size="small" rowKey="item_name" pagination={false} dataSource={data.returns} locale={{ emptyText: 'Возвратов нет' }}
-                        columns={[{ title: 'Товар', dataIndex: 'item_name' }, numCol<R>('Кол-во', 'quantity', (v) => dec(v, 0)), numCol<R>('Сумма', 'amount', money)]} />
-                    </Card>
-                  </Col>
-                  <Col xs={24} lg={12}>
-                    <Card size="small" title="Списания (акты ТМЦ)">
-                      <Table size="small" rowKey={(r) => `${r.station}/${r.name}`} pagination={false} dataSource={data.write_offs} locale={{ emptyText: 'Списаний нет' }}
-                        columns={[{ title: 'АЗС', dataIndex: 'station' }, { title: 'Товар', dataIndex: 'name' }, numCol<R>('Кол-во', 'quantity', (v) => dec(v, 0)), numCol<R>('Актов', 'acts', int)]} />
-                    </Card>
-                  </Col>
-                </Row>
-              ),
-            },
           ]} />
         )}
       </QueryState>

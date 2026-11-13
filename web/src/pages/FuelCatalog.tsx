@@ -2,9 +2,9 @@ import { ArrowDownOutlined, ArrowUpOutlined, CheckOutlined, DeleteOutlined, Plus
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Flex, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useMe } from '../auth/auth';
-import { api, isOwner, isSuper, useMeta } from '../api/client';
+import { api, isSuper, useMeta } from '../api/client';
 import { dateTime } from '../lib/format';
 
 interface FuelType { code: string; name: string; sort: number; is_active: boolean; confirmed: number; suggested: number; in_use: boolean }
@@ -172,17 +172,6 @@ function Reference() {
         <Input autoFocus placeholder="например, АИ-95 премиум или ДТ зимнее" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
       </Modal>
     </>
-  );
-}
-
-/** Owner's hint on the overview: station fuels wait for a reference type. */
-export function UnmappedFuelsBanner() {
-  const me = useMe();
-  const n = useMeta().data?.unmapped_fuels ?? 0;
-  if (!isOwner(me) || n === 0) return null;
-  return (
-    <Alert type="info" showIcon style={{ marginBottom: 12 }}
-      message={<>Топливо АЗС ждёт сопоставления со справочником: {n}. Пока отчёты используют предложенные виды. <Link to="/settings/fuels">Сопоставить</Link></>} />
   );
 }
 

@@ -3,11 +3,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Badge, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api, useFilter, useFiltered, useMeta, isOwner } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
-import { numCol, PageTitle, QueryState } from '../components/ui';
+import { numCol, QueryState } from '../components/ui';
 import { dateTime, liters, money, pct } from '../lib/format';
 
 type R = Record<string, any>;
@@ -204,20 +203,9 @@ function ItemCosts() {
   );
 }
 
-/** Overview hint: receipts of the last 30 days still without a purchase price. */
-export function UnpricedReceiptsBanner() {
-  const n = useMeta().data?.unpriced_receipts ?? 0;
-  if (n === 0) return null;
-  return (
-    <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-      message={<>Сливы топлива без закупочной цены за 30 дней: {n}. Пока цены нет, литры считаются по средней цене резервуара. <Link to="/costs">Ввести цены</Link></>} />
-  );
-}
-
 export default function CostsPage() {
   return (
     <>
-      <PageTitle title="Себестоимость" />
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
         message="В Топазе нет закупочных цен, поэтому их вводят здесь. Маржа во всех отчётах пересчитывается автоматически, в том числе задним числом." />
       <Tabs destroyInactiveTabPane items={[

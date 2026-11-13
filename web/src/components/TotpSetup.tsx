@@ -94,7 +94,7 @@ export function TotpSetup({ onDone }: { onDone?: () => void }) {
   );
 }
 
-/** Two-factor login status and switches for «Настройки → Вход и защита». */
+/** Two-factor login status and switches for «Профиль». */
 export function TotpStatus({ enabled, required, codesLeft }: { enabled: boolean; required: boolean; codesLeft: number }) {
   const { message } = App.useApp();
   const qc = useQueryClient();

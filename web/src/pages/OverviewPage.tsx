@@ -1,14 +1,10 @@
-import { WarningOutlined } from '@ant-design/icons';
-import { Alert, Card, Col, Row, Table, Tag, Typography } from 'antd';
-import { Link, useLocation } from 'react-router-dom';
+import { Card, Col, Row, Table, Tag, Typography } from 'antd';
 import { useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
-import { bucketLabel, compact, dateTime, int, liters, money, pct } from '../lib/format';
-import { LatestAlerts } from './ControlPage';
-import { UnpricedReceiptsBanner } from './CostsPage';
-import { UnmappedFuelsBanner } from './FuelCatalog';
-import { PendingStationsBanner } from './StationRequests';
+import { bucketLabel, compact, int, liters, money, pct } from '../lib/format';
+import { AttentionPanel } from '../components/AttentionPanel';
+import { section } from '../nav';
 
 export interface Kpi {
   fuel_revenue: number; liters: number; orders: number; aborted: number; service_liters: number; cashless: number; mixed: number;
@@ -39,7 +35,6 @@ interface Overview {
 
 export default function OverviewPage() {
   const { data, error, isLoading, isFetching } = useFiltered<Overview>('/analytics/overview');
-  const location = useLocation();
   const c = data?.current;
   const p = data?.previous ?? undefined;
   const g = data?.filter.g ?? 'day';
@@ -67,32 +62,12 @@ export default function OverviewPage() {
   const series = data?.series ?? [];
   return (
     <>
-      <PageTitle title="Обзор" />
+      <PageTitle title={section('/').label} description={section('/').description} />
       <FilterBar fuel pay />
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
-            {data.problems.length > 0 && (
-              <Alert
-                type="warning"
-                showIcon
-                icon={<WarningOutlined />}
-                style={{ marginBottom: 16 }}
-                message={`Проблемы со связью или данными: ${data.problems.length} АЗС`}
-                description={data.problems.map((s) => (
-                  <div key={s.station_id}>
-                    <Link to={`/stations${location.search}`}>{s.station}</Link>
-                    {': '}
-                    {s.silent_seconds === null ? 'ещё не выходила на связь' : s.silent_seconds > 900 ? `нет связи с ${dateTime(s.last_seen_at)}` : ''}
-                    {s.topaz_db_ok === false && ' · нет доступа к базе Топаза'}
-                    {(s.agent_queue_dead ?? 0) > 0 && ` · отклонённых пакетов: ${s.agent_queue_dead}`}
-                  </div>
-                ))}
-              />
-            )}
-            <PendingStationsBanner />
-            <UnmappedFuelsBanner />
-            <UnpricedReceiptsBanner />
+            <AttentionPanel problems={data.problems} />
             <Row gutter={[12, 12]}>
               {kpis!.map((k) => (
                 <Col key={k.title} xs={12} sm={8} md={6} xl={4}>
@@ -100,7 +75,6 @@ export default function OverviewPage() {
                 </Col>
               ))}
             </Row>
-            <LatestAlerts />
             <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
               <Col xs={24} xl={16}>
                 <ChartCard
