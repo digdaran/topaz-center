@@ -24,7 +24,7 @@ public static class ControlEndpoints
         ui.MapGet("/alerts/summary", Summary);
         ui.MapPost("/alerts/{id:long}/status", SetStatus);
         ui.MapPost("/alerts/status", SetStatusAll);
-        ui.MapPost("/alerts/run", async (AnomalyDetector d, CancellationToken ct) => Results.Ok(new { found = await d.RunAsync(ct) })).RequireAuthorization(Policies.Owner);
+        ui.MapPost("/alerts/run", RunNow).RequireAuthorization(Policies.Owner);
 
         var owner = ui.MapGroup("").RequireAuthorization(Policies.Owner);
         owner.MapGet("/alert-rules", Rules);
@@ -252,6 +252,18 @@ public static class ControlEndpoints
             """, new { org, code, body.Enabled, body.Threshold, body.Severity });
         await Audit.WriteAsync(db, user, "alert_rule_updated", "rule:" + code, body);
         return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Runs the check now. It runs for every organization, so the answer counts only the new events the caller can see
+    /// (row level security), not the server-wide number.
+    /// </summary>
+    private static async Task<IResult> RunNow(AnomalyDetector detector, UiDb db, CancellationToken ct)
+    {
+        await using var c = await db.OpenConnectionAsync(ct);
+        var last = await c.ExecuteScalarAsync<long>("SELECT COALESCE(max(id), 0) FROM alerts");
+        await detector.RunAsync(ct);
+        return Results.Ok(new { found = await c.ExecuteScalarAsync<long>("SELECT count(*) FROM alerts WHERE id > @last", new { last }) });
     }
 
     /// <summary>Back to the shared default for this organization.</summary>

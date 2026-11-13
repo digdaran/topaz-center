@@ -347,4 +347,50 @@ public sealed class TenantIsolationTests(CentralFixture fx) : IClassFixture<Cent
         // back to its organization: the other tests expect B to own only its own station
         (await super.PostAsJsonAsync($"/api/v1/ui/stations/{g.Station}/organization", new { organization_id = g.Org })).EnsureSuccessStatusCode();
     }
+    [PostgresFact]
+    public async Task A_user_moved_to_another_organization_takes_the_own_telegram_chat_along()
+    {
+        var (a, b, super) = await SetupAsync();
+        await LoginAsync("iso-mover", Roles.Manager, a.Org, a.Station);
+        var uid = await fx.QueryAsync<Guid>("SELECT id FROM users WHERE login = 'iso-mover'");
+        await fx.QueryAsync<long>("""
+            INSERT INTO notification_channels (user_id, organization_id, target, title, min_severity) VALUES (@uid, @org, '-777001', 'Личный: iso-mover', 'info')
+            ON CONFLICT (user_id) DO UPDATE SET organization_id = EXCLUDED.organization_id RETURNING id
+            """, new { uid, org = a.Org });
+
+        await super.PostAsJsonAsync("/api/v1/ui/session/organization", new { id = b.Org });
+        (await super.PatchAsJsonAsync($"/api/v1/ui/users/{uid}", new { organization_id = b.Org, stations = new[] { b.Station } })).EnsureSuccessStatusCode();
+
+        // The old organization no longer sees (or can delete) the chat; the user manages it in the new one.
+        var ownerA = await LoginAsync(a.OwnerLogin, Roles.Owner, a.Org);
+        Assert.DoesNotContain("-777001", await ownerA.GetStringAsync("/api/v1/ui/notifications"));
+        Assert.Contains("-777001", await (await LoginAsync(b.OwnerLogin, Roles.Owner, b.Org)).GetStringAsync("/api/v1/ui/notifications"));
+        var mover = await LoginAsync("iso-mover", Roles.Manager, b.Org);
+        var me = (await mover.GetFromJsonAsync<JsonObject>("/api/v1/ui/telegram/me"))!;
+        Assert.NotNull(me["channel"]);
+        Assert.Equal(HttpStatusCode.NoContent, (await mover.PutAsJsonAsync("/api/v1/ui/telegram/me", new { min_severity = "critical", daily_digest = false, enabled = true })).StatusCode);
+        Assert.Equal(b.Org, await fx.QueryAsync<Guid>("SELECT organization_id FROM notification_channels WHERE user_id = @uid", new { uid }));
+    }
+
+    [PostgresFact]
+    public async Task Run_now_counts_only_the_callers_new_events()
+    {
+        var (a, b, _) = await SetupAsync();
+        var owner = await LoginAsync(a.OwnerLogin, Roles.Owner, a.Org);
+        var before = await fx.QueryAsync<long>("SELECT COALESCE(max(id), 0) FROM alerts");
+        // B's station falls silent: the check finds an event there that A must not even count.
+        var lastSeen = await fx.QueryAsync<DateTime?>("SELECT last_seen_at FROM stations WHERE id = @s", new { s = b.Station });
+        await fx.QueryAsync<int>("UPDATE stations SET last_seen_at = now() - interval '2 days' - random() * interval '1 hour' WHERE id = @s RETURNING 1", new { s = b.Station });
+        try
+        {
+            var found = (await (await owner.PostAsync("/api/v1/ui/alerts/run", null)).Content.ReadFromJsonAsync<JsonObject>())!["found"]!.GetValue<long>();
+            Assert.True(await fx.QueryAsync<long>("SELECT count(*) FROM alerts WHERE id > @before AND station_id = @s", new { before, s = b.Station }) >= 1);
+            Assert.Equal(await fx.QueryAsync<long>("SELECT count(*) FROM alerts a JOIN stations s ON s.id = a.station_id WHERE a.id > @before AND s.organization_id = @org", new { before, org = a.Org }), found);
+        }
+        finally
+        {
+            await fx.QueryAsync<int>("UPDATE stations SET last_seen_at = @lastSeen WHERE id = @s RETURNING 1", new { lastSeen, s = b.Station });
+            await fx.QueryAsync<int>("WITH d AS (UPDATE alerts SET status = 'closed' WHERE station_id = @s AND rule_code = 'station_offline' RETURNING 1) SELECT count(*)::int FROM d", new { s = b.Station });
+        }
+    }
 }

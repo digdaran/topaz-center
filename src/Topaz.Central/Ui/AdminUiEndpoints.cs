@@ -199,6 +199,13 @@ public static class AdminUiEndpoints
             foreach (var s in (body.Stations ?? []).Distinct())
                 await c.ExecuteAsync("INSERT INTO user_stations (user_id, station_id) VALUES (@id, @s)", new { id, s }, tx);
         }
+        if (newOrg != target.Value.Org)
+        {
+            // The own Telegram chat goes along: listed and managed in the new organization, not left with the old one
+            // (its messages already follow the user's current stations); unused link codes of the old one are dropped.
+            await c.ExecuteAsync("UPDATE notification_channels SET organization_id = @newOrg WHERE user_id = @id", new { id, newOrg }, tx);
+            await c.ExecuteAsync("DELETE FROM telegram_link_codes WHERE user_id = @id AND used_at IS NULL", new { id }, tx);
+        }
         await tx.CommitAsync();
         users.Forget(id);
         scope.Forget(id);
