@@ -21,6 +21,11 @@ public sealed class Kpi
     public decimal ShopRevenue { get; set; }
     public long ShopReceipts { get; set; }
     public decimal ShopItems { get; set; }
+    /// <summary>Shop revenue by payment category (1.15; returns subtracted), only without a fuel or payment filter.</summary>
+    public decimal ShopCash { get; set; }
+    public decimal ShopCard { get; set; }
+    public decimal ShopContract { get; set; }
+    public decimal ShopFuelCard { get; set; }
 
     // Money (owners/managers only; Redact() clears them for viewers).
     public decimal? FuelCost { get; set; }
@@ -31,6 +36,8 @@ public sealed class Kpi
 
     public decimal? Margin => FuelCost is null && ShopCost is null ? null
         : (FuelCostedRevenue ?? 0) - (FuelCost ?? 0) + (ShopCostedAmount ?? 0) - (ShopCost ?? 0);
+    public decimal? FuelMargin => FuelCost is null ? null : (FuelCostedRevenue ?? 0) - FuelCost;
+    public decimal? ShopMargin => ShopCost is null ? null : (ShopCostedAmount ?? 0) - ShopCost;
     public decimal? FuelCoverage => CostedLiters is { } cl && Liters > 0 ? Math.Round(cl / Liters, 4) : null;
 
     public Kpi Redact()
@@ -115,6 +122,17 @@ public static class AnalyticsSql
             kpi.ShopItems = shop.ShopItems;
             kpi.ShopCost = shop.ShopCost;
             kpi.ShopCostedAmount = shop.ShopCostedAmount;
+            var pay = await c.QuerySingleAsync<Kpi>($"""
+                SELECT COALESCE(sum(amount) FILTER (WHERE pay_category = 'cash'), 0) AS shop_cash,
+                       COALESCE(sum(amount) FILTER (WHERE pay_category = 'card'), 0) AS shop_card,
+                       COALESCE(sum(amount) FILTER (WHERE pay_category = 'contract'), 0) AS shop_contract,
+                       COALESCE(sum(amount) FILTER (WHERE pay_category = 'fuel_card'), 0) AS shop_fuel_card
+                FROM v_agg_shop WHERE {AggShopWhere}
+                """, f.Args);
+            kpi.ShopCash = pay.ShopCash;
+            kpi.ShopCard = pay.ShopCard;
+            kpi.ShopContract = pay.ShopContract;
+            kpi.ShopFuelCard = pay.ShopFuelCard;
         }
         return kpi;
     }

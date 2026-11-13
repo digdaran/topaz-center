@@ -1,8 +1,10 @@
-import { Card, Col, Row, Table, Tag, Typography } from 'antd';
-import { useFiltered } from '../api/client';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Card, Col, Row, Table, Tag, Tooltip, Typography } from 'antd';
+import { useFilter, useFiltered } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
-import { CHART_COLORS, ChartCard, KpiCard, numCol, PageTitle, QueryState } from '../components/ui';
-import { bucketLabel, compact, int, liters, money, pct } from '../lib/format';
+import { CHART_COLORS, ChartCard, Delta, FigureList, numCol, PageTitle, QueryState } from '../components/ui';
+import { PayBreakdown } from '../components/PayBreakdown';
+import { bucketLabel, compact, int, liters, money, Num, pct } from '../lib/format';
 import { AttentionPanel } from '../components/AttentionPanel';
 import { section } from '../nav';
 
@@ -13,6 +15,8 @@ export interface Kpi {
   margin: number | null; fuel_coverage: number | null;
   cash: number; card: number; contract: number; fuel_card: number;
   card_share: number | null; contract_share: number | null; fuel_card_share: number | null;
+  shop_cash: number; shop_card: number; shop_contract: number; shop_fuel_card: number;
+  fuel_margin: number | null; shop_margin: number | null;
 }
 
 export interface StationRow {
@@ -33,31 +37,78 @@ interface Overview {
   problems: { station_id: string; station: string; last_seen_at: string | null; silent_seconds: number | null; agent_queue_dead: number | null; topaz_db_ok: boolean | null }[];
 }
 
+/** "Итог за период": all the money (fuel + shop) by payment method, then fuel and shop each with their own figures. */
+function PeriodSummary({ c, p, filtered }: { c: Kpi; p: Kpi | undefined; filtered: boolean }) {
+  const d = (k: keyof Kpi, fmt: (v: Num) => string, inverse?: boolean) => <Delta value={c[k]} previous={p ? p[k] : undefined} format={fmt} inverse={inverse} />;
+  const v = (k: keyof Kpi, fmt: (v: Num) => string, inverse?: boolean) => <>{fmt(c[k])}{d(k, fmt, inverse)}</>;
+  const coverage = c.fuel_coverage != null && c.fuel_coverage < 0.999 ? `Себестоимость известна для ${pct(c.fuel_coverage)} проданных литров; остальные в маржу не входят.` : 'По продажам с известной себестоимостью.';
+  const noShop = Number(c.shop_receipts) === 0;
+  return (
+    <>
+      <Card size="small" style={{ marginBottom: 12 }}>
+        <Row gutter={[24, 12]} align="middle">
+          <Col xs={24} md={9}>
+            <Typography.Text type="secondary">Выручка за период, всего</Typography.Text>
+            <div style={{ fontSize: 28, fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+              {money(c.revenue)}{d('revenue', money)}
+            </div>
+            <Typography.Text type="secondary">топливо {money(c.fuel_revenue)} · магазин {money(c.shop_revenue)}</Typography.Text>
+            {c.margin != null && (
+              <div style={{ marginTop: 8 }}>
+                <Typography.Text type="secondary">Валовая маржа <Tooltip title={coverage}><InfoCircleOutlined /></Tooltip></Typography.Text>
+                <div style={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{money(c.margin)}{d('margin', money)}</div>
+              </div>
+            )}
+            {filtered && <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '8px 0 0' }}>С фильтром по топливу или способу оплаты магазин не учитывается.</Typography.Paragraph>}
+          </Col>
+          <Col xs={24} md={15}>
+            <PayBreakdown exact={false}
+              fuel={{ cash: c.cash, card: c.card, contract: c.contract, fuel_card: c.fuel_card }}
+              shop={{ cash: c.shop_cash, card: c.shop_card, contract: c.shop_contract, fuel_card: c.shop_fuel_card }} />
+          </Col>
+        </Row>
+      </Card>
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col xs={24} lg={12}>
+          <Card size="small" title="Топливо" style={{ height: '100%' }}>
+            <FigureList rows={[
+              { key: 'l', label: 'Продано', value: v('liters', liters), hint: 'Без тех. прокачек и переливов' },
+              { key: 'r', label: 'Выручка', value: v('fuel_revenue', money), strong: true },
+              ...(c.fuel_margin != null ? [{ key: 'm', label: 'Валовая маржа', value: v('fuel_margin', money), hint: coverage }] : []),
+              { key: 'o', label: 'Заказов', value: v('orders', int), hint: 'Наливы с объёмом больше нуля, без тех. прокачек' },
+              { key: 'f', label: 'Средний налив', value: v('avg_fill', liters) },
+              { key: 'c', label: 'Средний чек', value: v('avg_fuel_check', money) },
+              { key: 'cl', label: 'Доля безнала', value: v('cashless_share', pct), hint: `Карты ${pct(c.card_share)}, договоры ${pct(c.contract_share)}, топливные карты ${pct(c.fuel_card_share)} — от выручки топлива` },
+              { key: 'd', label: 'Скидки клиентам', value: v('discounts', money, true), hint: 'Уже вычтены из выручки' },
+              { key: 'a', label: 'Прерванные наливы', value: v('aborted', int, true), hint: 'Заказы с нулевым объёмом' },
+              { key: 's', label: 'Тех. прокачки', value: v('service_liters', liters, true), hint: 'Отпуск без оплаты: тех. прокачки, переливы' },
+            ]} />
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card size="small" title="Магазин" style={{ height: '100%' }}>
+            {noShop ? <Typography.Text type="secondary">{filtered ? 'С фильтром по топливу или способу оплаты магазин не показывается' : 'Продаж в магазине за период не было'}</Typography.Text> : (
+              <FigureList rows={[
+                { key: 'r', label: 'Выручка', value: v('shop_revenue', money), strong: true, hint: 'За вычетом возвратов' },
+                ...(c.shop_margin != null ? [{ key: 'm', label: 'Валовая маржа', value: v('shop_margin', money), hint: 'По товарам с известной себестоимостью' }] : []),
+                { key: 'n', label: 'Чеков', value: v('shop_receipts', int) },
+                { key: 'c', label: 'Средний чек', value: v('avg_shop_check', money) },
+                { key: 'i', label: 'Продано товаров, шт.', value: v('shop_items', int) },
+              ]} />
+            )}
+          </Card>
+        </Col>
+      </Row>
+    </>
+  );
+}
+
 export default function OverviewPage() {
   const { data, error, isLoading, isFetching } = useFiltered<Overview>('/analytics/overview');
   const c = data?.current;
   const p = data?.previous ?? undefined;
   const g = data?.filter.g ?? 'day';
-
-  const kpis = c && [
-    { title: 'Выручка', value: c.revenue, previous: p?.revenue, format: money, hint: 'Топливо + магазин, по итоговой стоимости после скидок' },
-    { title: 'Выручка топливо', value: c.fuel_revenue, previous: p?.fuel_revenue, format: money },
-    { title: 'Выручка магазин', value: c.shop_revenue, previous: p?.shop_revenue, format: money },
-    ...(c.margin != null ? [{ title: 'Валовая маржа', value: c.margin, previous: p?.margin, format: money, hint: `По продажам с известной себестоимостью${c.fuel_coverage != null && c.fuel_coverage < 0.999 ? ` (топливо: ${pct(c.fuel_coverage)})` : ''}` }] : []),
-    { title: 'Продано топлива', value: c.liters, previous: p?.liters, format: liters, hint: 'Без тех. прокачек и переливов' },
-    { title: 'Заказы топлива', value: c.orders, previous: p?.orders, format: int, hint: 'Наливы с объёмом > 0, без тех. прокачек' },
-    { title: 'Средний налив', value: c.avg_fill, previous: p?.avg_fill, format: liters },
-    { title: 'Средний чек топливо', value: c.avg_fuel_check, previous: p?.avg_fuel_check, format: money },
-    { title: 'Средний чек магазин', value: c.avg_shop_check, previous: p?.avg_shop_check, format: money },
-    { title: 'Доля безнала', value: c.cashless_share, previous: p?.cashless_share, format: pct,
-      hint: `Карты ${pct(c.card_share)}, по договорам ${pct(c.contract_share)}, топливные карты ${pct(c.fuel_card_share)}. Способ оплаты определяется по виду оплаты (Настройки → Виды оплаты)` },
-    ...(Number(c.contract) > 0 || Number(p?.contract ?? 0) > 0
-      ? [{ title: 'Продажи по договорам', value: c.contract, previous: p?.contract, format: money, hint: `${pct(c.contract_share)} выручки топлива — ведомости, оплата на счёт` }]
-      : []),
-    { title: 'Скидки', value: c.discounts, previous: p?.discounts, format: money, inverse: true },
-    { title: 'Прерванные наливы', value: c.aborted, previous: p?.aborted, format: int, inverse: true, hint: 'Заказы с нулевым объёмом' },
-    { title: 'Тех. прокачки', value: c.service_liters, previous: p?.service_liters, format: liters, inverse: true, hint: 'Отпуск без оплаты: тех. прокачки, переливы' },
-  ];
+  const [filter] = useFilter();
 
   const series = data?.series ?? [];
   return (
@@ -68,13 +119,7 @@ export default function OverviewPage() {
         {data && (
           <>
             <AttentionPanel problems={data.problems} />
-            <Row gutter={[12, 12]}>
-              {kpis!.map((k) => (
-                <Col key={k.title} xs={12} sm={8} md={6} xl={4}>
-                  <KpiCard {...k} previous={data.previous ? k.previous : undefined} />
-                </Col>
-              ))}
-            </Row>
+            <PeriodSummary c={c!} p={p} filtered={!!(filter.fuel || filter.pay)} />
             <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
               <Col xs={24} xl={16}>
                 <ChartCard
@@ -121,25 +166,33 @@ export default function OverviewPage() {
                 size="small"
                 rowKey="station_id"
                 pagination={false}
-                scroll={{ x: 1250 }}
+                bordered
+                scroll={{ x: 'max-content' }}
                 dataSource={data.stations}
                 columns={[
                   {
                     title: 'АЗС', dataIndex: 'station', key: 'station', fixed: 'left', width: 220,
                     render: (v: string, r) => <span style={{ whiteSpace: 'nowrap' }}>{v}{r.region && <Typography.Text type="secondary"> · {r.region}</Typography.Text>}</span>,
                   },
-                  numCol<StationRow>('Выручка', 'revenue', money, { defaultSortOrder: 'descend' }),
-                  numCol<StationRow>('Топливо', 'fuel_revenue', money),
-                  numCol<StationRow>('Магазин', 'shop_revenue', money),
-                  numCol<StationRow>('Литры', 'liters', liters),
-                  numCol<StationRow>('Литров в день', 'liters_per_day', liters),
-                  numCol<StationRow>('Заказы', 'orders', int),
-                  numCol<StationRow>('Средний налив', 'avg_fill', liters),
-                  numCol<StationRow>('Ср. чек топливо', 'avg_fuel_check', money),
-                  numCol<StationRow>('Ср. чек магазин', 'avg_shop_check', money),
-                  numCol<StationRow>('Безнал', 'cashless_share', pct),
-                  numCol<StationRow>('Договоры', 'contract_share', pct),
-                  { ...numCol<StationRow>('Прерв. наливы', 'aborted', int), render: (v: number) => (v > 0 ? <Tag color="orange">{int(v)}</Tag> : '0') },
+                  { title: 'Всего', key: 'all', children: [numCol<StationRow>('Выручка', 'revenue', money, { defaultSortOrder: 'descend' })] },
+                  {
+                    title: 'Топливо', key: 'fuel', children: [
+                      numCol<StationRow>('Выручка', 'fuel_revenue', money),
+                      numCol<StationRow>('Литры', 'liters', liters),
+                      numCol<StationRow>('В день', 'liters_per_day', liters),
+                      numCol<StationRow>('Заказы', 'orders', int),
+                      numCol<StationRow>('Ср. налив', 'avg_fill', liters),
+                      numCol<StationRow>('Ср. чек', 'avg_fuel_check', money),
+                      { ...numCol<StationRow>('Безнал', 'cashless_share', pct), title: <Tooltip title="Доля карт, договоров и топливных карт в выручке топлива">Безнал</Tooltip> },
+                      { ...numCol<StationRow>('Прерв.', 'aborted', int), render: (v: number) => (v > 0 ? <Tag color="orange">{int(v)}</Tag> : '0') },
+                    ],
+                  },
+                  {
+                    title: 'Магазин', key: 'shop', children: [
+                      numCol<StationRow>('Выручка', 'shop_revenue', money),
+                      numCol<StationRow>('Ср. чек', 'avg_shop_check', money),
+                    ],
+                  },
                 ]}
               />
             </Card>

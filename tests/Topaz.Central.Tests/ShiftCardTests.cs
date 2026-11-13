@@ -114,5 +114,16 @@ public sealed class ShiftCardTests(CentralFixture fx) : IClassFixture<CentralFix
         var row = Assert.Single((await owner.GetFromJsonAsync<JsonArray>($"/api/v1/ui/shifts?stations={st.StationId}&from={from}&to={to}"))!)!;
         Assert.Equal(450m, row["shop_total"]!.GetValue<decimal>());
         Assert.Equal(250m, row["shop_cash"]!.GetValue<decimal>());
+
+        // 1.15 summary: the same split over a period (daily rollups), fuel and shop each by payment method.
+        var k = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/analytics/overview?stations={st.StationId}&from={from}&to={to}&compare=none"))!["current"]!;
+        decimal K(string key) => k[key]?.GetValue<decimal>() ?? 0;
+        Assert.Equal(1000m, K("cash"));
+        Assert.Equal(600m, K("card"));
+        Assert.Equal(450m, K("shop_revenue"));
+        Assert.Equal(250m, K("shop_cash"));
+        Assert.Equal(200m, K("shop_card"));
+        Assert.Equal(K("shop_revenue"), K("shop_cash") + K("shop_card") + K("shop_contract") + K("shop_fuel_card"));
+        Assert.Equal(2050m, K("revenue"));
     }
 }

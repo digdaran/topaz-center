@@ -37,6 +37,25 @@ interface KpiProps {
   inverse?: boolean;
 }
 
+/**
+ * Change to the comparison period, small and coloured: green when it is good (growth, or a fall for `inverse`
+ * metrics such as aborted fuellings), red otherwise; "было …" on hover. Nothing when there is no comparison.
+ */
+export function Delta({ value, previous, format, inverse }: { value: Num; previous: Num | undefined; format: (v: Num) => string; inverse?: boolean }) {
+  const { token } = theme.useToken();
+  if (previous === undefined) return null;
+  const d = change(value, previous);
+  if (d === null) return null;
+  const good = inverse ? d < 0 : d > 0;
+  return (
+    <Tooltip title={`было ${format(previous)}`}>
+      <span style={{ fontSize: 12, marginLeft: 8, whiteSpace: 'nowrap', color: Math.abs(d) < 0.0005 ? token.colorTextSecondary : good ? token.colorSuccess : token.colorError }}>
+        {d >= 0 ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {pct(Math.abs(d))}
+      </span>
+    </Tooltip>
+  );
+}
+
 /** A metric with its change versus the comparison period. */
 export function KpiCard({ title, value, previous, format, hint, inverse }: KpiProps) {
   const { token } = theme.useToken();

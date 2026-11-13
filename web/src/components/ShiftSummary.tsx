@@ -1,5 +1,6 @@
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Card, Col, Flex, Row, Tag, theme, Tooltip, Typography } from 'antd';
+import { Alert, Card, Col, Flex, Row, Tag, Tooltip, Typography } from 'antd';
+import { PayBreakdown, usePayColor } from './PayBreakdown';
 import { Figure, FigureList } from './ui';
 import { int, liters, money, Num, toNum } from '../lib/format';
 import { PAY } from '../lib/payments';
@@ -26,12 +27,6 @@ const METHODS = [
   { key: 'fuel_card', label: 'Топливные карты', fuel: 'pay_fuel_card', shop: 'shop_fuel_card' },
 ] as const;
 
-function usePayColor() {
-  const { token } = theme.useToken();
-  const palette = token as unknown as Record<string, string>;
-  return (key: keyof typeof PAY) => palette[PAY[key].color] ?? token.colorTextSecondary;
-}
-
 /** Fuel or shop by payment method: only the methods that were used. */
 function methodRows(h: ShiftMoney, side: 'fuel' | 'shop', color: (k: keyof typeof PAY) => string): Figure[] {
   return METHODS.filter((m) => n(h[m[side]]) !== 0).map((m) => ({ key: m.key, label: m.label, value: rub(h[m[side]]), dot: color(m.key), sub: true }));
@@ -39,11 +34,7 @@ function methodRows(h: ShiftMoney, side: 'fuel' | 'shop', color: (k: keyof typeo
 
 /** "Итог смены": all the money of the shift, fuel + shop, by payment method with a proportion bar. */
 function Total({ h }: { h: ShiftMoney }) {
-  const color = usePayColor();
   const fuel = n(h.fuel_amount), shop = n(h.shop_total), total = fuel + shop;
-  const methods = METHODS.map((m) => ({ ...m, fuelV: n(h[m.fuel]), shopV: n(h[m.shop]) }))
-    .map((m) => ({ ...m, v: m.fuelV + m.shopV })).filter((m) => m.v !== 0);
-  const paid = methods.reduce((a, m) => a + Math.max(m.v, 0), 0);
   return (
     <Card size="small" style={{ marginBottom: 12 }}>
       <Row gutter={[24, 12]} align="middle">
@@ -53,19 +44,9 @@ function Total({ h }: { h: ShiftMoney }) {
           <Typography.Text type="secondary">топливо {rub(fuel)} · магазин {rub(shop)}</Typography.Text>
         </Col>
         <Col xs={24} md={15}>
-          {paid > 0 && (
-            <Flex style={{ height: 10, borderRadius: 5, overflow: 'hidden', marginBottom: 8 }}>
-              {methods.filter((m) => m.v > 0).map((m) => (
-                <Tooltip key={m.key} title={`${m.label}: ${rub(m.v)}`}>
-                  <div style={{ width: `${(m.v / paid) * 100}%`, background: color(m.key) }} />
-                </Tooltip>
-              ))}
-            </Flex>
-          )}
-          <FigureList rows={methods.map((m) => ({
-            key: m.key, label: m.label, dot: color(m.key), value: rub(m.v),
-            hint: `топливо ${rub(m.fuelV)} + магазин ${rub(m.shopV)}`,
-          }))} />
+          <PayBreakdown
+            fuel={Object.fromEntries(METHODS.map((m) => [m.key, h[m.fuel]]))}
+            shop={Object.fromEntries(METHODS.map((m) => [m.key, h[m.shop]]))} />
         </Col>
       </Row>
     </Card>
