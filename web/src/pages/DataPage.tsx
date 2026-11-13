@@ -26,6 +26,8 @@ function render(col: string) {
   if (MONEY.has(col)) return (v: number) => <span style={{ whiteSpace: 'nowrap' }}>{money(v, true)}</span>;
   if (LITERS.has(col)) return (v: number) => <span style={{ whiteSpace: 'nowrap' }}>{liters(v)}</span>;
   if (col === 'quantity' || col === 'doc_mass') return (v: number) => dec(v, col === 'quantity' ? 0 : 2);
+  // Station local time "YYYY-MM-DD HH:MM:SS" as it reads in Russia; the CSV keeps the sortable form.
+  if (col === 'local_time') return (v: string | null) => (v ? <span style={{ whiteSpace: 'nowrap' }}>{v.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 ')}</span> : '—');
   if (col === 'payment_kind') return (v: string) => PAYMENT_KIND[v] ?? v;
   if (col === 'is_return') return (v: boolean) => (v ? <Tag color="red">да</Tag> : '');
   if (col === 'message') return (v: string) => <span style={{ whiteSpace: 'pre-wrap' }}>{v}</span>;

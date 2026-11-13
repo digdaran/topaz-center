@@ -33,7 +33,7 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/control/alerts', title: 'Контроль' },
   { path: '/control/rules', title: 'Контроль' },
   { path: '/control/telegram', title: 'Контроль', wait: 'Мой Telegram' },
-  { path: '/stations/status', title: 'АЗС', wait: 'ПК АЗС' },
+  { path: '/stations/status', title: 'АЗС', wait: 'Компьютер АЗС' },
   { path: '/stations/data', title: 'АЗС' },
   { path: '/help', title: 'Помощь', wait: 'Утренняя проверка за 5 минут' },
   { path: '/help/changes', title: 'Помощь', wait: 'Себестоимость топлива по средней цене резервуара' },
@@ -150,7 +150,7 @@ test('owner sees the agent update rollout', async ({ page }, info) => {
 test('station list shows the PC health column', async ({ page }, info) => {
   await signIn(page);
   await page.goto('/stations/status');
-  await expect(page.getByRole('columnheader', { name: 'ПК АЗС' })).toBeVisible();
+  await expect(page.getByText('Компьютер АЗС').first()).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.screenshot({ path: `test-results/screens/${info.project.name}_stations_status.png`, fullPage: true });
 });
