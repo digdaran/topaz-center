@@ -1,4 +1,4 @@
-import { Alert, Card, Col, Flex, InputNumber, Row, Select, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Card, Col, Flex, InputNumber, Row, Segmented, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { useFiltered, useMeta } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
@@ -56,20 +56,24 @@ function Matrix({ data }: { data: Items }) {
 }
 
 function Stock({ data, cover, setCover, dead, setDead }: { data: Items; cover: number; setCover: (v: number) => void; dead: number; setDead: (v: number) => void }) {
-  const [status, setStatus] = useState<string | undefined>();
+  const [status, setStatus] = useState<string>('all');
   const meta = useMeta();
-  const rows = data.stock.filter((s) => !status || s.status === status);
+  const order = Object.keys(STATUS);
+  // What needs an action first: out of stock, running low, then dead stock and overstock.
+  const rows = data.stock.filter((s) => status === 'all' || s.status === status)
+    .sort((a, b) => (order.indexOf(a.status) + 1 || 99) - (order.indexOf(b.status) + 1 || 99) || Number(a.days_of_cover ?? 1e9) - Number(b.days_of_cover ?? 1e9));
+  const count = (k: string) => data.stock.filter((s) => s.status === k).length;
   const many = (meta.data?.stations.length ?? 0) > 1;
   return (
     <>
+      <Segmented<string> style={{ marginBottom: 12 }} value={status} onChange={setStatus}
+        options={[{ value: 'all', label: `Все (${data.stock.length})` }, ...order.filter((k) => count(k)).map((k) => ({ value: k, label: `${STATUS[k].label} (${count(k)})` }))]} />
       <Flex wrap gap={12} align="center" style={{ marginBottom: 8 }}>
         <span>Заказ на <InputNumber min={1} max={120} value={cover} onChange={(v) => v && setCover(v)} style={{ width: 70 }} /> дней</span>
         <span>Неликвид: нет продаж <InputNumber min={7} max={365} value={dead} onChange={(v) => v && setDead(v)} style={{ width: 70 }} /> дней</span>
-        <Select allowClear placeholder="Все статусы" style={{ width: 180 }} value={status} onChange={setStatus}
-          options={Object.entries(STATUS).map(([k, v]) => ({ value: k, label: `${v.label} (${data.stock.filter((s) => s.status === k).length})` }))} />
         <Typography.Text type="secondary">Скорость продаж — за последние 28 дней; остатки — сейчас.</Typography.Text>
       </Flex>
-      <Table size="small" rowKey={(r) => `${r.station_id}/${r.item_key}`} dataSource={rows} pagination={{ pageSize: 50 }} scroll={{ x: 1100 }}
+      <Table size="small" rowKey={(r) => `${r.station_id}/${r.item_key}`} dataSource={rows} pagination={{ pageSize: 50 }} scroll={{ x: 'max-content' }}
         columns={[
           ...(many ? [{ title: 'АЗС', dataIndex: 'station', key: 'st' }] : []),
           { title: 'Товар', dataIndex: 'name', key: 'n' },
@@ -77,7 +81,7 @@ function Stock({ data, cover, setCover, dead, setDead }: { data: Items; cover: n
           { title: 'Статус', dataIndex: 'status', key: 's', render: (v: string) => <Tag color={STATUS[v]?.color}>{STATUS[v]?.label ?? v}</Tag> },
           numCol<R>('Остаток', 'stock', (v) => dec(v, 0)),
           numCol<R>('Продаётся в день', 'per_day', (v) => dec(v, 2)),
-          numCol<R>('Хватит на, дней', 'days_of_cover', (v) => dec(v, 1)),
+          numCol<R>('Хватит на, дней', 'days_of_cover', (v) => (v != null && Number(v) < 0 ? '—' : dec(v, 1))),
           { title: 'Закончится', dataIndex: 'stockout_date', key: 'so', render: (v: string | null) => v?.split('-').reverse().join('.') ?? '—' },
           { ...numCol<R>('Рекомендуемый заказ', 'recommended_order', (v) => dec(v, 0)), render: (v: number) => (v > 0 ? <b>{dec(v, 0)}</b> : '—') },
           { title: 'Последняя продажа', dataIndex: 'last_sale', key: 'ls', render: (v: string | null) => (v ? dateTime(v).slice(0, 10) : 'не было') },
