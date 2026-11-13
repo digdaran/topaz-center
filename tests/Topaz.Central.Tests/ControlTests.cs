@@ -80,6 +80,16 @@ public sealed class ControlTests(CentralFixture fx) : IClassFixture<CentralFixtu
     }
 
     [PostgresFact]
+    public async Task Numbers_in_alert_texts_read_in_russian()
+    {
+        Assert.Equal("18 727", await fx.QueryAsync<string>("SELECT fmt_num(18727)"));
+        Assert.Equal("37,5", await fx.QueryAsync<string>("SELECT fmt_num(37.50)"));
+        Assert.Equal("52 мин", await fx.QueryAsync<string>("SELECT fmt_duration(interval '52 minutes')"));
+        Assert.Equal("5 ч", await fx.QueryAsync<string>("SELECT fmt_duration(interval '5 hours 10 minutes')"));
+        Assert.Equal("13 дн.", await fx.QueryAsync<string>("SELECT fmt_duration(interval '13 days 1 hour')"));
+    }
+
+    [PostgresFact]
     public async Task Rules_find_planted_problems_once_and_telegram_gets_them()
     {
         var telegram = new FakeTelegram();

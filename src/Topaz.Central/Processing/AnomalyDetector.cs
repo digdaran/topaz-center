@@ -90,7 +90,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
             // Deletes of a compaction arrive over several batches: the open alert shows the current count, and closes
             // once the rows are back (the database restored from a copy).
             await c.ExecuteAsync("""
-                UPDATE alerts a SET value = h.rows, title = 'Из базы АЗС удалены данные старых смен (записей: ' || h.rows || ')'
+                UPDATE alerts a SET value = h.rows, title = 'Из базы АЗС удалены данные старых смен (записей: ' || fmt_num(h.rows) || ')'
                 FROM v_held_delete_days h
                 WHERE a.rule_code = 'history_deleted' AND a.status <> 'closed' AND h.station_id = a.station_id AND h.day::text = a.dedupe_key
                   AND a.value IS DISTINCT FROM h.rows
@@ -152,7 +152,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Aborted fuellings (volume 0) share of a closed shift.
         Insert + $"""
         SELECT x.station_id, 'aborted_share', x.session_id::text, r.severity,
-               'Прерванные наливы: ' || x.aborted || ' из ' || x.total || ' (' || round(100.0 * x.aborted / x.total) || '%)',
+               'Прерванные наливы: ' || fmt_num(x.aborted) || ' из ' || fmt_num(x.total) || ' (' || fmt_num(round(100.0 * x.aborted / x.total)) || ' %)',
                format('Смена №%s, %s.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals)), round(100.0 * x.aborted / x.total, 1), x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, count(*) FILTER (WHERE volume = 0) AS aborted, count(*) AS total,
                      array_agg(DISTINCT local_session_id) FILTER (WHERE volume = 0) AS locals FROM fuel_sales GROUP BY 1, 2) x
@@ -164,7 +164,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Unpaid dispensing (tech pumping, overflow) in a closed shift.
         Insert + $"""
         SELECT x.station_id, 'service_volume', x.session_id::text, r.severity,
-               'Отпуск без оплаты: ' || fmt_num(x.liters) || ' л за смену', format('Смена №%s, %s, операций: %s.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), x.ops),
+               'Отпуск без оплаты: ' || fmt_num(x.liters) || ' л за смену', format('Смена №%s, %s, операций: %s.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), fmt_num(x.ops)),
                x.liters, x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, sum(volume) AS liters, count(*) AS ops, array_agg(DISTINCT local_session_id) AS locals
               FROM fuel_sales WHERE payment_kind = 'none' AND volume > 0 GROUP BY 1, 2) x
@@ -176,7 +176,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Discounts share of fuel revenue in a closed shift.
         Insert + $"""
         SELECT x.station_id, 'discount_share', x.session_id::text, r.severity,
-               'Скидки ' || fmt_num(round(100 * x.discounts / x.revenue, 1)) || '% выручки смены', format('Смена №%s, %s: скидки %s ₽.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), fmt_num(x.discounts)),
+               'Скидки ' || fmt_num(round(100 * x.discounts / x.revenue, 1)) || ' % выручки смены', format('Смена №%s, %s: скидки %s ₽.', s.session_num, shift_operators_text(x.station_id, x.session_id, x.locals), fmt_num(x.discounts)),
                round(100 * x.discounts / x.revenue, 2), x.session_id, s.ended_at
         FROM (SELECT station_id, session_id, sum(fuel_discount(amount_discount, price, price_pump, volume)) AS discounts, sum(amount) AS revenue,
                      array_agg(DISTINCT local_session_id) FILTER (WHERE fuel_discount(amount_discount, price, price_pump, volume) > 0) AS locals
@@ -191,12 +191,12 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // A card discount (lower pump price at a discount payment mode, or recorded by Topaz) is not an alert.
         Insert + $"""
         SELECT x.station_id, 'price_mismatch', x.session_id::text, r.severity,
-               'Цена отпуска не сходится: ' || x.orders || ' отпуск(ов)',
+               'Цена отпуска не сходится: ' || fmt_num(x.orders) || ' отпуск(ов)',
                format('Смена №%s, %s: %s. Например, отпуск №%s: %s л, цена заказа %s ₽, на колонке %s ₽, сумма %s ₽.', s.session_num,
                       shift_operators_text(x.station_id, x.session_id, x.locals),
-                      concat_ws(', ', CASE WHEN x.overcharge > 0 THEN 'переплата клиента — ' || x.overcharge END,
-                                      CASE WHEN x.amount_off > 0 THEN 'сумма ≠ литры × цена колонки — ' || x.amount_off END,
-                                      CASE WHEN x.bypass > 0 THEN 'скидка мимо скидок Топаза — ' || x.bypass END),
+                      concat_ws(', ', CASE WHEN x.overcharge > 0 THEN 'переплата клиента — ' || fmt_num(x.overcharge) END,
+                                      CASE WHEN x.amount_off > 0 THEN 'сумма ≠ литры × цена колонки — ' || fmt_num(x.amount_off) END,
+                                      CASE WHEN x.bypass > 0 THEN 'скидка мимо скидок Топаза — ' || fmt_num(x.bypass) END),
                       x.order_num, fmt_num(x.volume), fmt_num(x.price), fmt_num(x.price_pump), fmt_num(x.amount)),
                x.orders, x.session_id, s.started_at
         FROM (SELECT y.station_id, y.session_id, count(*) AS orders,
@@ -276,7 +276,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Rows of old shifts vanished from Topaz (database compaction): the deletes were held, the history is kept.
         Insert + $"""
         SELECT h.station_id, 'history_deleted', h.day::text, r.severity,
-               'Из базы АЗС удалены данные старых смен (записей: ' || h.rows || ')',
+               'Из базы АЗС удалены данные старых смен (записей: ' || fmt_num(h.rows) || ')',
                format('Смены №%s–%s (%s – %s). Обычно так бывает после свёртки базы Топаза. В сервисе история этих смен сохранена.',
                       h.num_from, h.num_to, to_char(h.from_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY'), to_char(h.to_at AT TIME ZONE sn.time_zone, 'DD.MM.YYYY')),
                h.rows, NULL, h.last_at
@@ -303,9 +303,9 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
             GROUP BY 1, 2, 3
         )
         SELECT x.station_id, 'payment_mode_twin', x.session_id || '/' || x.payment_mode_id, r.severity,
-               'Скидка не применилась: «' || x.name || '», наливов без скидки: ' || x.orders,
+               'Скидка не применилась: «' || x.name || '», наливов без скидки: ' || fmt_num(x.orders),
                format('Смена №%s, оператор %s: %s налив(ов) на %s л по виду оплаты «%s» (код %s) без скидки. У вида оплаты с тем же названием (код %s) скидка есть. Проверьте, какой из них выбирает оператор, и отключите лишний в Топазе.',
-                      s.session_num, s.user_name, x.orders, fmt_num(x.liters), x.name, x.payment_mode_id, x.twins),
+                      s.session_num, s.user_name, fmt_num(x.orders), fmt_num(x.liters), x.name, x.payment_mode_id, x.twins),
                x.orders, x.session_id, s.ended_at
         FROM (SELECT f.station_id, f.session_id, f.payment_mode_id, tw.name, tw.twins, tw.discount_from, count(*) AS orders, sum(f.volume) AS liters
               FROM fuel_sales f
@@ -321,9 +321,9 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // One alert per hose and week.
         Insert + $"""
         SELECT x.station_id, 'hose_overflows', x.hose_id || '/' || to_char(now(), 'IYYY-IW'), r.severity,
-               'Частые переливы: колонка ' || COALESCE(p.num::text, '?') || ', рукав ' || COALESCE(h.num_in_pump::text, x.hose_id::text) || ' — ' || x.ops || ' раз за 7 дней',
+               'Частые переливы: колонка ' || COALESCE(p.num::text, '?') || ', рукав ' || COALESCE(h.num_in_pump::text, x.hose_id::text) || ' — ' || fmt_num(x.ops) || ' раз за 7 дней',
                format('Переливы на %s л (отрицательных: %s). Частые переливы бывают из-за сброса заказов и перезагрузок, наливов с пульта, сдвига счётчиков, неверной дискретности или разного округления на ТРК, контроллере и в Топазе.',
-                      fmt_num(x.liters), x.negative),
+                      fmt_num(x.liters), fmt_num(x.negative)),
                x.ops, x.last_session, x.last_at
         FROM (SELECT f.station_id, f.hose_id, count(*) AS ops, sum(f.volume) AS liters, count(*) FILTER (WHERE f.volume < 0) AS negative,
                      max(f.sold_at) AS last_at, (array_agg(f.session_id ORDER BY f.sold_at DESC))[1] AS last_session
@@ -341,7 +341,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // A shift still open after the threshold (hours).
         Insert + """
         SELECT s.station_id, 'shift_too_long', s.session_id::text, r.severity,
-               'Смена №' || s.session_num || ' открыта ' || round(extract(epoch FROM now() - s.started_at) / 3600) || ' ч',
+               'Смена №' || s.session_num || ' открыта ' || fmt_num(round(extract(epoch FROM now() - s.started_at) / 3600)) || ' ч',
                (SELECT upper(left(t, 1)) || substr(t, 2) FROM shift_operators_text(s.station_id, s.session_id,
                    (SELECT array_agg(w.local_session_id) FROM workplace_shifts w WHERE w.station_id = s.station_id AND w.session_id = s.session_id AND w.ended_at IS NULL)) t)
                  || '. Проверьте, закрыта ли смена в Топазе.', round(extract(epoch FROM now() - s.started_at) / 3600, 1), s.session_id, s.started_at
@@ -364,7 +364,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Station silent longer than the threshold (minutes): one alert per outage.
         Insert + """
         SELECT v.id, 'station_offline', 'since ' || COALESCE(v.last_seen_at::text, 'never'), r.severity,
-               'АЗС не на связи ' || COALESCE(round(extract(epoch FROM v.silent_for) / 60) || ' мин', '(ни разу)'),
+               'АЗС не на связи ' || COALESCE(fmt_duration(v.silent_for), '(ни разу)'),
                'Последняя связь: ' || COALESCE(to_char(v.last_seen_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') || ' МСК', 'нет') || '. Данные копятся на АЗС и придут после восстановления связи.',
                round(extract(epoch FROM v.silent_for) / 60), NULL, v.last_seen_at
         FROM v_station_status v JOIN v_station_rules r ON r.code = 'station_offline' AND r.enabled AND r.station_id = v.id
@@ -381,7 +381,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                  CASE WHEN d.db_size IS NOT NULL THEN 'База Топаза ' || fmt_num(round(d.db_size / 1048576.0)) || ' МБ'
                       || COALESCE(', растёт на ' || fmt_num(round(d.db_growth_per_day * 7 / 1048576.0)) || ' МБ в неделю', '') || '.' END,
                  CASE WHEN d.free_drop_per_day > 0 THEN 'При нынешнем темпе место закончится примерно через '
-                      || ceil(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / d.free_drop_per_day) || ' дн.' END,
+                      || fmt_num(ceil(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / d.free_drop_per_day)) || ' дн.' END,
                  'Освободите место: старые резервные копии и журналы Топаза, временные файлы Windows.'),
                round(least(COALESCE(d.db_disk_free, d.sys_disk_free), COALESCE(d.sys_disk_free, d.db_disk_free)) / 1073741824.0, 2), NULL, now()
         FROM stations s JOIN v_station_disk d ON d.station_id = s.id
@@ -419,7 +419,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Station fuels without a confirmed reference type (one alert per set of such fuels; closes automatically).
         Insert + """
         SELECT f.station_id, 'fuel_unmapped', string_agg(f.fuel_id::text, ',' ORDER BY f.fuel_id), r.severity,
-               'Топливо не сопоставлено со справочником: ' || count(*) || ' шт.',
+               'Топливо не сопоставлено со справочником: ' || fmt_num(count(*)) || ' шт.',
                'Подтвердите вид в «Настройки → Виды топлива»: ' || string_agg(f.fuel_name || ' → ' || ft.name, ', ' ORDER BY f.fuel_name)
                    || '. Пока отчёты используют предложенный вид.',
                count(*), NULL, now()
@@ -447,7 +447,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         // Rejected batches on the agent or failed processing on the server (one alert per day).
         Insert + """
         SELECT v.id, 'data_rejected', current_date::text, r.severity, 'Данные АЗС не принимаются',
-               format('Отклонено агентом: %s, не обработано сервером: %s. См. «АЗС» и /api/v1/admin/batches.', COALESCE(v.agent_queue_dead, 0), v.server_failed),
+               format('Отклонено агентом: %s, не обработано сервером: %s. См. «АЗС» и /api/v1/admin/batches.', fmt_num(COALESCE(v.agent_queue_dead, 0)), fmt_num(v.server_failed)),
                COALESCE(v.agent_queue_dead, 0) + v.server_failed, NULL, now()
         FROM v_station_status v JOIN v_station_rules r ON r.code = 'data_rejected' AND r.enabled AND r.station_id = v.id
         WHERE COALESCE(v.agent_queue_dead, 0) > 0 OR v.server_failed > 0
