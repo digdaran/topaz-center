@@ -1,6 +1,6 @@
 import { DeleteOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Flex, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, theme, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, isOwner, isSuper, useFilter, useFiltered } from '../api/client';
@@ -10,7 +10,7 @@ import { FilterBar } from '../components/FilterBar';
 import { QueryState } from '../components/ui';
 import { Section } from '../components/Section';
 import { section } from '../nav';
-import { dateTime } from '../lib/format';
+import { dateTime, int } from '../lib/format';
 import { SEVERITY, severityOptions } from '../lib/severity';
 import { openTelegram, TelegramPersonal } from '../components/TelegramPersonal';
 
@@ -44,6 +44,7 @@ export function Alerts() {
       setBulk(null);
     }
   };
+  const { token } = theme.useToken();
   const newCount = (data?.alerts ?? []).filter((r) => r.status === 'new').length;
   const openCount = (data?.alerts ?? []).filter((r) => r.status !== 'closed').length;
   return (
@@ -51,8 +52,9 @@ export function Alerts() {
       <FilterBar granularity={false} compare={false} />
       <Space wrap style={{ marginBottom: 12 }}>
         <Segmented value={status} onChange={(v) => setStatus(String(v))} options={[{ value: 'open', label: 'Открытые' }, { value: 'new', label: 'Новые' }, { value: 'closed', label: 'Закрытые' }, { value: 'all', label: 'Все' }]} />
-        <Select allowClear placeholder="Важность" style={{ width: 150 }} value={severity} onChange={setSeverity} options={Object.entries(SEVERITY).map(([k, v]) => ({ value: k, label: v.label }))} />
-        <Select allowClear placeholder="Правило" style={{ width: 300 }} value={rule} onChange={setRule} options={(data?.by_rule ?? []).map((r) => ({ value: r.rule_code, label: `${r.title} (${r.total})` }))} />
+        <Segmented value={severity ?? 'any'} onChange={(v) => setSeverity(v === 'any' ? undefined : String(v))}
+          options={[{ value: 'any', label: 'Любая важность' }, ...Object.entries(SEVERITY).map(([k, v]) => ({ value: k, label: v.label }))]} />
+        <Select allowClear placeholder="Все правила" style={{ width: 300 }} value={rule} onChange={setRule} options={(data?.by_rule ?? []).map((r) => ({ value: r.rule_code, label: `${r.title} (${r.total})` }))} />
         <Button disabled={newCount === 0} loading={bulk === 'seen'} onClick={() => setAll('seen')}>Просмотреть все</Button>
         <Popconfirm
           title="Закрыть все события?"
@@ -62,10 +64,21 @@ export function Alerts() {
           <Button disabled={openCount === 0} loading={bulk === 'closed'}>Закрыть все</Button>
         </Popconfirm>
       </Space>
+      {(data?.by_rule?.length ?? 0) > 1 && (
+        <Flex wrap gap={6} align="center" style={{ marginBottom: 12 }}>
+          <Typography.Text type="secondary" style={{ marginRight: 4 }}>Чаще всего:</Typography.Text>
+          {[...data!.by_rule].sort((a, b) => Number(b.total) - Number(a.total)).slice(0, 8).map((r) => (
+            <Tag.CheckableTag key={r.rule_code} checked={rule === r.rule_code} onChange={(on) => setRule(on ? r.rule_code : undefined)}
+              style={{ border: `1px solid ${token.colorBorder}`, marginInlineEnd: 0 }}>
+              {r.title} <b>{int(r.total)}</b>
+            </Tag.CheckableTag>
+          ))}
+        </Flex>
+      )}
       <QueryState error={error} loading={isLoading}>
         <Table size="small" rowKey="id" dataSource={data?.alerts} pagination={{ pageSize: 50 }} scroll={{ x: 1000 }} locale={{ emptyText: 'Событий нет' }}
           columns={[
-            { title: '', dataIndex: 'severity', width: 110, render: (v: string) => <Tag color={SEVERITY[v]?.color}>{SEVERITY[v]?.label}</Tag> },
+            { title: 'Важность', dataIndex: 'severity', width: 110, render: (v: string) => <Tag color={SEVERITY[v]?.color}>{SEVERITY[v]?.label}</Tag> },
             { title: 'Когда', key: 'at', width: 140, render: (_, r) => dateTime(r.occurred_at ?? r.detected_at, r.time_zone) },
             { title: 'АЗС', dataIndex: 'station', width: 180 },
             {
