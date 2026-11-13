@@ -1,6 +1,6 @@
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Form, Input, Modal, Select, Switch, Table, Tag, Typography } from 'antd';
+import { App, Button, Flex, Form, Input, Modal, Select, Switch, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { api, isSuper, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
@@ -9,6 +9,7 @@ import { section } from '../nav';
 import { FuelCatalog } from './FuelCatalog';
 import { OrganizationSettings, PaymentModes } from './OrgSettings';
 import { dateTime } from '../lib/format';
+import { AUDIT_WARN, auditAction, auditDetails, auditEntity } from '../lib/audit';
 
 interface UserRow { id: string; login: string; name: string; role: string; is_active: boolean; totp_enabled: boolean; passkeys: number; created_at: string; last_login_at: string | null; locked_until: string | null; stations: string[]; organization_id: string | null; organization: string | null }
 interface AuditRow { id: number; user_login: string | null; action: string; entity: string | null; details: unknown; at: string; organization?: string | null }
@@ -112,17 +113,47 @@ function Users() {
 }
 
 function AuditLog() {
+  const me = useMe();
+  const meta = useMeta();
   const { data, isLoading } = useQuery({ queryKey: ['audit'], queryFn: () => api<AuditRow[]>('/audit?limit=500') });
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('/users') });
+  const [logins, setLogins] = useState(false);
+  const [who, setWho] = useState<string | undefined>();
+  // Names for "station:<id>", "user:<id>", "organization:<id>" and ids inside the details.
+  const names: Record<string, string> = Object.fromEntries([
+    ...(meta.data?.stations ?? []).map((st) => [st.id, st.name]),
+    ...(users.data ?? []).map((u) => [u.id, u.name || u.login]),
+    ...(me.organizations ?? []).map((o) => [o.id, o.name]),
+  ]);
+  const rows = (data ?? []).filter((r) => (logins || r.action !== 'login') && (!who || r.user_login === who));
+  const people = [...new Set((data ?? []).map((r) => r.user_login).filter(Boolean))] as string[];
   return (
-    <Table<AuditRow> size="small" rowKey="id" loading={isLoading} dataSource={data} pagination={{ pageSize: 50 }} scroll={{ x: 800 }}
-      columns={[
-        { title: 'Когда', dataIndex: 'at', render: (v) => dateTime(v), width: 150 },
-        ...(isSuper(useMe()) ? [{ title: 'Организация', dataIndex: 'organization', width: 140, render: (v: string | null) => v ?? '—' }] : []),
-        { title: 'Кто', dataIndex: 'user_login', width: 140 },
-        { title: 'Действие', dataIndex: 'action', width: 160 },
-        { title: 'Объект', dataIndex: 'entity', width: 200 },
-        { title: 'Подробности', dataIndex: 'details', render: (v) => (v ? <code style={{ fontSize: 12 }}>{JSON.stringify(v)}</code> : null) },
-      ]} />
+    <>
+      <Flex wrap gap={12} align="center" style={{ marginBottom: 12 }}>
+        <Select allowClear placeholder="Все сотрудники" style={{ width: 220 }} value={who} onChange={setWho} options={people.map((p) => ({ value: p, label: p }))} />
+        <span><Switch size="small" checked={logins} onChange={setLogins} /> показывать обычные входы в сервис</span>
+        <Typography.Text type="secondary">Неудачные попытки входа видны всегда.</Typography.Text>
+      </Flex>
+      <Table<AuditRow> size="small" rowKey="id" loading={isLoading} dataSource={rows} pagination={{ pageSize: 50 }} scroll={{ x: 'max-content' }}
+        columns={[
+          { title: 'Когда', dataIndex: 'at', render: (v) => <span style={{ whiteSpace: 'nowrap' }}>{dateTime(v)}</span> },
+          ...(isSuper(me) ? [{ title: 'Организация', dataIndex: 'organization', render: (v: string | null) => v ?? '—' }] : []),
+          { title: 'Кто', dataIndex: 'user_login', render: (v: string | null) => v ?? '—' },
+          {
+            title: 'Что сделал', dataIndex: 'action',
+            render: (v: string, r) => (
+              <>
+                <Typography.Text type={AUDIT_WARN.has(v) ? 'danger' : undefined}>{auditAction(v)}</Typography.Text>
+                {r.entity && <div style={{ fontSize: 12, opacity: 0.7 }}>{auditEntity(r.entity, names)}</div>}
+              </>
+            ),
+          },
+          {
+            title: 'Подробности', dataIndex: 'details',
+            render: (v) => { const t = auditDetails(v, names); return t ? <span style={{ fontSize: 13 }}>{t}</span> : null; },
+          },
+        ]} />
+    </>
   );
 }
 
