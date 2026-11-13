@@ -124,7 +124,7 @@ export default function ItemsPage({ view = 'sales' }: { view?: 'sales' | 'stock'
               key: 'sales', label: 'Продажи', children: (
                 <Row gutter={[12, 12]}>
                   <Col xs={24} lg={9}>
-                    <ChartCard title="Выручка по группам" empty={!data.groups.length} option={{
+                    <ChartCard title="Выручка магазина по группам" empty={!data.groups.length} option={{
                       color: CHART_COLORS,
                       tooltip: { trigger: 'item', formatter: (x: any) => `${x.name}<br/>${money(x.value)} (${x.percent}%)` },
                       legend: { bottom: 0 },
@@ -132,7 +132,7 @@ export default function ItemsPage({ view = 'sales' }: { view?: 'sales' | 'stock'
                     }} />
                   </Col>
                   <Col xs={24} lg={15}>
-                    <Card size="small" title="Товары" style={{ height: '100%' }}>
+                    <Card size="small" title="Товары за период" style={{ height: '100%' }}>
                       <Table size="small" rowKey="item_key" dataSource={data.items} pagination={{ pageSize: 15 }} scroll={{ x: 800 }}
                         columns={[
                           { title: 'Товар', dataIndex: 'name' },

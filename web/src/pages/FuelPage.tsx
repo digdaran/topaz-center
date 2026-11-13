@@ -1,4 +1,6 @@
-import { Card, Col, Row, Table, Tag, Tooltip, Typography } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Card, Col, Collapse, Row, Table, Tag, theme, Tooltip, Typography } from 'antd';
+import { PayBreakdown } from '../components/PayBreakdown';
 import { useFiltered, useFuelTypeName } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, numCol, QueryState } from '../components/ui';
@@ -21,6 +23,9 @@ export default function FuelPage() {
   const buckets = [...new Set((data?.series ?? []).map((s) => s.bucket))].sort();
   const types = [...new Set((data?.series ?? []).map((s) => s.fuel_type))];
   const total = (data?.by_type ?? []).reduce((a, t) => a + Number(t.revenue ?? 0), 0);
+  const { token } = theme.useToken();
+  const byCategory: Partial<Record<PayCategory, number>> = {};
+  for (const r of data?.payments ?? []) byCategory[r.pay_category as PayCategory] = (byCategory[r.pay_category as PayCategory] ?? 0) + Number(r.revenue ?? 0);
 
   return (
     <>
@@ -28,22 +33,39 @@ export default function FuelPage() {
       <QueryState error={error} loading={isLoading}>
         {data && (
           <>
+            <Typography.Title level={5} style={{ marginTop: 0 }}>Что и сколько продали</Typography.Title>
             <Row gutter={[12, 12]}>
-              {data.by_type.map((t) => (
-                <Col key={t.fuel_type} xs={12} md={8} xl={Math.max(4, Math.floor(24 / Math.max(1, data.by_type.length)))}>
-                  <Card size="small" title={t.fuel_name} extra={<Typography.Text type="secondary">{pct(total ? t.revenue / total : 0)}</Typography.Text>}>
-                    <div style={{ fontSize: 20, fontWeight: 600, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{liters(t.liters)}</div>
-                    <div style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{money(t.revenue)}</div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                      ср. цена {money(t.avg_price, true)} · налив {liters(t.avg_fill)}
-                    </Typography.Text>
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-            <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-              <Col xs={24} xl={16}>
-                <ChartCard title="Продажи по видам топлива, литры" loading={isFetching} empty={!buckets.length} option={{
+              <Col xs={24} xl={12}>
+                <Card size="small" title="По видам топлива" style={{ height: '100%' }}>
+                  <Table size="small" rowKey="fuel_type" pagination={false} dataSource={data.by_type} scroll={{ x: 'max-content' }}
+                    locale={{ emptyText: 'Продаж за период нет' }}
+                    summary={(rows) => {
+                      const l = rows.reduce((a, r) => a + Number(r.liters ?? 0), 0);
+                      return (
+                        <Table.Summary.Row>
+                          <Table.Summary.Cell index={0}><b>Всего</b></Table.Summary.Cell>
+                          <Table.Summary.Cell index={1} align="right"><b>{liters(l)}</b></Table.Summary.Cell>
+                          <Table.Summary.Cell index={2} align="right"><b>{money(total)}</b></Table.Summary.Cell>
+                          <Table.Summary.Cell index={3} align="right">100 %</Table.Summary.Cell>
+                          <Table.Summary.Cell index={4} align="right">{l ? money(total / l, true) : '—'}</Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      );
+                    }}
+                    columns={[
+                      {
+                        title: 'Топливо', dataIndex: 'fuel_name',
+                        render: (v: string, r) => <><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, marginRight: 8, background: CHART_COLORS[types.indexOf(r.fuel_type) % CHART_COLORS.length] ?? token.colorTextTertiary }} />{v}</>,
+                      },
+                      numCol<R>('Литры', 'liters', liters, { defaultSortOrder: 'descend' }),
+                      numCol<R>('Выручка', 'revenue', money),
+                      { ...numCol<R>('Доля', 'revenue', pct), key: 'share', title: <Tooltip title="Доля в выручке топлива">Доля</Tooltip>, render: (v: number) => pct(total ? Number(v) / total : 0) },
+                      numCol<R>('Ср. цена', 'avg_price', (v) => money(v, true)),
+                      numCol<R>('Ср. налив', 'avg_fill', liters),
+                    ]} />
+                </Card>
+              </Col>
+              <Col xs={24} xl={12}>
+                <ChartCard title="Литры по видам топлива" loading={isFetching} empty={!buckets.length} option={{
                   color: CHART_COLORS,
                   tooltip: { trigger: 'axis', valueFormatter: (v) => liters(Number(v)) },
                   legend: { top: 0 },
@@ -56,43 +78,53 @@ export default function FuelPage() {
                   })),
                 }} />
               </Col>
-              <Col xs={24} xl={8}>
+            </Row>
+
+            <Typography.Title level={5} style={{ marginTop: 20 }}>Как платят и как заправляются</Typography.Title>
+            <Row gutter={[12, 12]}>
+              <Col xs={24} xl={10}>
+                <Card size="small" title="Способы оплаты топлива" style={{ height: '100%' }}>
+                  <PayBreakdown fuelOnly exact={false} fuel={byCategory} />
+                  <Collapse ghost size="small" style={{ marginTop: 8 }} items={[{
+                    key: 'modes', label: <Typography.Text type="secondary">По видам оплаты Топаза ({data.payments.length})</Typography.Text>,
+                    children: (
+                      <Table size="small" rowKey={(r) => `${r.pay_category}/${r.payment_mode}`} pagination={false} dataSource={data.payments} scroll={{ x: 'max-content' }}
+                        columns={[
+                          { title: 'Вид оплаты', dataIndex: 'payment_mode' },
+                          { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
+                          numCol<R>('Литры', 'liters', liters),
+                          numCol<R>('Выручка', 'revenue', money),
+                          numCol<R>('Заказы', 'orders', int),
+                          numCol<R>('Скидки', 'discounts', money),
+                        ]} />
+                    ),
+                  }]} />
+                </Card>
+              </Col>
+              <Col xs={24} md={12} xl={7}>
                 <ChartCard title="Как заправляются" empty={!data.order_types.length} option={{
                   color: CHART_COLORS,
                   tooltip: { trigger: 'item', formatter: (x: any) => `${x.name}: ${int(x.value)} заказов (${x.percent}%)` },
                   legend: { bottom: 0 },
                   series: [{
-                    type: 'pie', radius: ['40%', '65%'], center: ['50%', '45%'], label: { formatter: '{b}\n{d}%' },
+                    type: 'pie', radius: ['40%', '65%'], center: ['50%', '45%'], label: { position: 'inside', formatter: (x: any) => `${Math.round(x.percent)} %`, color: '#fff' },
                     data: data.order_types.map((o) => ({ name: ORDER_KIND[o.kind] ?? o.kind, value: o.orders })),
                   }],
                 }} />
               </Col>
-              <Col xs={24} lg={12}>
+              <Col xs={24} md={12} xl={7}>
                 <ChartCard title="Объём налива" empty={!data.fills.length} option={{
                   color: [CHART_COLORS[1]],
                   tooltip: { trigger: 'axis', formatter: (p: any) => `${p[0].name}: ${int(p[0].value)} заказов` },
                   grid: { left: 8, right: 8, bottom: 8, top: 16, containLabel: true },
                   xAxis: { type: 'category', data: FILL_BINS },
-                  yAxis: { type: 'value' },
+                  yAxis: { type: 'value', axisLabel: { formatter: (v: number) => compact(v) } },
                   series: [{ type: 'bar', data: FILL_BINS.map((_, i) => data.fills.find((f) => f.bin === i + 1)?.orders ?? 0) }],
                 }} />
               </Col>
-              <Col xs={24} lg={12}>
-                <Card size="small" title="Оплата" style={{ height: '100%' }}>
-                  <Table size="small" rowKey={(r) => `${r.pay_category}/${r.payment_mode}`} pagination={false} dataSource={data.payments} scroll={{ x: 500 }}
-                    columns={[
-                      { title: 'Вид оплаты', dataIndex: 'payment_mode' },
-                      { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
-                      numCol<R>('Литры', 'liters', liters),
-                      numCol<R>('Выручка', 'revenue', money),
-                      numCol<R>('Заказы', 'orders', int),
-                      numCol<R>('Скидки', 'discounts', money),
-                    ]} />
-                </Card>
-              </Col>
             </Row>
 
-            <Typography.Title level={4} style={{ marginTop: 20 }}>Цены и спрос</Typography.Title>
+            <Typography.Title level={5} style={{ marginTop: 20 }}>Цены и спрос</Typography.Title>
             <Row gutter={[12, 12]}>
               <Col xs={24} xl={12}>
                 <ChartCard title="Цена по дням" empty={!data.price_history.length} option={(() => {
@@ -113,7 +145,7 @@ export default function FuelPage() {
                 })()} />
               </Col>
               <Col xs={24} xl={12}>
-                <Card size="small" title={<>Реакция спроса на изменение цены <Tooltip title="Средние литры в день за 14 дней до и после изменения цены. Эластичность = изменение объёма, % / изменение цены, %. Оценка: на спрос влияют и сезон, и погода, и конкуренты."><Typography.Text type="secondary">(?)</Typography.Text></Tooltip></>} style={{ height: '100%' }}>
+                <Card size="small" title={<>Реакция спроса на изменение цены <Tooltip title="Средние литры в день за 14 дней до и после изменения цены. Эластичность = изменение объёма, % / изменение цены, %. Оценка: на спрос влияют и сезон, и погода, и конкуренты."><InfoCircleOutlined style={{ color: token.colorTextTertiary }} /></Tooltip></>} style={{ height: '100%' }}>
                   <Table size="small" rowKey={(r) => `${r.station_id}/${r.fuel_type}/${r.date}`} dataSource={[...data.price_changes].sort((a, b) => b.date.localeCompare(a.date))}
                     pagination={{ pageSize: 8 }} scroll={{ x: 820 }}
                     locale={{ emptyText: 'Изменений цены за период нет' }}
@@ -124,14 +156,15 @@ export default function FuelPage() {
                       { title: 'Цена', key: 'p', render: (_, r) => <span style={{ whiteSpace: 'nowrap' }}>{dec(r.price_before)} → {dec(r.price_after)}</span> },
                       numCol<R>('Δ цены', 'price_change', pct),
                       { title: 'Литров/день', key: 'l', align: 'right', render: (_, r) => <span style={{ whiteSpace: 'nowrap' }}>{int(r.liters_per_day_before)} → {int(r.liters_per_day_after)}</span> },
-                      { ...numCol<R>('Δ объёма', 'volume_change', pct), render: (v: number) => <span style={{ color: v < 0 ? '#cf1322' : '#389e0d' }}>{pct(v)}</span> },
+                      { ...numCol<R>('Δ объёма', 'volume_change', pct), render: (v: number) => <span style={{ color: v < 0 ? token.colorError : token.colorSuccess }}>{pct(v)}</span> },
                       numCol<R>('Эластичность', 'elasticity', (v) => dec(v, 2)),
                     ]} />
                 </Card>
               </Col>
             </Row>
 
-            <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+            <Typography.Title level={5} style={{ marginTop: 20 }}>Колонки и отпуск без оплаты</Typography.Title>
+            <Row gutter={[12, 12]}>
               <Col xs={24} xl={14}>
                 <Card size="small" title="Загрузка ТРК по рукавам">
                   <Table size="small" rowKey={(r) => `${r.station_id}/${r.hose_num}/${r.fuel_name}`} dataSource={data.hoses} pagination={{ pageSize: 10 }} scroll={{ x: 600 }}

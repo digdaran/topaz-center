@@ -24,9 +24,11 @@ const n = (v: Num) => toNum(v) ?? 0;
  * Money by payment method, fuel + shop together: a proportion bar and one line per method used
  * (the hint splits it into fuel and shop). `extra` adds lines after the methods (e.g. a change to the previous period).
  */
-export function PayBreakdown({ fuel, shop, exact = true, extra }: {
+export function PayBreakdown({ fuel, shop = {}, exact = true, extra, fuelOnly }: {
   fuel: Partial<Record<PayCategory, Num>>;
-  shop: Partial<Record<PayCategory, Num>>;
+  shop?: Partial<Record<PayCategory, Num>>;
+  /** Fuel alone (no shop): no fuel/shop split in the hint. */
+  fuelOnly?: boolean;
   exact?: boolean;
   extra?: (key: PayCategory) => ReactNode;
 }) {
@@ -49,7 +51,7 @@ export function PayBreakdown({ fuel, shop, exact = true, extra }: {
       <FigureList rows={rows.map((m): Figure => ({
         key: m.key, label: m.label, dot: color(m.key),
         value: <>{rub(m.v)}{paid > 0 && <span style={{ opacity: 0.55, marginLeft: 8, fontSize: 12 }}>{Math.round((Math.max(m.v, 0) / paid) * 100)} %</span>}{extra?.(m.key)}</>,
-        hint: `топливо ${rub(m.f)} + магазин ${rub(m.s)}`,
+        hint: fuelOnly ? undefined : `топливо ${rub(m.f)} + магазин ${rub(m.s)}`,
       }))} />
     </>
   );

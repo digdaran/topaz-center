@@ -47,6 +47,7 @@ export default function DemandPage() {
   return (
     <>
       <Toolbar>
+        <Typography.Text type="secondary">Топливо:</Typography.Text>
         <Segmented<Metric> value={metric} onChange={setMetric} options={(Object.keys(METRIC) as Metric[]).map((k) => ({ value: k, label: METRIC[k].label }))} />
       </Toolbar>
       <FilterBar granularity={false} compare={false} fuel pay />
@@ -59,7 +60,7 @@ export default function DemandPage() {
                 option={heatmap(data.fuel_heatmap.map((p) => ({ dow: p.dow, hour: p.hour, value: p[metric] })), m.fmt, m.label)} />
             </Col>
             <Col xs={24} lg={12}>
-              <ChartCard title={`По часам суток (в среднем за день): ${m.label.toLowerCase()}`} empty={!data.fuel_heatmap.length} option={{
+              <ChartCard title={`Топливо по часам суток: ${m.label.toLowerCase()}, в среднем за день`} empty={!data.fuel_heatmap.length} option={{
                 color: [CHART_COLORS[0]],
                 tooltip: { trigger: 'axis', valueFormatter: (v: any) => m.fmt(Number(v)) },
                 grid: { left: 8, right: 8, bottom: 8, top: 16, containLabel: true },
@@ -69,7 +70,7 @@ export default function DemandPage() {
               }} />
             </Col>
             <Col xs={24} lg={12}>
-              <ChartCard title={`По дням недели (в среднем за день): ${m.label.toLowerCase()}`} empty={!data.fuel_heatmap.length} option={{
+              <ChartCard title={`Топливо по дням недели: ${m.label.toLowerCase()}, в среднем за день`} empty={!data.fuel_heatmap.length} option={{
                 color: [CHART_COLORS[1]],
                 tooltip: { trigger: 'axis', valueFormatter: (v: any) => m.fmt(Number(v)) },
                 grid: { left: 8, right: 8, bottom: 8, top: 16, containLabel: true },
@@ -79,7 +80,7 @@ export default function DemandPage() {
               }} />
             </Col>
             <Col xs={24}>
-              <ChartCard title={<>Тренд и прогноз на 14 дней <Typography.Text type="secondary" style={{ fontWeight: 400 }}>· прогноз — оценка по тем же дням недели с учётом тренда</Typography.Text></>}
+              <ChartCard title={<>Топливо: тренд и прогноз на 14 дней <Typography.Text type="secondary" style={{ fontWeight: 400 }}>· прогноз — оценка по тем же дням недели с учётом тренда</Typography.Text></>}
                 empty={!trend.length} option={{
                   color: [CHART_COLORS[0], CHART_COLORS[2], CHART_COLORS[3]],
                   tooltip: { trigger: 'axis', valueFormatter: (v: any) => (v == null ? '—' : metric === 'revenue' ? money(Number(v)) : liters(Number(v))) },
@@ -99,7 +100,7 @@ export default function DemandPage() {
                 option={heatmap(data.shop_heatmap.map((p) => ({ dow: p.dow, hour: p.hour, value: p.receipts })), (v) => int(v), 'Чеки')} />
             </Col>
             <Col xs={24} lg={12}>
-              <Card size="small" title="По месяцам" style={{ height: '100%' }}>
+              <Card size="small" title="Топливо по месяцам" style={{ height: '100%' }}>
                 <Table size="small" rowKey="month" pagination={false} dataSource={data.months}
                   columns={[
                     { title: 'Месяц', dataIndex: 'month', render: (v: string) => `${MONTHS[Number(v.slice(5, 7)) - 1]} ${v.slice(0, 4)}` },

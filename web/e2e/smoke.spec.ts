@@ -19,7 +19,7 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/', title: 'Сводка', wait: 'Требует внимания' },
   { path: '/shifts', title: 'Смены' },
   { path: '/sales/fuel', title: 'Продажи', wait: 'Цена по дням' },
-  { path: '/sales/shop', title: 'Продажи', wait: 'Выручка по группам' },
+  { path: '/sales/shop', title: 'Продажи', wait: 'Выручка магазина по группам' },
   { path: '/sales/demand', title: 'Продажи', wait: 'Тренд и прогноз' },
   { path: '/sales/stations', title: 'Продажи' },
   { path: '/sales/plans', title: 'Продажи', wait: 'Нарастающим итогом' },
