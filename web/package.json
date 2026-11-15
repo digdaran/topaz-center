@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
-    "@tanstack/react-query": "^5.62.7",
+    "@tanstack/react-query": "^5.107.1",
     "antd": "^5.22.5",
     "dayjs": "^1.11.13",
     "echarts": "^5.5.1",
@@ -25,7 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
-    "@playwright/test": "^1.49.1",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
@@ -33,9 +33,9 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "globals": "^15.14.0",
-    "prettier": "^3.4.2",
+    "prettier": "^3.10.1",
     "typescript": "~5.6.3",
-    "typescript-eslint": "^8.18.1",
+    "typescript-eslint": "^8.72.2",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"
   }
