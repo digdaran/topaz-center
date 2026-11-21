@@ -6,9 +6,16 @@ import { api } from '../api/client';
 import { ShiftMoney, ShiftSummary } from '../components/ShiftSummary';
 import { numCol, QueryState } from '../components/ui';
 import { dateTime, dec, duration, int, liters, money, Num, toNum } from '../lib/format';
-import { PAY, PayCategory } from '../lib/payments';
+import { PAY, PayCategory, tillNote } from '../lib/payments';
 
 type Row = Record<string, any>;
+
+/** Payment method of an order; marked when Topaz's till decided it against the payment mode. */
+function PayTag({ category, order }: { category: PayCategory; order: Row }) {
+  const note = tillNote(category, order.mode_category, order.till);
+  const tag = <Tag color={PAY[category]?.color}>{PAY[category]?.short ?? category}{note ? ' *' : ''}</Tag>;
+  return note ? <Tooltip title={note}>{tag}</Tooltip> : tag;
+}
 
 interface Card {
   header: Row & ShiftMoney & {
@@ -118,7 +125,7 @@ export default function ShiftCardPage() {
                     { title: 'Топливо', dataIndex: 'fuel_name' },
                     { title: 'Рукав', dataIndex: 'hose_num' },
                     { title: 'Оплата', dataIndex: 'payment_mode', render: (v: string, r) => <>{v} {r.remark && <Tag>{r.remark}</Tag>}</> },
-                    { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory) => <Tag color={PAY[v]?.color}>{PAY[v]?.short ?? v}</Tag> },
+                    { title: 'Способ', dataIndex: 'pay_category', render: (v: PayCategory, r) => <PayTag category={v} order={r} /> },
                     numCol<Row>('Литры', 'volume', liters),
                     numCol<Row>('Заказано, л', 'volume_ordered', liters),
                     paidPriceCol(),

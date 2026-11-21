@@ -92,10 +92,10 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
         var args = new { s, d = days, lo = Utc(days?.Min().AddDays(-2)), hi = Utc(days?.Max().AddDays(3)), vat };
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_fuel_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""
-            INSERT INTO agg_fuel_daily (station_id, local_date, fuel_id, payment_mode_id, payment_kind, revenue, liters, orders, aborted,
+            INSERT INTO agg_fuel_daily (station_id, local_date, fuel_id, payment_mode_id, payment_kind, till, revenue, liters, orders, aborted,
                                         service_liters, discounts, last_price, last_sold_at, cost_amount, costed_liters, costed_revenue, service_cost,
                                         fiscal_revenue, costed_vat)
-            SELECT s.station_id, s.local_date, COALESCE(s.fuel_id, 0), COALESCE(s.payment_mode_id, 0), s.payment_kind,
+            SELECT s.station_id, s.local_date, COALESCE(s.fuel_id, 0), COALESCE(s.payment_mode_id, 0), s.payment_kind, s.till,
                    COALESCE(sum(s.amount), 0), COALESCE(sum(s.volume) FILTER (WHERE s.is_sale), 0), count(*) FILTER (WHERE s.is_sale),
                    count(*) FILTER (WHERE s.volume = 0), COALESCE(sum(s.volume) FILTER (WHERE s.payment_kind = 'none' AND s.volume > 0), 0),
                    COALESCE(sum(fuel_discount(s.amount_discount, s.price, s.price_pump, s.volume)), 0), (array_agg(s.price ORDER BY s.sold_at DESC) FILTER (WHERE s.is_sale))[1], max(s.sold_at),
@@ -118,7 +118,7 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
                 ORDER BY a.valid_from DESC, a.seq DESC LIMIT 1) cf ON true
             CROSS JOIN LATERAL (SELECT COALESCE(ct.price, cf.price) AS price) c
             WHERE {where.Replace("station_id", "s.station_id").Replace("local_date", "s.local_date")}{bound.Replace("sold_at", "s.sold_at")} AND s.local_date IS NOT NULL
-            GROUP BY 1, 2, 3, 4, 5
+            GROUP BY 1, 2, 3, 4, 5, 6
             """, args, tx, cancellationToken: ct, commandTimeout: 600));
     }
 
@@ -131,9 +131,9 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_shop_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"DELETE FROM agg_shop_receipts_daily WHERE {where}", args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""
-            INSERT INTO agg_shop_daily (station_id, local_date, item_id, payment_mode_id, quantity, amount, lines, receipts, cost_amount, costed_amount,
+            INSERT INTO agg_shop_daily (station_id, local_date, item_id, payment_mode_id, payment_kind, till, quantity, amount, lines, receipts, cost_amount, costed_amount,
                                         fiscal_amount, costed_vat)
-            SELECT l.station_id, l.local_date, COALESCE(l.item_id, 0), COALESCE(l.payment_mode_id, 0), COALESCE(sum(l.quantity), 0), COALESCE(sum(l.amount), 0),
+            SELECT l.station_id, l.local_date, COALESCE(l.item_id, 0), COALESCE(l.payment_mode_id, 0), l.payment_kind, l.till, COALESCE(sum(l.quantity), 0), COALESCE(sum(l.amount), 0),
                    count(*), count(DISTINCT l.receipt_id),
                    sum(l.quantity * c.cost) FILTER (WHERE c.cost IS NOT NULL),
                    COALESCE(sum(l.amount) FILTER (WHERE c.cost IS NOT NULL), 0),
@@ -148,7 +148,7 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
                   AND (ic.station_id = l.station_id OR (ic.station_id IS NULL AND ic.organization_id = (SELECT organization_id FROM stations WHERE id = l.station_id)))
                 ORDER BY ic.valid_from DESC, (ic.station_id IS NULL) LIMIT 1) c ON true
             WHERE {where.Replace("station_id", "l.station_id").Replace("local_date", "l.local_date")}{bound.Replace("doc_at", "l.doc_at")} AND l.local_date IS NOT NULL
-            GROUP BY 1, 2, 3, 4
+            GROUP BY 1, 2, 3, 4, 5, 6
             """, args, tx, cancellationToken: ct, commandTimeout: 600));
         await c.ExecuteAsync(new CommandDefinition($"""
             INSERT INTO agg_shop_receipts_daily (station_id, local_date, receipts, amount)

@@ -199,8 +199,11 @@ public static class ShiftEndpoints
         var orders = await c.QueryAsync("""
             SELECT order_id, order_num, local_ts, fuel_name, tank_num, hose_num, payment_mode, remark, payment_kind, pay_category, volume, volume_ordered,
                    price, price_pump, fuel_price_paid(price, price_pump) AS price_paid, amount, amount_cash, amount_cashless, amount_discount,
-                   fuel_discount(amount_discount, price, price_pump, volume) AS discount, card_code, ws.operator, ws.workplace
+                   fuel_discount(amount_discount, price, price_pump, volume) AS discount, card_code, ws.operator, ws.workplace,
+                   v.till, mf.category AS mode_category
             FROM v_fuel_sales_local v
+            -- the payment mode's own category: the UI explains a sale whose till changed it (1.22, e.g. a declined card paid in cash)
+            LEFT JOIN v_payment_mode_flags mf ON mf.station_id = v.station_id AND mf.payment_mode_id = v.payment_mode_id
             LEFT JOIN LATERAL (
                 SELECT w.operator, w.workplace FROM fuel_sales f
                 JOIN v_workplace_shifts w ON w.station_id = f.station_id AND w.local_session_id = f.local_session_id

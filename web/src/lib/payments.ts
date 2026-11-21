@@ -13,3 +13,14 @@ export const PAY: Record<PayCategory, { label: string; short: string; color: str
 export const PAY_FILTER: PayCategory[] = ['cash', 'card', 'contract', 'fuel_card'];
 
 export const payLabel = (v: string | null | undefined) => (v && v in PAY ? PAY[v as PayCategory].label : v ?? '—');
+
+/**
+ * Why a sale's payment method differs from its payment mode (server: sale_pay_category, 033): Topaz's till saw the
+ * money (a declined card paid in cash, a "Базовый" mode) or did not (a cash mode paid by card).
+ */
+export function tillNote(category: string, modeCategory: string | null | undefined, till: string | null | undefined): string | null {
+  if (!modeCategory || modeCategory === category) return null;
+  if (till === 'in' && category === 'cash') return 'Деньги прошли через кассу Топаза наличными, хотя вид оплаты безналичный — например, карта не прошла и клиент заплатил наличными';
+  if (till === 'out' && category === 'card') return 'Вид оплаты наличный, но деньги не прошли через кассу Топаза — оплачено картой';
+  return null;
+}

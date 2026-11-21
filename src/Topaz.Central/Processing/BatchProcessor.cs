@@ -185,6 +185,14 @@ public sealed class BatchProcessor(NpgsqlDataSource db, BatchSignal signal, Roll
             {
                 case "flOrders": AddTs("fuel", data["DateTime"]); break;
                 case "trFastTradeH": AddTs("shop", data["DateDoc"]); break;
+                // the till decides how a sale was paid (033): its record may come after the sale
+                case "rgCashes":
+                    switch (data["DocTypeID"]?.ToString())
+                    {
+                        case "6": AddTs("fuel", data["Date"]); break;
+                        case "5": AddTs("shop", data["Date"]); break;
+                    }
+                    break;
                 case "trFastTradeD":
                     if (data["FastTradeHID"] is { } h && long.TryParse(h.ToString(), out var id)) _receipts.Add(id);
                     break;

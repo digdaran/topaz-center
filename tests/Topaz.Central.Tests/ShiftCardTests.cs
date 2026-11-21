@@ -59,9 +59,10 @@ public sealed class ShiftCardTests(CentralFixture fx) : IClassFixture<CentralFix
         {
             ["FastTradeDID"] = id, ["FastTradeHID"] = id, ["ItemID"] = 1, ["Quantity"] = 1, ["Price"] = total, ["Amount"] = total, ["Total"] = total,
         });
-        RecordChange Cash(int id, int docType, decimal amount) => Row("rgCashes", $"{id}", 1, new JsonObject
+        // DocID: the document the money belongs to (order for 6, receipt for 5), as in Topaz.
+        RecordChange Cash(int id, int docType, decimal amount, int doc = 0) => Row("rgCashes", $"{id}", 1, new JsonObject
         {
-            ["RgCashID"] = id, ["SessionID"] = 1, ["Date"] = Ts(t0.AddHours(2).AddMinutes(id)), ["DocTypeID"] = docType, ["DocID"] = id, ["CashID"] = 3, ["Amount"] = amount,
+            ["RgCashID"] = id, ["SessionID"] = 1, ["Date"] = Ts(t0.AddHours(2).AddMinutes(id)), ["DocTypeID"] = docType, ["DocID"] = doc, ["CashID"] = 3, ["Amount"] = amount,
         });
 
         await SendAsync(st.Token,
@@ -80,7 +81,7 @@ public sealed class ShiftCardTests(CentralFixture fx) : IClassFixture<CentralFix
             Receipt(2, 2, 200, false), Line(2, 200),
             Receipt(3, 1, 50, true), Line(3, 50),
             // The till: 500 ₽ change put in, cash for fuel and shop, 1 600 ₽ taken out → 150 ₽ left.
-            Cash(1, 14, 500), Cash(2, 6, 1000), Cash(3, 5, 250), Cash(4, 15, -1600),
+            Cash(1, 14, 500), Cash(2, 6, 1000, doc: 1), Cash(3, 5, 300, doc: 1), Cash(5, 5, -50, doc: 3), Cash(4, 15, -1600),
         ]);
 
         var users = fx.Factory!.Services.GetRequiredService<UserService>();
@@ -125,5 +126,102 @@ public sealed class ShiftCardTests(CentralFixture fx) : IClassFixture<CentralFix
         Assert.Equal(200m, K("shop_card"));
         Assert.Equal(K("shop_revenue"), K("shop_cash") + K("shop_card") + K("shop_contract") + K("shop_fuel_card"));
         Assert.Equal(2050m, K("revenue"));
+    }
+
+    /// <summary>
+    /// 1.22: how a sale was paid follows Topaz's till when the till knows it. A card sale whose card was declined is paid
+    /// in cash (Topaz keeps the card mode, drops "Б", books the money into the till); a cash mode paid past a kept till
+    /// was paid by card (a "Базовый" mode, method chosen at payment); a shift without till records keeps the mode.
+    /// </summary>
+    [PostgresFact]
+    public async Task The_till_decides_how_a_sale_was_paid()
+    {
+        var org = await fx.QueryAsync<Guid>("SELECT id FROM organizations ORDER BY created_at, name LIMIT 1");
+        var st = await fx.EnrollAsync("АЗС-касса-решает", org);
+        var t0 = DateTimeOffset.UtcNow.AddHours(-30);
+
+        RecordChange Shift(int id) => Row("sysSessions", $"{id}", id, new JsonObject
+        {
+            ["SessionID"] = id, ["SessionNum"] = id, ["UserName"] = "Оператор", ["UserID"] = 1, ["Deleted"] = 0,
+            ["StartDateTime"] = Ts(t0.AddHours(10 * (id - 1))), ["EndDateTime"] = Ts(t0.AddHours(10 * (id - 1) + 9)),
+        });
+        RecordChange Order(int id, int session, int mode, decimal amount, bool b) => Row("flOrders", $"{id}", session, new JsonObject
+        {
+            ["OrderID"] = id, ["SessionID"] = session, ["OrderNum"] = id, ["DateTime"] = Ts(t0.AddHours(10 * (session - 1)).AddMinutes(10 + id)),
+            ["FuelID"] = 1, ["TankID"] = 1, ["HoseID"] = 1, ["PaymentModeID"] = mode, ["Volume"] = amount / 50, ["VolumeOrdered"] = 0,
+            ["Price"] = 50, ["PricePump"] = 50, ["Amount"] = amount, ["AmountCash"] = b ? 0 : amount, ["AmountCashless"] = b ? amount : 0,
+            ["AmountDiscount"] = 0, ["Remark"] = b ? "Б" : "", ["StatusOrder"] = 0,
+        });
+        // Topaz leaves the cash/cashless amounts of shop receipts empty.
+        RecordChange Receipt(int id, int mode, decimal total, bool isReturn) => Row("trFastTradeH", $"{id}", 1, new JsonObject
+        {
+            ["FastTradeHID"] = id, ["SessionID"] = 1, ["NDoc"] = id, ["DateDoc"] = Ts(t0.AddHours(1).AddMinutes(id)), ["IsReturn"] = isReturn ? 1 : 0,
+            ["CashID"] = 3, ["PaymentModeID"] = mode, ["AmountCash"] = 0, ["AmountCashless"] = 0, ["Status"] = 0, ["FiscalNumber"] = 1,
+        });
+        RecordChange Line(int id, decimal total) => Row("trFastTradeD", $"{id}", 1, new JsonObject
+        {
+            ["FastTradeDID"] = id, ["FastTradeHID"] = id, ["ItemID"] = 1, ["Quantity"] = 1, ["Price"] = total, ["Amount"] = total, ["Total"] = total,
+        });
+        RecordChange Cash(int id, int docType, int doc, decimal amount) => Row("rgCashes", $"{id}", 1, new JsonObject
+        {
+            ["RgCashID"] = id, ["SessionID"] = 1, ["Date"] = Ts(t0.AddHours(2).AddMinutes(id)), ["DocTypeID"] = docType, ["DocID"] = doc, ["CashID"] = 3, ["Amount"] = amount,
+        });
+
+        await SendAsync(st.Token,
+        [
+            Row("dcPaymentModes", "1", null, new JsonObject { ["PaymentModeID"] = 1, ["Name"] = "Наличные" }),
+            Row("dcPaymentModes", "2", null, new JsonObject { ["PaymentModeID"] = 2, ["Name"] = "Терминал Сбербанк" }),
+            Shift(1), Shift(2),
+            Order(1, 1, 1, 500, false),    // cash, in the till
+            Order(2, 1, 2, 1000, true),    // card with "Б"
+            Order(3, 1, 2, 700, false),    // card declined, paid in cash: in the till
+            Order(4, 1, 2, 300, false),    // card without "Б" (stations that never mark it), not in the till
+            Order(5, 1, 1, 200, false),    // cash mode paid by card: not in the till
+            Order(6, 2, 1, 100, false),    // shift 2 has no till records: the mode decides
+            Receipt(1, 2, 400, false), Line(1, 400),   // card receipt paid in cash
+            Receipt(2, 2, 150, false), Line(2, 150),   // card receipt
+            Receipt(3, 2, 100, true), Line(3, 100),    // return of a cash-paid card receipt
+            Receipt(4, 1, 80, false), Line(4, 80),     // cash mode paid by card
+            Cash(1, 14, 0, 500), Cash(2, 6, 1, 500), Cash(3, 6, 3, 700), Cash(4, 5, 1, 400), Cash(5, 5, 3, -100),
+        ]);
+
+        var users = fx.Factory!.Services.GetRequiredService<UserService>();
+        try { await users.CreateAsync("tillcard-owner", "o", Roles.Owner, "tillcard-password-1", [], org); } catch (PostgresException) { }
+        var owner = fx.Factory.CreateClient();
+        owner.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
+        (await owner.PostAsJsonAsync("/api/v1/ui/auth/login", new { login = "tillcard-owner", password = "tillcard-password-1" })).EnsureSuccessStatusCode();
+
+        var card = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/shifts/{st.StationId}/1"))!;
+        var h = card["header"]!;
+        decimal D(string k) => h[k]?.GetValue<decimal>() ?? 0;
+        Assert.Equal(1200m, D("pay_cash"));     // 500 + 700 declined card
+        Assert.Equal(1500m, D("pay_card"));     // 1 000 "Б" + 300 without "Б" + 200 cash mode past the till
+        Assert.Equal(300m, D("shop_cash"));     // 400 − 100 return
+        Assert.Equal(230m, D("shop_card"));     // 150 + 80
+        Assert.Equal(D("cash_fuel"), D("pay_cash"));
+        Assert.Equal(D("cash_shop"), D("shop_cash"));
+
+        JsonNode O(int id) => card["orders"]!.AsArray().Single(o => o!["order_id"]!.GetValue<long>() == id)!;
+        Assert.Equal(("cash", "card", "in"), (O(3)["pay_category"]!.GetValue<string>(), O(3)["mode_category"]!.GetValue<string>(), O(3)["till"]!.GetValue<string>()));
+        Assert.Equal(("card", "cash", "out"), (O(5)["pay_category"]!.GetValue<string>(), O(5)["mode_category"]!.GetValue<string>(), O(5)["till"]!.GetValue<string>()));
+
+        var h2 = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/shifts/{st.StationId}/2"))!["header"]!;
+        Assert.Equal(100m, h2["pay_cash"]!.GetValue<decimal>());
+
+        // Daily rollups say the same.
+        var from = t0.AddDays(-1).ToOffset(TimeSpan.FromHours(3)).ToString("yyyy-MM-dd");
+        var to = DateTimeOffset.UtcNow.AddDays(1).ToOffset(TimeSpan.FromHours(3)).ToString("yyyy-MM-dd");
+        async Task<JsonNode> KpiAsync() => (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/analytics/overview?stations={st.StationId}&from={from}&to={to}&compare=none"))!["current"]!;
+        var k = await KpiAsync();
+        Assert.Equal(1300m, k["cash"]!.GetValue<decimal>());
+        Assert.Equal(1500m, k["card"]!.GetValue<decimal>());
+        Assert.Equal(300m, k["shop_cash"]!.GetValue<decimal>());
+        Assert.Equal(230m, k["shop_card"]!.GetValue<decimal>());
+
+        // A till record coming later (its own batch) rebuilds the rollup: order 4 turns out paid in cash.
+        await SendAsync(st.Token, [Cash(6, 6, 4, 300)]);
+        k = await KpiAsync();
+        Assert.Equal(1600m, k["cash"]!.GetValue<decimal>());
+        Assert.Equal(1200m, k["card"]!.GetValue<decimal>());
     }
 }

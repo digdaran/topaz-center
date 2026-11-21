@@ -122,7 +122,8 @@ function Till({ h }: { h: ShiftMoney }) {
     { key: 'other', label: 'Прочие операции', value: signed(n(h.cash_other)) },
     { key: 'out', label: 'Выдано (инкассация)', value: signed(n(h.cash_out)) },
   ].filter((r) => r.value !== signed(0));
-  // Sales counted as cash here but not in the till (or the other way round): a payment method is probably misclassified.
+  // Each sale's method follows the till when the till knows it (1.22), so what is left: a sale paid partly in cash,
+  // a till sum different from the sale, a till not fully received yet, or a payment mode set by hand against the till.
   const mismatch = Math.abs(n(h.cash_fuel) - n(h.pay_cash)) > 1 || Math.abs(n(h.cash_shop) - n(h.shop_cash)) > 1;
   return (
     <Card size="small" title={title} style={{ height: '100%' }}>
@@ -130,7 +131,7 @@ function Till({ h }: { h: ShiftMoney }) {
       {mismatch && (
         <Alert type="warning" showIcon style={{ marginTop: 10 }}
           message="Наличные по продажам не совпадают с кассой Топаза"
-          description={<>По продажам наличными: топливо {rub(h.pay_cash)}, магазин {rub(h.shop_cash)}. Скорее всего, способ оплаты какого-то вида оплаты определён неверно — проверьте <b>Настройки → Виды оплаты</b>.</>} />
+          description={<>По продажам наличными: топливо {rub(h.pay_cash)}, магазин {rub(h.shop_cash)}. Так бывает, если часть продажи оплатили наличными, а часть картой, или если данные кассы ещё не пришли. Если расхождение не уходит, проверьте способы в <b>Настройки → Виды оплаты</b>.</>} />
       )}
     </Card>
   );
