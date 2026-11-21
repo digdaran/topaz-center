@@ -15,5 +15,6 @@ describe('audit log in plain words', () => {
     expect(auditDetails('{"ip": "::ffff:10.0.0.5"}', {})).toBe('IP: 10.0.0.5');
     expect(auditDetails({ Login: 'x', Role: 'manager', stations: ['a'], is_active: false }, { a: 'Центр' })).toBe('логин: x · роль: управляющий · АЗС: Центр · активен: нет');
     expect(auditDetails(null, {})).toBe('');
+    expect(auditDetails({ StationId: 'a', ItemKey: 'W05', Mode: 'core', MinQty: null, PackQty: 6 }, { a: 'Центр' })).toBe('АЗС: Центр · товар: W05 · как закупать: всегда в наличии · упаковка: 6');
   });
 });

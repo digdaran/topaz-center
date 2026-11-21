@@ -46,6 +46,13 @@ export const AUDIT_ACTION: Record<string, string> = {
   channel_deleted: 'Удалил чат Telegram',
   telegram_linked: 'Подключил Telegram',
   telegram_unlinked: 'Отключил Telegram',
+  purchase_settings_updated: 'Изменил дни поездок за товаром',
+  item_plan_updated: 'Изменил закупку товара',
+  purchase_list_created: 'Сохранил список закупки',
+  purchase_list_updated: 'Изменил список закупки',
+  purchase_list_bought: 'Отметил список закупки купленным',
+  purchase_list_closed: 'Закрыл список закупки',
+  purchase_list_deleted: 'Удалил список закупки',
 };
 
 /** Failed logins and code mismatches: shown in red. */
@@ -54,6 +61,7 @@ export const AUDIT_WARN = new Set(['login_failed', 'login_code_failed', 'login_p
 const ENTITY: Record<string, string> = {
   user: 'Пользователь', station: 'АЗС', organization: 'Организация', rule: 'Правило', channel: 'Чат Telegram', registration: 'Заявка АЗС',
   fuel_type: 'Вид топлива', telegram: 'Telegram', tank: 'Резервуар', plan: 'План', cost: 'Цена', item: 'Товар', payment_mode: 'Вид оплаты',
+  purchase_list: 'Список закупки',
 };
 
 const DETAIL: Record<string, string> = {
@@ -62,7 +70,13 @@ const DETAIL: Record<string, string> = {
   organization_id: 'организация', is_active: 'активен', password_changed: 'пароль сменён', totp_reset: 'защита сброшена',
   category: 'способ оплаты', is_discount: 'дисконтный', fuel_type: 'вид топлива', count: 'количество', from: 'было', to: 'стало',
   action: 'действие', margin_vat: 'маржа', vat_rate: 'ставка НДС', value: 'значение', month: 'месяц', metric: 'показатель',
+  // purchasing (1.23): request records are stored with PascalCase names, looked up in lower case
+  tripweekdays: 'дни поездок', leaddays: 'дней до полки', servicea: 'наличие A, %', serviceb: 'наличие B, %', servicec: 'наличие C, %',
+  historydays: 'продажи за, дней', stationid: 'АЗС', itemkey: 'товар', mode: 'как закупать', minqty: 'минимум', maxqty: 'максимум',
+  packqty: 'упаковка', note: 'заметка', trip_date: 'поездка', lines: 'позиций',
 };
+
+const PURCHASE_MODE: Record<string, string> = { auto: 'по продажам', core: 'всегда в наличии', stop: 'не закупать' };
 
 const ROLE: Record<string, string> = { superadmin: 'суперадминистратор', owner: 'владелец', manager: 'управляющий', viewer: 'просмотр' };
 
@@ -92,6 +106,7 @@ export function auditDetails(details: unknown, names: Record<string, string>): s
     if (v == null || v === '') return null;
     if (typeof v === 'boolean') return v ? 'да' : 'нет';
     if (k === 'role' && typeof v === 'string') return ROLE[v] ?? v;
+    if (k === 'mode' && typeof v === 'string') return PURCHASE_MODE[v] ?? v;
     if (k === 'ip' && typeof v === 'string') return v.replace(/^::ffff:/, '');
     if (Array.isArray(v)) return v.length === 0 ? 'нет' : v.map((x) => names[String(x)] ?? String(x)).join(', ');
     if (typeof v === 'object') return JSON.stringify(v);

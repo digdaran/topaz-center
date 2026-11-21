@@ -30,6 +30,7 @@ const PAGES: { path: string; title: string; wait?: string }[] = [
   { path: '/stock/receipts', title: 'Склад', wait: 'Приём топлива' },
   { path: '/stock/losses', title: 'Склад' },
   { path: '/stock/items', title: 'Склад' },
+  { path: '/stock/purchase', title: 'Склад', wait: 'Ближайшая поездка' },
   { path: '/control/alerts', title: 'Контроль' },
   { path: '/control/rules', title: 'Контроль' },
   { path: '/control/telegram', title: 'Контроль', wait: 'Мой Telegram' },

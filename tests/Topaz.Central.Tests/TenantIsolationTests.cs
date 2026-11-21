@@ -171,6 +171,10 @@ public sealed class TenantIsolationTests(CentralFixture fx) : IClassFixture<Cent
         Assert.False((await owner.PostAsJsonAsync("/api/v1/ui/costs/fuel", new { station_id = b.Station, fuel_id = 1, price_per_liter = 1m, valid_from = DateTimeOffset.UtcNow })).IsSuccessStatusCode);
         Assert.False((await owner.PutAsJsonAsync("/api/v1/ui/plans", new { station_id = b.Station, month = "2026-10-01", metric = "fuel_liters", fuel_type = "", value = 1 })).IsSuccessStatusCode);
         Assert.False((await owner.PostAsJsonAsync("/api/v1/ui/costs/items", new { station_id = b.Station, item_key = "x", cost = 1m })).IsSuccessStatusCode);
+        Assert.False((await owner.PutAsJsonAsync("/api/v1/ui/purchasing/items", new { station_id = b.Station, item_key = "x", mode = "core" })).IsSuccessStatusCode);
+        Assert.False((await owner.PostAsJsonAsync("/api/v1/ui/purchasing/lists",
+            new { trip_date = DateTime.UtcNow.Date, lines = new[] { new { station_id = b.Station, item_id = 1L, item_key = "x", suggested_qty = 1m, qty = 1m } } })).IsSuccessStatusCode);
+        Assert.Equal(0, await fx.QueryAsync<int>("SELECT count(*)::int FROM item_plan WHERE station_id = @s", new { s = b.Station }));
         var bCost = await fx.QueryAsync<long>("SELECT id FROM item_costs WHERE organization_id = @o LIMIT 1", new { o = b.Org });
         Assert.False((await owner.DeleteAsync($"/api/v1/ui/costs/items/{bCost}")).IsSuccessStatusCode);
         var bChat = await fx.QueryAsync<long>("SELECT id FROM notification_channels WHERE organization_id = @o LIMIT 1", new { o = b.Org });
@@ -196,7 +200,8 @@ public sealed class TenantIsolationTests(CentralFixture fx) : IClassFixture<Cent
         var (a, b, _) = await SetupAsync();
         await using var ui = UiDb.BuildUiSource(fx.ConnectionString);
         await using var c = await ui.OpenConnectionAsync();
-        var tables = new[] { "stations", "records", "raw_batches", "shifts", "fuel_sales", "agg_fuel_daily", "station_fuel_map", "item_costs", "users", "audit_log", "notification_channels" };
+        var tables = new[] { "stations", "records", "raw_batches", "shifts", "fuel_sales", "agg_fuel_daily", "station_fuel_map", "item_costs", "users", "audit_log", "notification_channels",
+                             "purchase_bills", "purchase_bill_lines", "purchase_settings", "item_plan", "purchase_lists", "purchase_list_lines" };
 
         // No scope set (a bug): nothing at all.
         foreach (var t in tables)

@@ -141,6 +141,19 @@ public static class Projections
             Columns = [Ts("occurred_at", "DateTime"), B("category_id", "EventCategoryID"), T("message", "EventString"),
                        T("computer_name", "ComputerName"), T("source", "EventSource"), T("object", "EventObject")],
         },
+        // Incoming bills of goods (1.23): purchase prices, pack sizes, receipt of bought shopping lists.
+        new()
+        {
+            Dataset = "trInBillH", Table = "purchase_bills", Key = [B("bill_id", "InBillHID")],
+            Columns = [T("doc_num", "NDoc"), Ts("doc_at", "DateDoc"), B("partner_id", "PartnerID"), B("storage_id", "StorageID"),
+                       Bo("is_return", "IsReturn"), Bo("within_vat", "WithinNDS")],
+        },
+        new()
+        {
+            Dataset = "trInBillD", Table = "purchase_bill_lines", Key = [B("line_id", "InBillDID")],
+            Columns = [B("bill_id", "InBillHID"), B("item_id", "ItemID"), B("item_unit_id", "ItemUnitID"), N("quantity", "Quantity"),
+                       N("price", "Price"), N("total", "Total")],
+        },
         // Workplaces (1.11): several workplaces sell in one shift, each with its own local shift and operator.
         new()
         {

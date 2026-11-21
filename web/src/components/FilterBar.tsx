@@ -12,10 +12,12 @@ interface Props {
   fuel?: boolean;
   /** the payment category filter (pages whose figures can be split by it) */
   pay?: boolean;
+  /** the period picker (off for pages about now, e.g. the shopping list) */
+  period?: boolean;
 }
 
 /** Stations, period, granularity, comparison and fuel — the common filter of analytics pages. */
-export function FilterBar({ granularity = true, compare = true, fuel = false, pay = false }: Props) {
+export function FilterBar({ granularity = true, compare = true, fuel = false, pay = false, period = true }: Props) {
   const [filter, setFilter] = useFilter();
   const meta = useMeta();
   const stations = meta.data?.stations ?? [];
@@ -37,13 +39,13 @@ export function FilterBar({ granularity = true, compare = true, fuel = false, pa
           maxTagCount="responsive"
         />
       )}
-      <RangePicker
+      {period && <RangePicker
         allowClear={false}
         format="DD.MM.YYYY"
         value={[dayjs(filter.from), dayjs(filter.to)]}
         presets={presets().map((p) => ({ label: p.label, value: [dayjs(p.from), dayjs(p.to)] }))}
         onChange={(v) => v && v[0] && v[1] && setFilter({ from: v[0].format('YYYY-MM-DD'), to: v[1].format('YYYY-MM-DD'), g: undefined })}
-      />
+      />}
       {granularity && (
         <Segmented<Granularity | 'auto'>
           value={filter.g ?? 'auto'}

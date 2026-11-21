@@ -54,12 +54,13 @@ export const SECTIONS: NavSection[] = [
   },
   {
     path: '/stock', label: 'Склад', icon: <InboxOutlined />, group: 'main',
-    description: 'Топливо в резервуарах — когда заказывать, приём и потери, — и остатки товаров',
+    description: 'Топливо в резервуарах — когда заказывать, приём и потери, — остатки товаров и список закупки',
     tabs: [
       { key: 'tanks', label: 'Резервуары' },
       { key: 'receipts', label: 'Приём топлива' },
       { key: 'losses', label: 'Потери' },
       { key: 'items', label: 'Товары' },
+      { key: 'purchase', label: 'Закупка', roles: MONEY_ROLES },
     ],
   },
   {

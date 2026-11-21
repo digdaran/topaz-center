@@ -146,7 +146,7 @@ public sealed class UiTests(CentralFixture fx) : IClassFixture<CentralFixture>
         var manager = await LoginAsync("manager-m", Roles.Manager, mine);
         const string period = "from=2026-10-01&to=2026-10-31";
 
-        foreach (var path in new[] { "analytics/overview", "analytics/stations", "shifts", "shifts/operators", "data/fuel-sales", "data/shop-lines", "data/fuel-receipts", "data/events", "data/cash" })
+        foreach (var path in new[] { "analytics/overview", "analytics/stations", "shifts", "shifts/operators", "data/fuel-sales", "data/shop-lines", "data/fuel-receipts", "data/events", "data/cash", "purchasing/plan" })
         {
             Assert.Equal(HttpStatusCode.Forbidden, (await manager.GetAsync($"/api/v1/ui/{path}?stations={other}&{period}")).StatusCode);
             var body = await manager.GetStringAsync($"/api/v1/ui/{path}?{period}");
