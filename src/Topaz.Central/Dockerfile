@@ -24,7 +24,7 @@ RUN dotnet publish src/Topaz.Central/Topaz.Central.csproj -c Release -o /app --n
 # The public demo's data generator (container demo-feeder runs this image with dotnet tools/demodata/DemoData.dll).
 RUN dotnet publish tools/DemoData/DemoData.csproj -c Release -o /app/tools/demodata --no-restore -p:Version=$VERSION
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=web /web/dist ./wwwroot
