@@ -53,6 +53,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
             foreach (var sql in RuleSql)
                 found += await c.ExecuteAsync(new CommandDefinition(sql, cancellationToken: ct, commandTimeout: 300));
             found += await LowFuelAsync(c, ct);
+            found += await PurchaseDueAsync(c, ct);
             // A station that is back online closes its open "offline" alert.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto' FROM v_station_status v
@@ -126,7 +127,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
             // Goods back in stock (a receipt, a stock entry) close all "out of stock" alerts of that item.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
-                WHERE a.rule_code = 'goods_out' AND a.status <> 'closed'
+                WHERE a.rule_code IN ('goods_out', 'shop_core_out') AND a.status <> 'closed'
                   AND (SELECT sum(m.quantity) FROM item_moves m
                        WHERE m.station_id = a.station_id AND m.item_id::text = split_part(a.dedupe_key, '/', 1)) > 0
                 """);
@@ -136,6 +137,16 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                 WHERE a.rule_code = 'shop_purchase_not_received' AND a.status <> 'closed'
                   AND NOT EXISTS (SELECT 1 FROM v_purchase_on_order o
                                   WHERE o.station_id = a.station_id AND o.list_id::text = a.dedupe_key AND o.open_qty > 0)
+                """);
+            // "Buy today" closes once a list with the station's goods was marked bought that day, or when the day is over.
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                FROM v_station_names sn
+                WHERE a.rule_code = 'shop_purchase_due' AND a.status <> 'closed' AND sn.station_id = a.station_id
+                  AND (a.dedupe_key < ((now() AT TIME ZONE sn.time_zone)::date)::text
+                    OR EXISTS (SELECT 1 FROM purchase_lists pl JOIN purchase_list_lines l ON l.list_id = pl.id
+                               WHERE l.station_id = a.station_id AND pl.status <> 'draft'
+                                 AND (pl.bought_at AT TIME ZONE sn.time_zone)::date::text = a.dedupe_key))
                 """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
@@ -380,6 +391,22 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         WHERE s.ended_at IS NULL AND s.started_at < now() - make_interval(hours => r.threshold::int)
         ON CONFLICT DO NOTHING
         """,
+        // An item marked "always in stock" ran out: one alert per run-out (the move that emptied it is in the key).
+        Insert + """
+        SELECT ip.station_id, 'shop_core_out', k.item_id || '/' || m.last_move, r.severity,
+               'Закончился товар «всегда в наличии»: ' || COALESCE(k.name, k.item_id::text),
+               'Продано за 28 дней: ' || fmt_num(COALESCE(s.sold, 0)) || ' шт. Купите его в ближайшую поездку («Склад → Закупка»).',
+               COALESCE(s.sold, 0), NULL, m.last_at
+        FROM item_plan ip
+        JOIN v_item_keys k ON k.station_id = ip.station_id AND k.item_key = ip.item_key
+        CROSS JOIN LATERAL (SELECT sum(im.quantity) AS stock, max(im.move_id) AS last_move, max(im.moved_at) AS last_at
+                            FROM item_moves im WHERE im.station_id = ip.station_id AND im.item_id = k.item_id) m
+        LEFT JOIN LATERAL (SELECT sum(a.quantity) AS sold FROM agg_shop_daily a
+                           WHERE a.station_id = ip.station_id AND a.item_id = k.item_id AND a.local_date >= current_date - 28) s ON true
+        JOIN v_station_rules r ON r.code = 'shop_core_out' AND r.enabled AND r.station_id = ip.station_id
+        WHERE ip.mode = 'core' AND m.last_move IS NOT NULL AND m.stock <= 0
+        ON CONFLICT DO NOTHING
+        """,
         // Goods sold in the last 28 days but out of stock now (one alert per item per day).
         Insert + """
         SELECT m.station_id, 'goods_out', m.item_id || '/' || current_date, r.severity, 'Закончился товар: ' || COALESCE(k.name, m.item_id::text),
@@ -526,6 +553,80 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                 value = t.DaysToMin,
             }, cancellationToken: ct));
         }
+        return n;
+    }
+
+    private sealed class DueStation
+    {
+        public Guid StationId { get; init; }
+        public Guid Org { get; init; }
+        public DateTime Today { get; init; }
+        public int[] Days { get; init; } = [];
+        public int Lead { get; init; }
+        public decimal A { get; init; }
+        public decimal B { get; init; }
+        public decimal C { get; init; }
+        public int History { get; init; }
+    }
+
+    /// <summary>Stations checked for "buy today" on their local date (a day with nothing to buy is not planned again).</summary>
+    private readonly HashSet<(Guid, DateTime)> _purchaseChecked = new();
+
+    /// <summary>
+    /// "Закупка сегодня": on a trip day of an organization that set its trips, from the threshold hour of the station's
+    /// local time, the purchasing plan of each station once a day. No money in the text: viewers see alerts too, and
+    /// the list carries purchase prices.
+    /// </summary>
+    private async Task<int> PurchaseDueAsync(NpgsqlConnection c, CancellationToken ct)
+    {
+        var due = (await c.QueryAsync<DueStation>("""
+            SELECT s.id AS StationId, s.organization_id AS Org, (now() AT TIME ZONE sn.time_zone)::date AS Today,
+                   ps.trip_weekdays AS Days, ps.lead_days AS Lead, ps.service_a AS A, ps.service_b AS B, ps.service_c AS C, ps.history_days AS History
+            FROM stations s
+            JOIN v_station_names sn ON sn.station_id = s.id
+            JOIN purchase_settings ps ON ps.organization_id = s.organization_id
+            JOIN v_station_rules r ON r.station_id = s.id AND r.code = 'shop_purchase_due' AND r.enabled
+            WHERE s.status = 'active'
+              AND extract(isodow FROM now() AT TIME ZONE sn.time_zone)::int = ANY(ps.trip_weekdays)
+              AND extract(hour FROM now() AT TIME ZONE sn.time_zone) >= COALESCE(r.threshold, 8)
+              AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.rule_code = 'shop_purchase_due' AND a.station_id = s.id
+                                AND a.dedupe_key = ((now() AT TIME ZONE sn.time_zone)::date)::text)
+              AND EXISTS (SELECT 1 FROM agg_shop_daily d WHERE d.station_id = s.id AND d.local_date >= current_date - 28)
+            """)).Where(d => !_purchaseChecked.Contains((d.StationId, d.Today))).ToList();
+        var n = 0;
+        foreach (var org in due.GroupBy(d => d.Org))
+        {
+            var f = org.First();
+            var settings = new PurchasePlanner.Settings(f.Days, f.Lead, f.A, f.B, f.C, f.History);
+            var (_, following) = PurchasePlanner.Trips(f.Today, settings.TripWeekdays);
+            var horizon = (following - f.Today).Days + settings.LeadDays;
+            var lines = PurchasePlanner.Plan(await PurchasePlanner.LoadAsync(c, org.Select(d => d.StationId).ToArray(), settings.HistoryDays), settings, horizon);
+            foreach (var d in org)
+            {
+                _purchaseChecked.Add((d.StationId, d.Today));
+                var buy = lines.Where(l => l.StationId == d.StationId && l.Qty > 0).ToList();
+                if (buy.Count == 0) continue;
+                var outItems = buy.Where(l => l.Status == "out").ToList();
+                var core = outItems.Where(l => l.Mode == "core").Select(l => l.Name ?? l.ItemKey).OrderBy(x => x).ToList();
+                var details = new StringBuilder();
+                if (outItems.Count > 0) details.Append($"Нет на полке: {outItems.Count}. ");
+                if (buy.Count(l => l.Status == "low") is var low and > 0) details.Append($"Не хватит до следующей поездки: {low}. ");
+                if (core.Count > 0)
+                    details.Append("Срочно («всегда в наличии»): ").Append(string.Join(", ", core.Take(10)))
+                           .Append(core.Count > 10 ? $" и ещё {core.Count - 10}" : "").Append(". ");
+                details.Append("Список — «Склад → Закупка».");
+                n += await c.ExecuteAsync(new CommandDefinition(Insert + """
+                    SELECT @StationId, 'shop_purchase_due', @key, r.severity, @title, @details, @value, NULL, now()
+                    FROM v_station_rules r WHERE r.code = 'shop_purchase_due' AND r.station_id = @StationId
+                    ON CONFLICT DO NOTHING
+                    """, new
+                {
+                    d.StationId, key = d.Today.ToString("yyyy-MM-dd"), title = $"Закупка сегодня: {buy.Count} поз.",
+                    details = details.ToString(), value = (decimal)buy.Count,
+                }, cancellationToken: ct));
+            }
+        }
+        _purchaseChecked.RemoveWhere(x => x.Item2 < DateTime.UtcNow.Date.AddDays(-2));
         return n;
     }
 

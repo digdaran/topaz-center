@@ -258,6 +258,16 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         Assert.Equal(0m, Line(plan, "GM1")["qty"]!.GetValue<decimal>());  // do not buy
         Assert.Equal(2, plan["totals"]!["items"]!.GetValue<int>());
 
+        // A trip day (every day here) from hour 0: «Закупка сегодня» once, without money (viewers see alerts too).
+        var detector = fx.Factory!.Services.GetRequiredService<AnomalyDetector>();
+        await fx.QueryAsync<int>("INSERT INTO alert_rule_overrides (organization_id, code, threshold) VALUES (@org, 'shop_purchase_due', 0) RETURNING 1", new { org });
+        await detector.RunAsync(CancellationToken.None);
+        await detector.RunAsync(CancellationToken.None);
+        Task<string> DueAsync() => fx.QueryAsync<string>(
+            "SELECT string_agg(status || ': ' || title || ' | ' || details, ';') FROM alerts WHERE rule_code = 'shop_purchase_due' AND station_id = @s",
+            new { s = st.StationId });
+        Assert.Equal("new: Закупка сегодня: 2 поз. | Нет на полке: 2. Срочно («всегда в наличии»): Чипсы. Список — «Склад → Закупка».", await DueAsync());
+
         var csv = await owner.GetStringAsync($"/api/v1/ui/purchasing/plan?stations={st.StationId}&format=csv");
         Assert.StartsWith("﻿Группа;Товар;\"АЗС-закупка\";Всего;Цена;Сумма", csv);
         Assert.Contains("\"Напитки\";\"Вода 0,5\";12;12;30,00;360,00", csv);
@@ -279,8 +289,10 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         Assert.Equal(12m, Line(plan, "W05")["on_order"]!.GetValue<decimal>());
         Assert.Equal(0m, Line(plan, "W05")["qty"]!.GetValue<decimal>());
 
+        await detector.RunAsync(CancellationToken.None);
+        Assert.StartsWith("closed:", await DueAsync());                         // bought today
+
         // Bought three days ago and nothing received: an alert in «Контроль».
-        var detector = fx.Factory!.Services.GetRequiredService<AnomalyDetector>();
         await fx.QueryAsync<int>("UPDATE purchase_lists SET bought_at = now() - interval '3 days' WHERE id = @id RETURNING 1", new { id });
         await detector.RunAsync(CancellationToken.None);
         Task<string> AlertAsync() => fx.QueryAsync<string>(
@@ -312,6 +324,21 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         await detector.RunAsync(CancellationToken.None);
         Assert.StartsWith("closed:", await AlertAsync());
         Assert.Equal(0m, Line(await PlanAsync(), "CH1")["on_order"]!.GetValue<decimal>());
+
+        // Water marked "always in stock" runs out: one alert, closed when it is back.
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync("/api/v1/ui/purchasing/items",
+            new { station_id = st.StationId, item_key = "W05", mode = "core" })).StatusCode);
+        Task<string> CoreOutAsync() => fx.QueryAsync<string>(
+            "SELECT COALESCE(string_agg(status || ': ' || title, ';'), '') FROM alerts WHERE rule_code = 'shop_core_out' AND station_id = @s", new { s = st.StationId });
+        await detector.RunAsync(CancellationToken.None);
+        Assert.Equal("", await CoreOutAsync());
+        await SendAsync(st.Token, [Move(1, DateTimeOffset.UtcNow, -12, 5, 900)]);
+        await detector.RunAsync(CancellationToken.None);
+        await detector.RunAsync(CancellationToken.None);
+        Assert.Equal("new: Закончился товар «всегда в наличии»: Вода 0,5", await CoreOutAsync());
+        await SendAsync(st.Token, [Move(1, DateTimeOffset.UtcNow, 6, 1, 901)]);
+        await detector.RunAsync(CancellationToken.None);
+        Assert.Equal("closed: Закончился товар «всегда в наличии»: Вода 0,5", await CoreOutAsync());
 
         // A viewer sees no purchase prices; another organization's station cannot be planned or listed.
         var viewer = await LoginAsync("purchase-viewer", Roles.Viewer, org, st.StationId);

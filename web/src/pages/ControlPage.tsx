@@ -90,6 +90,7 @@ export function Alerts() {
                   {r.rule_code === 'fuel_unmapped' && <Link to={`/settings/fuels?station=${r.station_id}`}>сопоставить топливо</Link>}
                   {r.rule_code === 'station_registration' && <Link to="/platform/connect">открыть заявку</Link>}
                   {r.rule_code === 'shop_purchase_not_received' && <Link to="/stock/purchase?tab=lists">списки закупки</Link>}
+                  {(r.rule_code === 'shop_purchase_due' || r.rule_code === 'shop_core_out') && <Link to="/stock/purchase">список закупки</Link>}
                 </>
               ),
             },
