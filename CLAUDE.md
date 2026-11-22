@@ -73,7 +73,10 @@ Auth: stations connect by request (docs/architecture.md 2.6): the agent sends `P
 - Workplaces (1.11): one shift (`sysSessions`) has a local shift per Topaz workplace (`sysLocalSessions`, own operator `sysUsers.Login`); sales carry `local_session_id`. Operator figures and alert texts attribute sales via `v_workplace_shifts` / `shift_operators_text(...)`, falling back to `shifts.user_name` (АЗС «Дизель» sells from two workplaces).
 - Fuel types: reports group by the reference `fuel_types.code` resolved at query time through `v_station_fuels` (confirmed `station_fuel_map` row, else a suggestion learned from other stations' confirmations of the same `fuel_name_key`, else `guess_fuel_type`). The UI `fuel` filter is a type code. Mapping changes need no rollup rebuild.
 - Metric definitions live in `docs/web.md`; keep them in sync with the SQL.
-- Demo data: `tools/DemoData` (synthetic stations through the real agent protocol, with planted anomalies).
+- Demo data: `tools/DemoData` (synthetic stations through the real agent protocol, with planted anomalies). The public demo is the compose profile `demo`:
+  - `demo-central` runs with `Topaz__DemoMode` (read-only UI, visitor account);
+  - `demo-feeder` runs `DemoData --state --loop`, which regenerates the deterministic history and sends only what changed;
+  - keep `dotnet run --project tools/DemoData -- --self-check` passing when touching the generator.
 
 ## Public site (site/)
 

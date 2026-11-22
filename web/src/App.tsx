@@ -132,6 +132,10 @@ function Shell({ children }: { children: ReactNode }) {
         </Layout.Header>
         <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>
           <UpdateBanner />
+          {me.demo && (
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message="Демо-версия: сеть из трёх вымышленных АЗС. Смотрите любые разделы — изменения здесь не сохраняются." />
+          )}
           {asClient && (
             <Alert type="warning" showIcon style={{ marginBottom: 12 }}
               message={`Данные клиента «${me.organization ?? 'организация не выбрана'}» — вы смотрите их как администратор сервиса`}

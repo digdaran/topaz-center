@@ -80,6 +80,8 @@ export interface Me {
   recovery_codes_left: number;
   /** Signed in at the superadmin console's own address (Topaz__ConsoleHost). */
   console: boolean;
+  /** The public demo: everything is read-only. */
+  demo: boolean;
 }
 
 /** Owner rights (a superadmin has them too). */

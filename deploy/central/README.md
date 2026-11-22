@@ -68,6 +68,26 @@ docker compose exec postgres psql -U topaz topaz -c "select id, created_at, name
 
 Номер счётчика Яндекс Метрики — атрибут `data-metrika` у `site.js` в `site/index.html` (пусто — Метрика не загружается). Реквизиты ИП и контакты — в подвале `index.html` и в `privacy.html`.
 
+### Публичное демо
+
+Отдельный экземпляр сервиса на своей базе (контейнеры `demo-postgres`, `demo-central`, `demo-feeder`, профиль `demo`). Демо-сеть из 3 вымышленных АЗС с историей за год. Интерфейс только для чтения, на экране входа кнопка «Войти в демо». К настоящей базе доступа нет, в бэкап демо не попадает.
+
+```bash
+# DNS: A-запись DEMO_DOMAIN → IP сервера; в .env:
+#   DEMO_DOMAIN=demo.topaz.08u.ru
+#   DEMO_POSTGRES_PASSWORD=$(openssl rand -base64 32)   DEMO_ADMIN_TOKEN=$(openssl rand -hex 32)
+#   COMPOSE_PROFILES=telegram-proxy,demo
+docker compose up -d
+docker compose logs -f demo-feeder     # первый запуск отправляет год истории, дальше раз в 5 минут — новое
+```
+
+`demo-feeder` — генератор `tools/DemoData` в режиме «продолжить»:
+- состояние (дата начала, токены АЗС) хранится в томе `demo_state`;
+- каждые 5 минут генератор пересобирает историю (она детерминирована) и отправляет только новое за последние дни, поэтому на демо всегда есть «сегодня» и открытая смена;
+- вводит закупочные цены сливов и товаров, как это сделал бы владелец.
+
+Пересоздать демо с нуля: `docker compose rm -sf demo-feeder demo-central demo-postgres && docker volume rm topaz_demo_pgdata topaz_demo_state && docker compose up -d`.
+
 ## Работа
 
 ```bash

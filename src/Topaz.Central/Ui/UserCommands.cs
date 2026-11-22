@@ -72,6 +72,16 @@ public static class UserCommands
         log.LogWarning("Bootstrap owner {Login} created. Remove Topaz__BootstrapOwnerPassword from the environment.", options.BootstrapOwnerLogin);
     }
 
+    /// <summary>The public demo's visitor account (an owner of the demo organization), created once.</summary>
+    public static async Task EnsureDemoUserAsync(IServiceProvider sp, CentralOptions options, ILogger log)
+    {
+        if (!options.DemoMode || string.IsNullOrWhiteSpace(options.DemoLogin) || string.IsNullOrEmpty(options.DemoPassword)) return;
+        await using var c = await sp.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        if (await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower(@login))", new { login = options.DemoLogin })) return;
+        await sp.GetRequiredService<UserService>().CreateAsync(options.DemoLogin, "Демо", Roles.Owner, options.DemoPassword);
+        log.LogInformation("Demo user {Login} created", options.DemoLogin);
+    }
+
     private static string ReadPassword(string prompt)
     {
         Console.Write(prompt);

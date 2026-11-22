@@ -17,7 +17,14 @@ export default function LoginPage() {
   const [params] = useSearchParams();
   const qc = useQueryClient();
   // The superadmin console has its own address and looks different, so the two are never confused.
-  const atConsole = useQuery({ queryKey: ['auth-address'], queryFn: () => api<{ console: boolean }>('/auth/address'), staleTime: Infinity }).data?.console ?? false;
+  const address = useQuery({
+    queryKey: ['auth-address'],
+    queryFn: () => api<{ console: boolean; demo: boolean; demo_login?: string; demo_password?: string }>('/auth/address'),
+    staleTime: Infinity,
+  }).data;
+  const atConsole = address?.console ?? false;
+  // The public demo: one button signs in with the visitor account.
+  const demo = address?.demo && address.demo_login && address.demo_password ? { login: address.demo_login, password: address.demo_password } : null;
 
   const done = async () => {
     await qc.invalidateQueries({ queryKey: ['me'] });
@@ -82,7 +89,13 @@ export default function LoginPage() {
             : <Typography.Text type="secondary">Данные и аналитика АЗС</Typography.Text>}
         </Flex>
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
-        {needCode ? (
+        {demo && !needCode && (
+          <Flex vertical gap={12} style={{ marginBottom: 8 }}>
+            <Alert type="info" showIcon message="Демо-версия" description="Сеть из трёх вымышленных АЗС с историей за год. Смотрите любые разделы — изменения здесь не сохраняются." />
+            <Button type="primary" block size="large" loading={loading} onClick={() => submit(demo)}>Войти в демо</Button>
+          </Flex>
+        )}
+        {demo && !needCode ? null : needCode ? (
           <Form layout="vertical" onFinish={submitCode} requiredMark={false}>
             <Form.Item name="code" label="Код из приложения" extra="Шесть цифр из Яндекс Ключа или Google Authenticator. Без телефона введите один из запасных кодов."
               rules={[{ required: true, message: 'Введите код' }]}>

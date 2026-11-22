@@ -20,7 +20,10 @@ public static class AuthEndpoints
     public static void MapUiAuth(this RouteGroupBuilder ui)
     {
         // The login screen asks where it is (the console looks different); nothing else is said before login.
-        ui.MapGet("/auth/address", (HttpContext ctx) => Results.Ok(new { console = ConsoleHosts.IsConsole(ctx) })).AllowAnonymous();
+        // In the public demo it also gives the visitor account (it is public anyway: the login screen signs in with it).
+        ui.MapGet("/auth/address", (HttpContext ctx, IOptions<CentralOptions> options) => options.Value.DemoMode
+            ? Results.Ok(new { console = ConsoleHosts.IsConsole(ctx), demo = true, demo_login = options.Value.DemoLogin, demo_password = options.Value.DemoPassword })
+            : Results.Ok(new { console = ConsoleHosts.IsConsole(ctx), demo = false })).AllowAnonymous();
         ui.MapPost("/auth/login", Login).AllowAnonymous().RequireRateLimiting("login");
         ui.MapPost("/auth/login/code", LoginCode).AllowAnonymous().RequireRateLimiting("login");
         ui.MapPost("/auth/totp/setup", TotpSetup).RequireRateLimiting("login");
@@ -217,6 +220,7 @@ public static class AuthEndpoints
             totp_mandatory = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin),
             totp_setup_required = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin) && !totpEnabled,
             console = ConsoleHosts.IsConsole(ctx, options.Value),
+            demo = options.Value.DemoMode,
         });
     }
 

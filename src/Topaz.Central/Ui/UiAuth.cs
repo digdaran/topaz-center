@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using Npgsql;
+using Topaz.Contracts;
 
 namespace Topaz.Central.Ui;
 
@@ -297,6 +299,22 @@ public static class UiAuthSetup
     }
 
     /// <summary>CSRF guard for state-changing UI calls: a custom header cannot be sent cross-site without CORS.</summary>
+    /// <summary>The public demo shows everything and changes nothing: every UI change except signing in and out is refused.</summary>
+    public sealed class DemoReadOnlyFilter(IOptions<CentralOptions> options) : IEndpointFilter
+    {
+        public const string Message = "В демо-версии изменения отключены — подключите свои АЗС, и всё это заработает на ваших данных";
+        private static readonly string[] Allowed = ["/auth/login", "/auth/login/code", "/auth/logout"];
+
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var req = context.HttpContext.Request;
+            if (options.Value.DemoMode && !HttpMethods.IsGet(req.Method) && !HttpMethods.IsHead(req.Method)
+                && !Allowed.Any(a => req.Path.Value?.EndsWith(Protocol.ApiPrefix + "/ui" + a, StringComparison.OrdinalIgnoreCase) == true))
+                return Results.Problem(statusCode: 403, title: Message);
+            return await next(context);
+        }
+    }
+
     public sealed class CsrfFilter : IEndpointFilter
     {
         public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)

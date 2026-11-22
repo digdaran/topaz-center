@@ -139,6 +139,7 @@ if (args.FirstOrDefault() == "create-user")
 if (args.FirstOrDefault() == "reset-totp")
     return await UserCommands.ResetTotpAsync(app.Services, args[1..]);
 await UserCommands.BootstrapOwnerAsync(app.Services, options, app.Logger);
+await UserCommands.EnsureDemoUserAsync(app.Services, options, app.Logger);
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler(e => e.Run(async ctx =>
@@ -180,7 +181,7 @@ app.MapIngest();
 app.MapAdmin();
 
 var ui = app.MapGroup(Protocol.ApiPrefix + "/ui").RequireAuthorization(Policies.Ui).RequireRateLimiting("ui")
-    .AddEndpointFilter<UiAuthSetup.CsrfFilter>().AddEndpointFilter<UiAuthSetup.TotpRequiredFilter>();
+    .AddEndpointFilter<UiAuthSetup.CsrfFilter>().AddEndpointFilter<UiAuthSetup.DemoReadOnlyFilter>().AddEndpointFilter<UiAuthSetup.TotpRequiredFilter>();
 ui.MapUiAuth();
 ui.MapUiOverview();
 ui.MapUiShifts();

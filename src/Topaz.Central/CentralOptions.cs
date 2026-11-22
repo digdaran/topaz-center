@@ -53,6 +53,13 @@ public sealed class CentralOptions
     /// everybody else only elsewhere. Empty = one address for all.
     /// </summary>
     public string? ConsoleHost { get; set; }
+    /// <summary>
+    /// Public demo (container demo-central): the web interface is read-only for everybody (UiAuthSetup.DemoReadOnlyFilter),
+    /// an owner DemoLogin/DemoPassword is created at start and the login screen offers it. Data comes from demo-feeder.
+    /// </summary>
+    public bool DemoMode { get; set; }
+    public string? DemoLogin { get; set; }
+    public string? DemoPassword { get; set; }
     /// <summary>Session cookies only over HTTPS. False for tests and a local stack without TLS.</summary>
     public bool SecureCookies { get; set; } = true;
     /// <summary>Login attempts (password and code steps, two-factor setup) per address and minute.</summary>

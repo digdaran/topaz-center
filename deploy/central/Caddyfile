@@ -125,3 +125,42 @@
 		format json
 	}
 }
+
+# Public demo (DEMO_DOMAIN, demo profile): a separate read-only instance on its own database (demo-central).
+# Only the web interface; its agent and admin API are used by demo-feeder inside the Docker network.
+{$DEMO_DOMAIN} {
+	encode gzip
+
+	@ui path /api/v1/ui/*
+	handle @ui {
+		reverse_proxy demo-central:8080 {
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+	@closed path /api/* /metrics /metrics/* /health/*
+	handle @closed {
+		respond 404
+	}
+	handle {
+		reverse_proxy demo-central:8080 {
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format json
+	}
+}

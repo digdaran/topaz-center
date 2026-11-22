@@ -6,12 +6,18 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Npgsql;
 using Topaz.Contracts;
 
 // Synthetic Topaz stations for developing and demonstrating the web interface.
-// Rows use real Topaz table/column names and go through the real agent protocol (/enroll + /batches).
+// Rows use real Topaz table/column names and go through the real agent protocol (connection request + /batches).
 //
+// One-off (a development stack): new stations with a history up to now
 //   dotnet run --project tools/DemoData -- --server http://localhost:8080 --admin-token ADMIN_TOKEN [--stations 5] [--days 180] [--seed 1] [--scale 1.0]
+//
+// Continue (the public demo, container demo-feeder): the first run connects the stations and sends the whole history;
+// later runs regenerate it (deterministic) and send only what changed in the last days, so the demo stays "live".
+//   ... --state /state/demo.json [--days 365] [--loop 300] [--setup-db "Host=...;Database=..."]
 //
 // Built-in anomalies for the "Контроль" page: a hose counter gap between two shifts, a negative fuel receipt
 // discrepancy, an operator with many aborted fuellings, a never-selling item, items that run out of stock.
@@ -24,6 +30,9 @@ var days = int.Parse(Arg("--days", "180"), CultureInfo.InvariantCulture);
 var seed = int.Parse(Arg("--seed", "1"), CultureInfo.InvariantCulture);
 var scale = double.Parse(Arg("--scale", "1.0"), CultureInfo.InvariantCulture);
 var prefix = Arg("--prefix", "Демо");
+var statePath = Arg("--state", "");
+var loopSeconds = int.Parse(Arg("--loop", "0"), CultureInfo.InvariantCulture);
+var setupDb = Arg("--setup-db", Environment.GetEnvironmentVariable("DEMO_SETUP_DB") ?? "");
 
 var profiles = new[]
 {
@@ -33,19 +42,113 @@ var profiles = new[]
     new Profile($"{prefix} АЗС-4 Северная", "Asia/Yekaterinburg", City: true, [("АИ-92", 51.8m, 2200), ("АИ-95", 57.2m, 1700), ("АИ-100", 71.5m, 250), ("ДТ", 67.9m, 1100)], ShopRate: 0.26, CashlessShare: 0.71),
     new Profile($"{prefix} АЗС-5 Пригород", "Europe/Moscow", City: true, [("АИ-92", 52.6m, 1500), ("АИ-95", 58.1m, 900), ("ДТ", 68.7m, 600)], ShopRate: 0.22, CashlessShare: 0.55),
 };
+Profile ProfileOf(int s) => s < profiles.Length ? profiles[s] : profiles[s % profiles.Length] with { Name = $"{profiles[s % profiles.Length].Name} ({s / profiles.Length + 1})" };
+// The last shift is the current (open) one.
+DateTime EndFor(DateTime now) => now.Date.AddDays(now.Hour >= 8 ? 1 : 0).AddHours(8);
+
+if (args.Contains("--self-check"))
+{
+    // The continue mode relies on this: a later run repeats every past day exactly and keeps every key of an earlier
+    // run (the open day only grows; rows of it may change and are re-sent), so nothing stale is left on the server.
+    var from = new DateTime(2025, 11, 23, 8, 0, 0);
+    var ok = true;
+    foreach (var t1 in new[] { new DateTime(2026, 11, 22, 13, 17, 0), new DateTime(2026, 11, 23, 7, 59, 0) })
+    {
+        var t2 = t1.AddHours(30);
+        for (var s = 0; s < 3; s++)
+        {
+            var ga = new StationGenerator(ProfileOf(s), new Random(seed * 1000 + s), scale, anomalies: s == 1);
+            var a = ga.Generate(from, EndFor(t1), t1, 353);
+            var gb = new StationGenerator(ProfileOf(s), new Random(seed * 1000 + s), scale, anomalies: s == 1);
+            var b = gb.Generate(from, EndFor(t2), t2, 353).ToDictionary(r => r.Dataset + "|" + r.Key, r => r.Hash);
+            var lastDay = ga.DayStarts[^1];
+            var changedPast = a.Take(lastDay).Count(r => !b.TryGetValue(r.Dataset + "|" + r.Key, out var h) || h != r.Hash);
+            var missing = a.Count(r => !b.ContainsKey(r.Dataset + "|" + r.Key));
+            Console.WriteLine($"{ProfileOf(s).Name} at {t1:MM-dd HH:mm}: {a.Count:N0} rows, past days changed: {changedPast}, keys lost later: {missing}");
+            ok &= changedPast == 0 && missing == 0;
+        }
+    }
+    Console.WriteLine(ok ? "OK" : "FAILED");
+    return ok ? 0 : 1;
+}
 
 using var http = new HttpClient { BaseAddress = new Uri(server + "/"), Timeout = TimeSpan.FromMinutes(5) };
-var end = DateTime.Today.AddDays(1).AddHours(8); // last shift is the current (open) one
-for (var s = 0; s < Math.Min(stationCount, profiles.Length * 4); s++)
+
+if (string.IsNullOrEmpty(statePath))
 {
-    var p = profiles[s % profiles.Length];
-    if (s >= profiles.Length) p = p with { Name = $"{p.Name} ({s / profiles.Length + 1})" };
-    var gen = new StationGenerator(p, new Random(seed * 1000 + s), scale, anomalies: s == 1);
-    var rows = gen.Generate(end.AddDays(-days), end);
-    Console.WriteLine($"{p.Name}: {rows.Count:N0} rows ({gen.Orders:N0} fuel orders, {gen.ShopReceipts:N0} shop receipts)");
-    await Sender.SendAsync(http, key, p.Name, p.TimeZone, rows);
+    var now = DateTime.Now;
+    var end = EndFor(now);
+    var from = end.AddDays(-days);
+    for (var s = 0; s < Math.Min(stationCount, profiles.Length * 4); s++)
+    {
+        var p = ProfileOf(s);
+        var gen = new StationGenerator(p, new Random(seed * 1000 + s), scale, anomalies: s == 1);
+        var rows = gen.Generate(from, end, now, anomalyDay: Math.Max(1, days - 12));
+        Console.WriteLine($"{p.Name}: {rows.Count:N0} rows ({gen.Orders:N0} fuel orders, {gen.ShopReceipts:N0} shop receipts)");
+        var token = await Sender.ConnectAsync(http, key, p.Name);
+        var seq = 0L;
+        await Sender.HeartbeatAsync(http, token, p.TimeZone, gen.LastSessionId, true);
+        await Sender.SendAsync(http, token, rows, () => ++seq);
+    }
+    Console.WriteLine("Done. The server processes batches in the background; check /api/v1/admin/stations.");
+    if (!string.IsNullOrEmpty(setupDb)) await DemoSetup.RunAsync(setupDb);
+    return 0;
 }
-Console.WriteLine("Done. The server processes batches in the background; check /api/v1/admin/stations.");
+
+// ---- continue mode
+DemoState? state = File.Exists(statePath) ? JsonSerializer.Deserialize<DemoState>(await File.ReadAllTextAsync(statePath)) : null;
+if (state is null)
+{
+    var first = DateTime.Now;
+    state = new DemoState
+    {
+        From = EndFor(first).AddDays(-days), Seed = seed, Scale = scale, AnomalyDay = Math.Max(1, days - 12),
+        Stations = Enumerable.Range(0, stationCount).Select(s => new DemoStation { Index = s, Name = ProfileOf(s).Name }).ToList(),
+    };
+}
+// Hashes of what each station already sent in this process: a loop iteration sends only changed rows.
+var sent = state.Stations.ToDictionary(st => st.Index, _ => new Dictionary<string, string>());
+while (true)
+{
+    var now = DateTime.Now;
+    foreach (var st in state.Stations)
+    {
+        var p = ProfileOf(st.Index);
+        var gen = new StationGenerator(p, new Random(state.Seed * 1000 + st.Index), state.Scale, anomalies: st.Index == 1);
+        var rows = gen.Generate(state.From, EndFor(now), now, state.AnomalyDay);
+        if (st.Token is null)
+        {
+            st.Token = await Sender.ConnectAsync(http, key, p.Name);
+            await SaveAsync(); // the token survives a crash during the first, long send
+        }
+        // Everything from the day before the last one sent (closes yesterday's shift); the whole history the first time.
+        var fromIndex = st.DaysSent == 0 ? 0 : gen.DayStarts[Math.Clamp(st.DaysSent - 2, 0, gen.DayStarts.Count - 1)];
+        var known = sent[st.Index];
+        var changed = rows.Skip(fromIndex).Where(r => !known.TryGetValue(r.Dataset + "|" + r.Key, out var h) || h != r.Hash).ToList();
+        await Sender.HeartbeatAsync(http, st.Token, p.TimeZone, gen.LastSessionId, true);
+        if (changed.Count > 0)
+        {
+            await Sender.SendAsync(http, st.Token, changed, () => ++st.Seq);
+            foreach (var r in changed) known[r.Dataset + "|" + r.Key] = r.Hash!;
+        }
+        st.DaysSent = gen.DayStarts.Count;
+        await SaveAsync();
+        Console.WriteLine($"{now:yyyy-MM-dd HH:mm} {p.Name}: {changed.Count:N0} new or changed rows");
+    }
+    if (!string.IsNullOrEmpty(setupDb))
+        try { await DemoSetup.RunAsync(setupDb); }
+        catch (Exception ex) { Console.WriteLine("setup failed: " + ex.Message); } // the database is busy with the first load; next round
+    if (loopSeconds <= 0) break;
+    await Task.Delay(TimeSpan.FromSeconds(loopSeconds));
+}
+return 0;
+
+async Task SaveAsync()
+{
+    var tmp = statePath + ".tmp";
+    await File.WriteAllTextAsync(tmp, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+    File.Move(tmp, statePath, overwrite: true);
+}
 
 internal sealed record Profile(string Name, string TimeZone, bool City, (string Fuel, decimal Price, int LitersPerDay)[] Fuels, double ShopRate, double CashlessShare);
 
@@ -83,7 +186,20 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
 
     private int _orderId, _sessionId, _ftH, _ftD, _rgItem, _rgCash, _receiptId, _eventId, _billH, _billD;
 
-    public List<RecordChange> Generate(DateTime from, DateTime to)
+    public long LastSessionId => _sessionId;
+
+    /// <summary>Where each shift (day) starts in the generated rows: the continue mode sends only the last days.</summary>
+    public List<int> DayStarts { get; } = new();
+
+    /// <summary>
+    /// Shifts from <paramref name="from"/> until <paramref name="to"/>; nothing after <paramref name="now"/> happens yet.
+    /// Deterministic: the same seed and <paramref name="from"/> give the same rows for every past day whatever
+    /// <paramref name="now"/> and <paramref name="to"/> are, and today's rows are a prefix of the full day — so the demo
+    /// feeder can regenerate the year and send only what is new. Every random draw of a day happens whatever the time,
+    /// and the day's events run in time order and stop at <paramref name="now"/>.
+    /// </summary>
+    /// <param name="anomalyDay">The day of the planted hose counter gap (counted from <paramref name="from"/>).</param>
+    public List<RecordChange> Generate(DateTime from, DateTime to, DateTime now, int anomalyDay)
     {
         // ---- references
         Ref("dcPaymentModes", "0", new() { ["PaymentModeID"] = 0, ["Name"] = "Переливы" });
@@ -141,11 +257,13 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
         var day = 0;
         for (var start = from.Date.AddHours(8); start < to; start = start.AddDays(1), day++)
         {
+            DayStarts.Add(_rows.Count);
             _sessionId++;
             var shiftEnd = start.AddDays(1);
-            var open = shiftEnd > DateTime.Now;
+            var open = shiftEnd > now;
             var user = Operators[(opIndex + day) % Operators.Length];
-            var sessionEnd = open ? (DateTime?)null : shiftEnd.AddMinutes(-rnd.Next(2, 9));
+            var endJitter = rnd.Next(2, 9); // drawn for an open shift too: the day's random sequence must not depend on the time
+            var sessionEnd = open ? (DateTime?)null : shiftEnd.AddMinutes(-endJitter);
             Add("sysSessions", $"{_sessionId}", _sessionId, new()
             {
                 ["SessionID"] = _sessionId, ["SessionNum"] = _sessionId, ["UserName"] = user, ["UserID"] = 1,
@@ -194,7 +312,6 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 for (var i = 0; i < count; i++)
                 {
                     var at = start.AddMinutes(HourOfDay() * 60 + rnd.NextDouble() * 60);
-                    if (at >= DateTime.Now) continue;
                     var fuel = f;
                     events.Add((at, () =>
                     {
@@ -210,7 +327,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                         {
                             ["OrderID"] = _orderId, ["SessionID"] = _sessionId, ["OrderNum"] = orderNum, ["DateTime"] = Ts(at), ["TankID"] = fuel.Id, ["FuelID"] = fuel.Id,
                             ["HoseID"] = hose.Id, ["PaymentModeID"] = cashless ? 2 : 1, ["Remark"] = cashless ? "Б" : "", ["Volume"] = vol, ["VolumeOrdered"] = ordered,
-                            ["Price"] = fuel.Price, ["PricePump"] = fuel.Price, ["Amount"] = amount, ["AmountCash"] = cashless ? 0 : (aborted ? 0 : prepaid ?? amount),
+                            ["Price"] = fuel.Price, ["PricePump"] = fuel.Price - discountPerL, ["Amount"] = amount, ["AmountCash"] = cashless ? 0 : (aborted ? 0 : prepaid ?? amount),
                             ["AmountCashless"] = cashless ? amount : 0, ["AmountDiscount"] = Math.Round(vol * discountPerL, 2), ["AmountBonuses"] = 0, ["AccruedBonuses"] = 0,
                             ["Mass"] = 0, ["Density"] = 0, ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["FiscalNumber"] = aborted ? 0 : _orderId,
                             ["DriverID"] = 0, ["AgentID"] = 0, ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = Local(),
@@ -227,23 +344,20 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 if (rnd.NextDouble() < 0.08)
                 {
                     var at = start.AddHours(rnd.Next(9, 18));
-                    if (at < DateTime.Now)
+                    var fuel = f;
+                    events.Add((at, () =>
                     {
-                        var fuel = f;
-                        events.Add((at, () =>
+                        var hose = fuel.Hoses[0];
+                        _orderId++; orderNum++;
+                        Add("flOrders", $"{_orderId}", _sessionId, new()
                         {
-                            var hose = fuel.Hoses[0];
-                            _orderId++; orderNum++;
-                            Add("flOrders", $"{_orderId}", _sessionId, new()
-                            {
-                                ["OrderID"] = _orderId, ["SessionID"] = _sessionId, ["OrderNum"] = orderNum, ["DateTime"] = Ts(at), ["TankID"] = fuel.Id, ["FuelID"] = fuel.Id,
-                                ["HoseID"] = hose.Id, ["PaymentModeID"] = 3, ["Remark"] = "", ["Volume"] = 10m, ["VolumeOrdered"] = 10m, ["Price"] = fuel.Price, ["PricePump"] = fuel.Price,
-                                ["Amount"] = 0, ["AmountCash"] = 0, ["AmountCashless"] = 0, ["AmountDiscount"] = 0, ["AmountBonuses"] = 0, ["Mass"] = 0, ["Density"] = 0,
-                                ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = Local(),
-                            });
-                            hose.Counter += 10; fuel.Stock -= 10; pumped[fuel.Id] += 10;
-                        }));
-                    }
+                            ["OrderID"] = _orderId, ["SessionID"] = _sessionId, ["OrderNum"] = orderNum, ["DateTime"] = Ts(at), ["TankID"] = fuel.Id, ["FuelID"] = fuel.Id,
+                            ["HoseID"] = hose.Id, ["PaymentModeID"] = 3, ["Remark"] = "", ["Volume"] = 10m, ["VolumeOrdered"] = 10m, ["Price"] = fuel.Price, ["PricePump"] = fuel.Price,
+                            ["Amount"] = 0, ["AmountCash"] = 0, ["AmountCashless"] = 0, ["AmountDiscount"] = 0, ["AmountBonuses"] = 0, ["Mass"] = 0, ["Density"] = 0,
+                            ["StatusOrder"] = 0, ["OrderSource"] = -1, ["CardType"] = -1, ["CardCode"] = "", ["TaxStr"] = "Б/НДС", ["LocalSessionID"] = Local(),
+                        });
+                        hose.Counter += 10; fuel.Stock -= 10; pumped[fuel.Id] += 10;
+                    }));
                 }
             }
 
@@ -253,7 +367,6 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
             for (var i = 0; i < receipts; i++)
             {
                 var at = start.AddMinutes(HourOfDay() * 60 + rnd.NextDouble() * 60);
-                if (at >= DateTime.Now) continue;
                 events.Add((at, () =>
                 {
                     var lines = new List<(ItemState It, decimal Qty)>();
@@ -295,7 +408,6 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 if (f.Stock - expected < f.Capacity * 0.28m)
                 {
                     var at = start.AddHours(rnd.Next(10, 16)).AddMinutes(rnd.Next(60));
-                    if (at >= DateTime.Now) continue;
                     var fuel = f;
                     events.Add((at, () =>
                     {
@@ -316,7 +428,12 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 }
             }
 
-            foreach (var (_, act) in events.OrderBy(e => e.At)) act();
+            // In time order (a stable sort: ties keep their creation order), up to now: today is the beginning of the full day.
+            foreach (var (at, act) in events.OrderBy(e => e.At))
+            {
+                if (at >= now) break;
+                act();
+            }
 
             // weekly goods restock (some items deliberately not restocked → stockouts)
             if (day % 7 == 3)
@@ -355,7 +472,7 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
                 }
             }
             // anomaly: fuel dispensed between shifts, past the cash register (counter jumps)
-            if (anomalies && day == Math.Max(1, (int)(to - from).TotalDays - 12))
+            if (anomalies && day == anomalyDay)
             {
                 var h = fuels[0].Hoses[0];
                 h.Counter += 37.5m;
@@ -495,9 +612,9 @@ internal sealed class StationGenerator(Profile p, Random rnd, double scale, bool
 
 internal static class Sender
 {
-    public static async Task SendAsync(HttpClient http, string adminToken, string name, string timeZone, List<RecordChange> rows)
+    /// <summary>Connects like a real agent: request → approval (admin API, with the code) → claim the token.</summary>
+    public static async Task<string> ConnectAsync(HttpClient http, string adminToken, string name)
     {
-        // Connect like a real agent: request → approval (admin API, with the code) → claim the token.
         var secret = RegistrationCode.NewSecret();
         var created = await http.PostAsJsonAsync("api/v1/registrations", new RegistrationRequest
             { StationName = name, ClaimHash = RegistrationCode.ClaimHash(secret), AgentVersion = "demo", MachineName = "DEMO" }, Protocol.Json);
@@ -513,15 +630,40 @@ internal static class Sender
                 throw new InvalidOperationException($"approve {name}: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()} (station name taken? use another --prefix)");
         }
         var claim = await http.PostAsJsonAsync("api/v1/registrations/claim", new RegistrationClaimRequest { RegistrationId = reg.RegistrationId, Secret = secret }, Protocol.Json);
-        var token = (await claim.Content.ReadFromJsonAsync<RegistrationClaimResponse>(Protocol.Json))!.Token
-                    ?? throw new InvalidOperationException($"claim {name}: {(int)claim.StatusCode}");
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        (await http.PostAsJsonAsync("api/v1/heartbeat", new HeartbeatRequest { AgentVersion = "demo", TimeZone = timeZone, TopazDbOk = true, StartedAt = DateTimeOffset.UtcNow }, Protocol.Json)).EnsureSuccessStatusCode();
+        return (await claim.Content.ReadFromJsonAsync<RegistrationClaimResponse>(Protocol.Json))!.Token
+               ?? throw new InvalidOperationException($"claim {name}: {(int)claim.StatusCode}");
+    }
 
-        var seq = 0L;
+    /// <summary>"The agent is alive", with a plausible station PC (the «АЗС → Состояние» cards).</summary>
+    public static async Task HeartbeatAsync(HttpClient http, string token, string timeZone, long lastSession, bool sessionOpen)
+    {
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(timeZone);
+        var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, tz);
+        using var req = new HttpRequestMessage(HttpMethod.Post, "api/v1/heartbeat")
+        {
+            Content = JsonContent.Create(new HeartbeatRequest
+            {
+                AgentVersion = "demo", MachineName = "AZS-PC", TimeZone = timeZone, TopazDbOk = true, StartedAt = DateTimeOffset.UtcNow.AddDays(-3),
+                LastCollectAt = DateTimeOffset.UtcNow, LastSendAt = DateTimeOffset.UtcNow, LastSessionId = lastSession, LastSessionOpen = sessionOpen,
+                Host = new HostInfo
+                {
+                    DbFileBytes = 1_400_000_000, DbDiskFreeBytes = 61_000_000_000, DbDiskTotalBytes = 237_000_000_000,
+                    SystemDiskFreeBytes = 61_000_000_000, SystemDiskTotalBytes = 237_000_000_000, ClockUtc = DateTimeOffset.UtcNow,
+                    LocalClock = local.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture), WindowsTimeZone = "Russian Standard Time",
+                    UptimeSeconds = 3 * 86400, Os = "Microsoft Windows 10 Pro 22H2",
+                },
+            }, options: Protocol.Json),
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        (await http.SendAsync(req)).EnsureSuccessStatusCode();
+    }
+
+    public static async Task SendAsync(HttpClient http, string token, List<RecordChange> rows, Func<long> nextSeq)
+    {
+        var n = 0;
         foreach (var chunk in rows.Chunk(2000))
         {
-            var batch = new BatchEnvelope { BatchId = Guid.NewGuid(), Seq = ++seq, CreatedAt = DateTimeOffset.UtcNow, AgentVersion = "demo", Items = chunk.ToList() };
+            var batch = new BatchEnvelope { BatchId = Guid.NewGuid(), Seq = nextSeq(), CreatedAt = DateTimeOffset.UtcNow, AgentVersion = "demo", Items = chunk.ToList() };
             using var ms = new MemoryStream();
             using (var gz = new GZipStream(ms, CompressionLevel.Fastest, true)) JsonSerializer.Serialize(gz, batch, Protocol.Json);
             for (var attempt = 1; ; attempt++)
@@ -531,14 +673,89 @@ internal static class Sender
                 content.Headers.ContentEncoding.Add("gzip");
                 using var req = new HttpRequestMessage(HttpMethod.Post, "api/v1/batches") { Content = content };
                 req.Headers.Add(Protocol.IdempotencyKeyHeader, batch.BatchId.ToString());
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 var res = await http.SendAsync(req);
                 if (res.IsSuccessStatusCode) break;
                 if (attempt >= 5 || (int)res.StatusCode is 400 or 409 or 413 or 422)
-                    throw new InvalidOperationException($"batch {seq}: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()}");
+                    throw new InvalidOperationException($"batch {batch.Seq}: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()}");
                 await Task.Delay(TimeSpan.FromSeconds(attempt * 2));
             }
-            if (seq % 20 == 0) Console.WriteLine($"  sent {seq * 2000:N0} / {rows.Count:N0}");
+            if (++n % 20 == 0) Console.WriteLine($"  sent {n * 2000:N0} / {rows.Count:N0}");
         }
-        http.DefaultRequestHeaders.Authorization = null;
     }
+}
+
+/// <summary>
+/// What an owner would enter by hand, done in the demo's own database (idempotent, every round): purchase prices of
+/// every fuel delivery and of the goods (so margins are shown), confirmed fuel types, the organization's name.
+/// </summary>
+internal static class DemoSetup
+{
+    public static async Task RunAsync(string connectionString)
+    {
+        await using var db = NpgsqlDataSource.Create(connectionString);
+        await using var cmd = db.CreateCommand("""
+            UPDATE organizations SET name = 'Демо-сеть', name_normalized = 'демо-сеть' WHERE name <> 'Демо-сеть';
+
+            INSERT INTO station_fuel_map (station_id, fuel_id, fuel_type)
+            SELECT station_id, fuel_id, suggested_type FROM v_station_fuels WHERE needs_confirmation AND suggested_type IS NOT NULL
+            ON CONFLICT DO NOTHING;
+
+            WITH stock AS (   -- the stock before the first delivery: the price of the first week's sales
+                INSERT INTO fuel_costs (station_id, fuel_id, valid_from, price_per_liter, comment, created_by)
+                SELECT f.station_id, f.fuel_id, min(f.sold_at), round(avg(f.price) * 0.87, 2), 'demo', 'demo'
+                FROM fuel_sales f
+                WHERE f.price > 0 AND f.sold_at < (SELECT min(sold_at) + interval '7 days' FROM fuel_sales s WHERE s.station_id = f.station_id)
+                  AND NOT EXISTS (SELECT 1 FROM fuel_costs c WHERE c.station_id = f.station_id AND c.fuel_id = f.fuel_id AND c.receipt_id IS NULL)
+                GROUP BY f.station_id, f.fuel_id
+                RETURNING station_id),
+            receipts AS (     -- every delivery at 87 % of that day's pump price
+                INSERT INTO fuel_costs (station_id, fuel_id, valid_from, price_per_liter, receipt_id, comment, created_by)
+                SELECT r.station_id, r.fuel_id, r.received_at,
+                       round(0.87 * COALESCE((SELECT avg(f.price) FROM fuel_sales f WHERE f.station_id = r.station_id AND f.fuel_id = r.fuel_id
+                                                AND f.price > 0 AND f.sold_at BETWEEN r.received_at - interval '1 day' AND r.received_at + interval '1 day'),
+                                             (SELECT f.price FROM fuel_sales f WHERE f.station_id = r.station_id AND f.fuel_id = r.fuel_id AND f.price > 0
+                                              ORDER BY abs(extract(epoch FROM f.sold_at - r.received_at)) LIMIT 1)), 2),
+                       r.receipt_id, 'demo', 'demo'
+                FROM fuel_receipts r
+                WHERE r.received_at IS NOT NULL AND r.fuel_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM fuel_costs c WHERE c.station_id = r.station_id AND c.receipt_id = r.receipt_id)
+                  AND EXISTS (SELECT 1 FROM fuel_sales f WHERE f.station_id = r.station_id AND f.fuel_id = r.fuel_id AND f.price > 0)
+                RETURNING station_id),
+            items AS (        -- goods at 72 % of the shelf price, for the whole organization
+                INSERT INTO item_costs (station_id, item_key, valid_from, cost, comment, created_by, organization_id)
+                SELECT NULL, a.item_key, min(a.local_date)::timestamptz, round(sum(a.amount) / sum(a.quantity) * 0.72, 2), 'demo', 'demo',
+                       (SELECT id FROM organizations ORDER BY created_at LIMIT 1)
+                FROM v_agg_shop a
+                WHERE a.quantity > 0 AND a.amount > 0
+                  AND NOT EXISTS (SELECT 1 FROM item_costs c WHERE c.item_key = a.item_key)
+                GROUP BY a.item_key
+                RETURNING organization_id)
+            INSERT INTO rollup_dirty (station_id, kind)
+            SELECT DISTINCT s.id, 'all' FROM stations s
+            WHERE s.id IN (SELECT station_id FROM stock UNION SELECT station_id FROM receipts) OR EXISTS (SELECT 1 FROM items);
+            """);
+        cmd.CommandTimeout = 600;
+        await cmd.ExecuteNonQueryAsync();
+    }
+}
+
+/// <summary>What the continue mode remembers between runs (a JSON file on a volume).</summary>
+internal sealed class DemoState
+{
+    public DateTime From { get; set; }
+    public int Seed { get; set; }
+    public double Scale { get; set; }
+    public int AnomalyDay { get; set; }
+    public List<DemoStation> Stations { get; set; } = new();
+}
+
+internal sealed class DemoStation
+{
+    public int Index { get; set; }
+    public string Name { get; set; } = "";
+    public string? Token { get; set; }
+    public long Seq { get; set; }
+    /// <summary>How many days (shifts) had been generated at the last successful send.</summary>
+    public int DaysSent { get; set; }
 }
