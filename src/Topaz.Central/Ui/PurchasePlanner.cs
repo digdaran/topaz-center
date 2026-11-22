@@ -59,7 +59,7 @@ public static class PurchasePlanner
 
     /// <summary>History for items that have hardly been on the shelf within the planning window.</summary>
     public const int LongDays = 180;
-    private const int MinInStockDays = 7;
+    internal const int MinInStockDays = 7;
 
     /// <summary>The next trip (today if today is a trip day) and the one after it.</summary>
     public static (DateTime Next, DateTime Following) Trips(DateTime today, IReadOnlyCollection<int> weekdays)

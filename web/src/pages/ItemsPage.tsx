@@ -4,6 +4,7 @@ import { useFiltered, useMeta } from '../api/client';
 import { FilterBar } from '../components/FilterBar';
 import { CHART_COLORS, ChartCard, numCol, QueryState } from '../components/ui';
 import { dateTime, dec, int, money, pct } from '../lib/format';
+import { AvailabilityTiles, LostSales, useAvailability } from './Availability';
 
 type R = Record<string, any>;
 interface Items {
@@ -114,14 +115,17 @@ export default function ItemsPage({ view = 'sales' }: { view?: 'sales' | 'stock'
   const [cover, setCover] = useState(14);
   const [dead, setDead] = useState(30);
   const { data, error, isLoading } = useFiltered<Items>('/analytics/items', { cover_days: cover, dead_days: dead });
+  const availability = useAvailability(view === 'stock');
 
   return (
     <>
       <FilterBar granularity={false} compare={false} />
+      {view === 'stock' && availability.data && <AvailabilityTiles data={availability.data} />}
       <QueryState error={error} loading={isLoading}>
         {data && (
           <Tabs items={view === 'stock' ? [
             { key: 'stock', label: `Остатки${data.stock.some((s) => s.status === 'out' || s.status === 'low') ? ' ⚠' : ''}`, children: <Stock data={data} cover={cover} setCover={setCover} dead={dead} setDead={setDead} /> },
+            ...(availability.data ? [{ key: 'lost', label: 'Упущенные продажи', children: <LostSales data={availability.data} /> }] : []),
             { key: 'returns', label: 'Возвраты и списания', children: <Returns data={data} /> },
           ] : [
             {

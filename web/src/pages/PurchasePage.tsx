@@ -2,6 +2,7 @@ import { DownloadOutlined, PrinterOutlined, SettingOutlined } from '@ant-design/
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Statistic, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, csvUrl, useFilter, useFiltered, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FilterBar } from '../components/FilterBar';
@@ -266,7 +267,8 @@ export default function PurchasePage() {
   const [edit, setEdit] = useState<PurchaseLine | null>(null);
   const [settings, setSettings] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState('buy');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get('tab') ?? 'buy');
   const setQty = (k: string, v: number) => setQtyMap((m) => ({ ...m, [k]: v }));
   useEffect(() => setQtyMap({}), [data?.next_trip, data?.lines.length]);
 

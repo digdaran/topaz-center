@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Topaz.Central.Processing;
 using Topaz.Central.Ui;
 using Topaz.Contracts;
 using Xunit;
@@ -41,6 +42,35 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         Assert.InRange(PurchasePlanner.Z(85), 1.03m, 1.04m);
         Assert.InRange(PurchasePlanner.Z(95), 1.64m, 1.65m);
         Assert.InRange(PurchasePlanner.Z(97), 1.88m, 1.89m);
+    }
+
+    [Fact]
+    public void Lost_sales_count_the_days_out_of_stock_at_the_usual_demand()
+    {
+        ShopAvailability.Item Avail(string key, string mode, decimal sold, int days, decimal longSold, int longDays, int longAll, int outDays, decimal revenue) => new()
+        {
+            StationId = Guid.Empty, Station = "АЗС", ItemKey = key, Name = key, Mode = mode, SoldInStock = sold, InStockDays = days,
+            LongSoldInStock = longSold, LongInStockDays = longDays, LongDays = longAll, Revenue = revenue,
+            SoldAmount = longSold * 100, SoldQty = longSold, PeriodDays = 30, OutDays = outDays,
+        };
+        var (stations, items) = ShopAvailability.Compute(
+        [
+            Avail("water", "auto", 40, 20, 40, 20, 180, 10, 4000),   // 2 a day, out 10 days: 20 × 100 ₽
+            Avail("burst", "auto", 0, 0, 10, 2, 180, 30, 0),         // 10 sold in 2 days half a year ago: 10 / 180 a day, not 5
+            Avail("gum", "auto", 14, 14, 14, 14, 180, 0, 1400),
+        ]);
+        Assert.Equal(2000m, items.Single(i => i.ItemKey == "water").LostRevenue);
+        Assert.Equal(166.67m, items.Single(i => i.ItemKey == "burst").LostRevenue);
+        var st = Assert.Single(stations);
+        Assert.False(st.CoreMarked);
+        Assert.Equal(2, st.CoreItems);                               // class A by revenue: water and gum
+        Assert.Equal(1m - 10m / 60, st.Availability!.Value, 4);
+        Assert.Equal(2, st.OutItems);
+
+        // Once the owner marks the core, only marked items count.
+        (stations, _) = ShopAvailability.Compute([Avail("water", "auto", 40, 20, 40, 20, 180, 10, 4000), Avail("gum", "core", 14, 14, 14, 14, 180, 0, 1400)]);
+        Assert.Equal(1m, stations.Single().Availability);
+        Assert.True(stations.Single().CoreMarked);
     }
 
     [Fact]
@@ -186,6 +216,24 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         // Trips every day: the list must last until tomorrow's trip.
         Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync("/api/v1/ui/purchasing/settings",
             new { trip_weekdays = new[] { 1, 2, 3, 4, 5, 6, 7 }, lead_days = 0, service_a = 97, service_b = 93, service_c = 85, history_days = 56 })).StatusCode);
+        // Over the last 30 days both items were on the shelf 12 days and out 18; nothing is marked "always in stock" yet,
+        // so the core is class A by revenue (both). Lost: 2 waters a day × 50 ₽ × 18 days + 1 gum × 50 ₽ × 18 days.
+        var today = DateTime.UtcNow.AddHours(3).Date;
+        var avail = (await owner.GetFromJsonAsync<JsonObject>(
+            $"/api/v1/ui/analytics/availability?stations={st.StationId}&from={today.AddDays(-30):yyyy-MM-dd}&to={today:yyyy-MM-dd}"))!;
+        Assert.Equal(0.4m, avail["total"]!["availability"]!.GetValue<decimal>());
+        Assert.Equal(2, avail["total"]!["core_items"]!.GetValue<int>());
+        Assert.False(avail["total"]!["core_marked"]!.GetValue<bool>());
+        Assert.Equal(2700m, avail["total"]!["lost_revenue"]!.GetValue<decimal>());
+        var lostWater = avail["items"]!.AsArray().First()!;
+        Assert.Equal("W05", lostWater["item_key"]!.GetValue<string>());
+        Assert.Equal(30, lostWater["period_days"]!.GetValue<int>());      // today is not counted: it is not over
+        Assert.Equal(18, lostWater["out_days"]!.GetValue<int>());
+        Assert.Equal(36m, lostWater["lost_qty"]!.GetValue<decimal>());
+        Assert.Equal(1800m, lostWater["lost_revenue"]!.GetValue<decimal>());
+        var viewerOfAvail = await LoginAsync("purchase-avail-viewer", Roles.Viewer, org, st.StationId);
+        Assert.Equal(HttpStatusCode.OK, (await viewerOfAvail.GetAsync($"/api/v1/ui/analytics/availability?stations={st.StationId}")).StatusCode);
+
         Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync("/api/v1/ui/purchasing/items",
             new { station_id = st.StationId, item_key = "CH1", mode = "core", pack_qty = 6 })).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync("/api/v1/ui/purchasing/items",
@@ -231,6 +279,15 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         Assert.Equal(12m, Line(plan, "W05")["on_order"]!.GetValue<decimal>());
         Assert.Equal(0m, Line(plan, "W05")["qty"]!.GetValue<decimal>());
 
+        // Bought three days ago and nothing received: an alert in «Контроль».
+        var detector = fx.Factory!.Services.GetRequiredService<AnomalyDetector>();
+        await fx.QueryAsync<int>("UPDATE purchase_lists SET bought_at = now() - interval '3 days' WHERE id = @id RETURNING 1", new { id });
+        await detector.RunAsync(CancellationToken.None);
+        Task<string> AlertAsync() => fx.QueryAsync<string>(
+            "SELECT status || ': ' || title FROM alerts WHERE rule_code = 'shop_purchase_not_received' AND station_id = @s AND dedupe_key = @k",
+            new { s = st.StationId, k = id.ToString() });
+        Assert.Equal("new: Куплено, но не оприходовано в Топазе: 2 поз.", await AlertAsync());
+
         // Topaz receives the water today: the line is received, nothing is on order.
         await SendAsync(st.Token,
         [
@@ -249,7 +306,11 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         var listed = Assert.Single((await owner.GetFromJsonAsync<JsonArray>("/api/v1/ui/purchasing/lists"))!)!;
         Assert.Equal("bought", listed["status"]!.GetValue<string>());
         Assert.Equal(1, listed["open_items"]!.GetValue<int>());                // the chips are still awaited
+        await detector.RunAsync(CancellationToken.None);
+        Assert.StartsWith("new:", await AlertAsync());                          // the chips are still awaited
         Assert.Equal(HttpStatusCode.NoContent, (await owner.PostAsync($"/api/v1/ui/purchasing/lists/{id}/close", null)).StatusCode);
+        await detector.RunAsync(CancellationToken.None);
+        Assert.StartsWith("closed:", await AlertAsync());
         Assert.Equal(0m, Line(await PlanAsync(), "CH1")["on_order"]!.GetValue<decimal>());
 
         // A viewer sees no purchase prices; another organization's station cannot be planned or listed.

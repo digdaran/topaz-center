@@ -33,6 +33,8 @@ public static class PurchaseEndpoints
         g.MapPost("/lists/{id:long}/bought", (long id, ClaimsPrincipal user, UiDb db) => SetStatus(id, "bought", user, db));
         g.MapPost("/lists/{id:long}/close", (long id, ClaimsPrincipal user, UiDb db) => SetStatus(id, "closed", user, db));
         g.MapDelete("/lists/{id:long}", DeleteList);
+        // Склад → Товары (1.24): retail figures only, so every role sees them.
+        ui.MapGet("/analytics/availability", Availability);
     }
 
     // ---------------------------------------------------------------- plan
@@ -43,6 +45,39 @@ public static class PurchaseEndpoints
         var rows = await c.QueryAsync<(int[] Days, int Lead, decimal A, decimal B, decimal C, int History)>(
             "SELECT trip_weekdays, lead_days, service_a, service_b, service_c, history_days FROM purchase_settings WHERE organization_id = app_org()");
         return rows.Select(r => new PurchasePlanner.Settings(r.Days, r.Lead, r.A, r.B, r.C, r.History)).SingleOrDefault() ?? PurchasePlanner.Settings.Default;
+    }
+
+    private static async Task<IResult> Availability(HttpContext ctx, StationScope scope, UiDb db)
+    {
+        var (fp, error) = await UiFilter.ParseAsync(ctx, scope);
+        if (error is not null) return error;
+        var f = fp!;
+        await using var c = await db.OpenConnectionAsync(ctx.RequestAborted);
+        var s = await SettingsAsync(c);
+        var (stations, items) = ShopAvailability.Compute(await ShopAvailability.LoadAsync(c, f.Stations, f.From, f.To, s.HistoryDays));
+        var withCore = stations.Where(x => x.Availability is not null).ToList();
+        return Results.Ok(new
+        {
+            filter = OverviewEndpoints.Describe(f),
+            total = new
+            {
+                // weighted by the core items of each station
+                availability = withCore.Sum(x => x.CoreItems) is var n and > 0 ? Math.Round(withCore.Sum(x => x.Availability!.Value * x.CoreItems) / n, 4) : (decimal?)null,
+                core_items = stations.Sum(x => x.CoreItems), core_marked = stations.Any(x => x.CoreMarked), core_out_now = stations.Sum(x => x.CoreOutNow),
+                lost_revenue = stations.Sum(x => x.LostRevenue), out_items = stations.Sum(x => x.OutItems),
+            },
+            stations = stations.Select(x => new
+            {
+                station_id = x.StationId, station = x.Station, core_items = x.CoreItems, core_marked = x.CoreMarked, availability = x.Availability,
+                core_out_now = x.CoreOutNow, out_items = x.OutItems, lost_revenue = x.LostRevenue,
+            }),
+            items = items.Take(200).Select(l => new
+            {
+                station_id = l.StationId, station = l.Station, item_key = l.ItemKey, name = l.Name, group_name = l.GroupName, core = l.Core,
+                stock = l.Stock, period_days = l.PeriodDays, out_days = l.OutDays, per_day = l.PerDay, price = l.Price,
+                lost_qty = l.LostQty, lost_revenue = l.LostRevenue,
+            }),
+        });
     }
 
     private static async Task<IResult> Plan(HttpContext ctx, StationScope scope, UiDb db)

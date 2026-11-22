@@ -130,6 +130,13 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                   AND (SELECT sum(m.quantity) FROM item_moves m
                        WHERE m.station_id = a.station_id AND m.item_id::text = split_part(a.dedupe_key, '/', 1)) > 0
                 """);
+            // A purchase alert closes once Topaz has received the list's goods at that station (or the list was closed).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'shop_purchase_not_received' AND a.status <> 'closed'
+                  AND NOT EXISTS (SELECT 1 FROM v_purchase_on_order o
+                                  WHERE o.station_id = a.station_id AND o.list_id::text = a.dedupe_key AND o.open_qty > 0)
+                """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'
@@ -383,6 +390,23 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
         LEFT JOIN v_item_keys k ON k.station_id = m.station_id AND k.item_id = m.item_id
         JOIN v_station_rules r ON r.code = 'goods_out' AND r.enabled AND r.station_id = m.station_id
         WHERE m.stock <= 0 AND s.sold > 0
+        ON CONFLICT DO NOTHING
+        """,
+        // A shopping list marked "bought" whose goods Topaz has not received for the threshold days (one alert per list and station).
+        Insert + """
+        SELECT o.station_id, 'shop_purchase_not_received', o.list_id::text, r.severity,
+               'Куплено, но не оприходовано в Топазе: ' || count(*) || ' поз.',
+               'Список на ' || to_char(pl.trip_date, 'DD.MM.YYYY') || ': '
+                   || array_to_string((array_agg(COALESCE(l.name, l.item_key) ORDER BY l.name))[1:10], ', ')
+                   || CASE WHEN count(*) > 10 THEN ' и ещё ' || (count(*) - 10) ELSE '' END
+                   || '. Оформите приход в Топазе — иначе остатки и следующий список закупки будут неверны.',
+               count(*), NULL, max(o.bought_at)
+        FROM v_purchase_on_order o
+        JOIN purchase_lists pl ON pl.id = o.list_id
+        JOIN purchase_list_lines l ON l.list_id = o.list_id AND l.station_id = o.station_id AND l.item_id = o.item_id
+        JOIN v_station_rules r ON r.code = 'shop_purchase_not_received' AND r.enabled AND r.station_id = o.station_id
+        WHERE o.open_qty > 0 AND o.bought_at < now() - make_interval(days => r.threshold::int) AND o.bought_at > now() - interval '30 days'
+        GROUP BY o.station_id, o.list_id, pl.trip_date, r.severity
         ON CONFLICT DO NOTHING
         """,
         // Station silent longer than the threshold (minutes): one alert per outage.
