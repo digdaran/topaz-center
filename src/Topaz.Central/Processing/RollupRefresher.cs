@@ -75,7 +75,8 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
             }
         }
 
-        if (all || fuelDays!.Length > 0) await RebuildFuel(c, tx, station.Value, fuelDays, ct);
+        // fuelDays null without "all": the average changed long ago, so the whole fuel history of the station is rebuilt.
+        if (all || fuelDays is null || fuelDays.Length > 0) await RebuildFuel(c, tx, station.Value, fuelDays, ct);
         if (all || shopDays!.Length > 0) await RebuildShop(c, tx, station.Value, shopDays, ct);
         await c.ExecuteAsync(new CommandDefinition("DELETE FROM rollup_dirty WHERE id = ANY(@ids)", new { ids = marks.Select(m => m.Id).ToArray() }, tx, cancellationToken: ct));
         await tx.CommitAsync(ct);

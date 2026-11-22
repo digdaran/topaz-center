@@ -133,6 +133,41 @@ public sealed class CostAndDiscountTests(CentralFixture fx) : IClassFixture<Cent
         Assert.Equal(10 * 55m + 10 * Avg(17990, 55, 10000, 60), await CostAsync());
     }
 
+    /// <summary>
+    /// New sales (day marks) after a price change long ago: the average moves back more than two months, so the
+    /// whole fuel history is rebuilt. This used to throw and leave the station's rollups stuck for good.
+    /// </summary>
+    [PostgresFact]
+    public async Task Day_marks_after_an_old_average_change_rebuild_the_whole_history()
+    {
+        var st = await fx.EnrollAsync("АЗС-давняя-цена", await DefaultOrgAsync());
+        var owner = await LoginAsync("oldavg-owner", Roles.Owner);
+        var old = DateTimeOffset.UtcNow.AddDays(-100);
+        await SendAsync(st.Token, [
+            Row("dcFuels", "1", new JsonObject { ["FuelID"] = 1, ["Name"] = "АИ-92", ["Deleted"] = 0 }),
+            Row("dcTanks", "1", new JsonObject { ["TankID"] = 1, ["Num"] = 1, ["FuelID"] = 1, ["MaxVolume"] = 30000, ["Deleted"] = 0 }),
+            Row("flSesTanks", "10|1", new JsonObject { ["SessionID"] = 10, ["TankID"] = 1, ["TankNum"] = 1, ["StartFuelVolume"] = 0 }),
+            Row("flRecepts", "1", new JsonObject { ["ReceptID"] = 1, ["SessionID"] = 10, ["ReceptDateTime"] = Ts(old), ["TankID"] = 1, ["FuelID"] = 1, ["DocVolume"] = 10000 }),
+            Row("flOrders", "1", Order(1, 10, old.AddHours(2), 10m, 60m, 60m)),
+        ]);
+        // A receipt price the rollups do not know about yet (written outside the web interface, which would mark "all").
+        await using (var c = new Npgsql.NpgsqlConnection(fx.ConnectionString))
+        {
+            await c.OpenAsync();
+            await using var cmd = new Npgsql.NpgsqlCommand(
+                "INSERT INTO fuel_costs (station_id, fuel_id, valid_from, price_per_liter, receipt_id) VALUES (@s, 1, @at, 50, 1)", c);
+            cmd.Parameters.AddWithValue("s", st.StationId);
+            cmd.Parameters.AddWithValue("at", old.UtcDateTime);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        // Today's sale marks only today; refreshing it finds the average changed 100 days ago.
+        await SendAsync(st.Token, [Row("flOrders", "2", Order(2, 10, DateTimeOffset.UtcNow.AddMinutes(-5), 10m, 60m, 60m))]);
+
+        var period = $"stations={st.StationId}&from={Day(old.AddDays(-1))}&to={Day(old.AddDays(1))}";
+        var fuel = (await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/analytics/finance?{period}"))!["fuel"]!;
+        Assert.Equal(500m, fuel["cost"]!.GetValue<decimal>()); // the old sale is costed at the receipt price
+    }
+
     [PostgresFact]
     public async Task A_receipt_without_a_price_reminds_until_the_price_is_entered()
     {
