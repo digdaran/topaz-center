@@ -58,7 +58,7 @@ services:
   # Telegram through a VPN server (xray, config from a Remnawave subscription: telegram-proxy/make-config.py),
   # for hosts where api.telegram.org is blocked. Started only with COMPOSE_PROFILES=telegram-proxy in .env.
   telegram-proxy:
-    image: ghcr.io/xtls/xray-core:26.10.21
+    image: ghcr.io/xtls/xray-core:26.11.9
     profiles: [telegram-proxy]
     restart: unless-stopped
     command: ["run", "-c", "/etc/xray/config.json"]
