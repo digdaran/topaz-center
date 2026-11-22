@@ -106,6 +106,30 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                 WHERE a.rule_code = 'receipt_without_cost' AND a.status <> 'closed'
                   AND EXISTS (SELECT 1 FROM fuel_costs fc WHERE fc.station_id = a.station_id AND fc.receipt_id::text = a.dedupe_key)
                 """);
+            // A fuel delivery closes the tank's "running out" alerts: a receipt into that tank after the alert, or a delivery
+            // not entered in Topaz that the gauge shows (a shift closed after the alert with a surplus of over 1 000 l).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'low_fuel' AND a.status <> 'closed'
+                  AND (EXISTS (SELECT 1 FROM fuel_receipts f WHERE f.station_id = a.station_id
+                                 AND f.tank_id::text = split_part(a.dedupe_key, '/', 1) AND f.received_at > a.occurred_at)
+                    OR EXISTS (SELECT 1 FROM v_tank_measurements m WHERE m.station_id = a.station_id
+                                 AND m.tank_id::text = split_part(a.dedupe_key, '/', 1) AND m.ended_at > a.occurred_at AND m.diff > 1000))
+                """);
+            // A surplus closes once the data no longer shows it (the delivery was entered in Topaz for that shift).
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'tank_surplus' AND a.status <> 'closed'
+                  AND NOT EXISTS (SELECT 1 FROM v_tank_measurements m JOIN v_station_rules r ON r.station_id = m.station_id AND r.code = 'tank_surplus'
+                                  WHERE m.station_id = a.station_id AND m.tank_id || '/' || m.session_id = a.dedupe_key AND m.diff > r.threshold)
+                """);
+            // Goods back in stock (a receipt, a stock entry) close all "out of stock" alerts of that item.
+            await c.ExecuteAsync("""
+                UPDATE alerts a SET status = 'closed', status_by = 'auto'
+                WHERE a.rule_code = 'goods_out' AND a.status <> 'closed'
+                  AND (SELECT sum(m.quantity) FROM item_moves m
+                       WHERE m.station_id = a.station_id AND m.item_id::text = split_part(a.dedupe_key, '/', 1)) > 0
+                """);
             // Fuel mapping alerts are keyed by the set of unconfirmed fuels: once that set changes or is empty, the old one closes.
             await c.ExecuteAsync("""
                 UPDATE alerts a SET status = 'closed', status_by = 'auto'

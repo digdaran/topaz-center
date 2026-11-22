@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Topaz.Central.Processing;
 using Topaz.Central.Ui;
 using Topaz.Contracts;
 using Xunit;
@@ -261,5 +262,45 @@ public sealed class ControlTests(CentralFixture fx) : IClassFixture<CentralFixtu
         Assert.Equal(HttpStatusCode.NoContent, (await owner.PutAsJsonAsync($"/api/v1/ui/tanks/{station}/1", new { min_liters = 500, lead_time_days = 1, safety_days = 0 })).StatusCode);
         var r2 = await owner.GetFromJsonAsync<JsonObject>($"/api/v1/ui/analytics/tanks?stations={station}");
         Assert.Equal(0.5m, r2!["tanks"]![0]!["days_to_min"]!.GetValue<decimal>()); // (1000 − 500) / 965.7
+    }
+    /// <summary>
+    /// A fuel delivery closes the tank's "running out" alerts raised before it (not after it); goods back in stock close
+    /// "out of stock"; a surplus the data no longer shows closes.
+    /// </summary>
+    [PostgresFact]
+    public async Task Deliveries_close_their_alerts()
+    {
+        var st = (await fx.EnrollAsync("АЗС-поставки")).StationId;
+        var t = DateTimeOffset.UtcNow.AddHours(-10);
+        Task<long> Alert(string rule, string key, DateTimeOffset at) => fx.QueryAsync<long>("""
+            INSERT INTO alerts (station_id, rule_code, dedupe_key, severity, title, occurred_at)
+            VALUES (@st, @rule, @key, 'warning', 'тест', @at) RETURNING id
+            """, new { st, rule, key, at });
+        var fuelBefore = await Alert("low_fuel", "7/a", t);              // tank 7: the receipt came after it
+        var fuelAfter = await Alert("low_fuel", "8/a", t.AddHours(5));    // tank 8: raised after its receipt
+        var fuelOther = await Alert("low_fuel", "9/a", t);               // tank 9: no receipt
+        var fuelGauge = await Alert("low_fuel", "10/a", t);              // tank 10: not entered, the gauge saw 5 000 l more
+        var goodsBack = await Alert("goods_out", "5/a", t);
+        var goodsOut = await Alert("goods_out", "6/a", t);
+        var surplus = await Alert("tank_surplus", "7/1", t);             // no such measurement any more
+        await fx.QueryAsync<int>("""
+            INSERT INTO fuel_receipts (station_id, receipt_id, tank_id, received_at) VALUES (@st, 1, 7, @r7), (@st, 2, 8, @r8);
+            INSERT INTO item_moves (station_id, move_id, item_id, quantity) VALUES (@st, 1, 5, 10), (@st, 2, 5, -4), (@st, 3, 6, 3), (@st, 4, 6, -3);
+            INSERT INTO shifts (station_id, session_id, session_num, started_at, ended_at) VALUES (@st, 1, 1, @r7, @r8);
+            INSERT INTO tank_shift_states (station_id, session_id, tank_id, start_volume, receipt_volume, pump_volume, fact_volume)
+            VALUES (@st, 1, 10, 500, 0, 100, 5400);
+            SELECT 1
+            """, new { st, r7 = t.AddHours(2), r8 = t.AddHours(3) });
+
+        await fx.Factory!.Services.GetRequiredService<AnomalyDetector>().RunAsync(CancellationToken.None);
+
+        Task<string> Status(long id) => fx.QueryAsync<string>("SELECT status || '/' || COALESCE(status_by, '') FROM alerts WHERE id = @id", new { id });
+        Assert.Equal("closed/auto", await Status(fuelBefore));
+        Assert.Equal("new/", await Status(fuelAfter));
+        Assert.Equal("new/", await Status(fuelOther));
+        Assert.Equal("closed/auto", await Status(fuelGauge));
+        Assert.Equal("closed/auto", await Status(goodsBack));
+        Assert.Equal("new/", await Status(goodsOut));
+        Assert.Equal("closed/auto", await Status(surplus));
     }
 }
