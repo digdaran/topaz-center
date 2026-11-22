@@ -172,7 +172,9 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
         created.EnsureSuccessStatusCode();
         var org = (await created.Content.ReadFromJsonAsync<JsonObject>())!["id"]!.GetValue<Guid>();
         var st = await fx.EnrollAsync("АЗС-закупка", org);
-        var day0 = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero).AddHours(9);   // 12:00 Moscow
+        // Anchored to the Moscow date (the station's), not the UTC one: after 21:00 UTC they differ by a day.
+        var today = DateTime.UtcNow.AddHours(3).Date;
+        var day0 = new DateTimeOffset(DateTime.SpecifyKind(today, DateTimeKind.Unspecified), TimeSpan.FromHours(3)).AddHours(12);   // 12:00 Moscow
         int move = 0, receipt = 0;
         RecordChange Move(int item, DateTimeOffset at, decimal qty, int docType, int doc) => Row("rgItemRests", $"{++move}", new JsonObject
         {
@@ -218,7 +220,6 @@ public sealed class PurchaseTests(CentralFixture fx) : IClassFixture<CentralFixt
             new { trip_weekdays = new[] { 1, 2, 3, 4, 5, 6, 7 }, lead_days = 0, service_a = 97, service_b = 93, service_c = 85, history_days = 56 })).StatusCode);
         // Over the last 30 days both items were on the shelf 12 days and out 18; nothing is marked "always in stock" yet,
         // so the core is class A by revenue (both). Lost: 2 waters a day × 50 ₽ × 18 days + 1 gum × 50 ₽ × 18 days.
-        var today = DateTime.UtcNow.AddHours(3).Date;
         var avail = (await owner.GetFromJsonAsync<JsonObject>(
             $"/api/v1/ui/analytics/availability?stations={st.StationId}&from={today.AddDays(-30):yyyy-MM-dd}&to={today:yyyy-MM-dd}"))!;
         Assert.Equal(0.4m, avail["total"]!["availability"]!.GetValue<decimal>());
