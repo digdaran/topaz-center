@@ -134,15 +134,18 @@ public sealed class CostAndDiscountTests(CentralFixture fx) : IClassFixture<Cent
     }
 
     /// <summary>
-    /// New sales (day marks) after a price change long ago: the average moves back more than two months, so the
-    /// whole fuel history is rebuilt. This used to throw and leave the station's rollups stuck for good.
+    /// New sales (day marks) after a receipt price the rollups did not know about: the average moved back, so the days
+    /// since then (or, more than two months back, the whole history) are rebuilt. Both used to throw and leave the
+    /// station's rollups stuck (a null day list; days of mixed DateTime kinds).
     /// </summary>
-    [PostgresFact]
-    public async Task Day_marks_after_an_old_average_change_rebuild_the_whole_history()
+    [PostgresTheory]
+    [InlineData(100)] // more than two months back: the whole history is rebuilt
+    [InlineData(20)]  // recent: the days from the change on are rebuilt
+    public async Task Day_marks_after_an_average_change_rebuild_the_days_since(int daysAgo)
     {
-        var st = await fx.EnrollAsync("АЗС-давняя-цена", await DefaultOrgAsync());
+        var st = await fx.EnrollAsync("АЗС-давняя-цена-" + daysAgo, await DefaultOrgAsync());
         var owner = await LoginAsync("oldavg-owner", Roles.Owner);
-        var old = DateTimeOffset.UtcNow.AddDays(-100);
+        var old = DateTimeOffset.UtcNow.AddDays(-daysAgo);
         await SendAsync(st.Token, [
             Row("dcFuels", "1", new JsonObject { ["FuelID"] = 1, ["Name"] = "АИ-92", ["Deleted"] = 0 }),
             Row("dcTanks", "1", new JsonObject { ["TankID"] = 1, ["Num"] = 1, ["FuelID"] = 1, ["MaxVolume"] = 30000, ["Deleted"] = 0 }),
@@ -160,7 +163,7 @@ public sealed class CostAndDiscountTests(CentralFixture fx) : IClassFixture<Cent
             cmd.Parameters.AddWithValue("at", old.UtcDateTime);
             await cmd.ExecuteNonQueryAsync();
         }
-        // Today's sale marks only today; refreshing it finds the average changed 100 days ago.
+        // Today's sale marks only today; refreshing it finds the average changed long ago.
         await SendAsync(st.Token, [Row("flOrders", "2", Order(2, 10, DateTimeOffset.UtcNow.AddMinutes(-5), 10m, 60m, 60m))]);
 
         var period = $"stations={st.StationId}&from={Day(old.AddDays(-1))}&to={Day(old.AddDays(1))}";

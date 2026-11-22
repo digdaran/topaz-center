@@ -20,6 +20,16 @@ public sealed class PostgresFactAttribute : FactAttribute
     }
 }
 
+/// <summary>A theory that runs only when PostgreSQL is available (see <see cref="PostgresFactAttribute"/>).</summary>
+public sealed class PostgresTheoryAttribute : TheoryAttribute
+{
+    public PostgresTheoryAttribute()
+    {
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TOPAZ_TEST_PG")))
+            Skip = "Set TOPAZ_TEST_PG (e.g. Host=localhost;Username=postgres;Password=...) to run central tests";
+    }
+}
+
 /// <summary>Real ASP.NET pipeline + a fresh PostgreSQL database per test class.</summary>
 public sealed class CentralFixture : IAsyncLifetime
 {

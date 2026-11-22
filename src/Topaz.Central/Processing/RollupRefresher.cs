@@ -69,7 +69,8 @@ public sealed class RollupRefresher(NpgsqlDataSource db, ILogger<RollupRefresher
             var changedAt = await FuelCostAverager.RecomputeAsync(c, tx, station.Value, ct);
             if (changedAt is { } from && fuelDays is not null)
             {
-                var since = from.Date.AddDays(-1);
+                // Days are plain dates (Kind Unspecified, as read from rollup_dirty): Npgsql refuses an array mixing kinds.
+                var since = DateTime.SpecifyKind(from.Date.AddDays(-1), DateTimeKind.Unspecified);
                 var span = (DateTime.UtcNow.Date.AddDays(1) - since).Days;
                 fuelDays = span > 62 ? null : fuelDays.Concat(Enumerable.Range(0, span + 1).Select(i => since.AddDays(i))).Distinct().ToArray();
             }
