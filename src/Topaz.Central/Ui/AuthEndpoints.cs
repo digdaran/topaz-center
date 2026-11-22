@@ -19,6 +19,8 @@ public static class AuthEndpoints
 {
     public static void MapUiAuth(this RouteGroupBuilder ui)
     {
+        // The login screen asks where it is (the console looks different); nothing else is said before login.
+        ui.MapGet("/auth/address", (HttpContext ctx) => Results.Ok(new { console = ConsoleHosts.IsConsole(ctx) })).AllowAnonymous();
         ui.MapPost("/auth/login", Login).AllowAnonymous().RequireRateLimiting("login");
         ui.MapPost("/auth/login/code", LoginCode).AllowAnonymous().RequireRateLimiting("login");
         ui.MapPost("/auth/totp/setup", TotpSetup).RequireRateLimiting("login");
@@ -72,11 +74,21 @@ public static class AuthEndpoints
 
     internal static async Task<IResult> SignInAsync(HttpContext ctx, UserRecord user, NpgsqlDataSource db, string action, string? method = null)
     {
+        if (await WrongAddressAsync(ctx, user, db) is { } refused) return refused;
         var selected = user.Role == Roles.Superadmin ? await DefaultOrganizationAsync(db) : null;
         await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, UserService.Principal(user, selected));
         object details = method is null ? new { ip = ctx.Connection.RemoteIpAddress?.ToString() } : new { ip = ctx.Connection.RemoteIpAddress?.ToString(), method };
         await Audit.WriteAsync(db, user.Id, user.Login, action, null, details, user.OrganizationId);
         return Results.Ok(new { id = user.Id, login = user.Login, name = user.Name, role = user.Role, need_code = false });
+    }
+
+    /// <summary>A superadmin signs in only at the console, everybody else only outside it (ConsoleHosts).</summary>
+    private static async Task<IResult?> WrongAddressAsync(HttpContext ctx, UserRecord user, NpgsqlDataSource db)
+    {
+        if (ConsoleHosts.Refusal(ctx, user.Role) is not { } reason) return null;
+        await Audit.WriteAsync(db, user.Id, user.Login, "login_failed", null,
+            new { ip = ctx.Connection.RemoteIpAddress?.ToString(), reason = "wrong_address", host = ctx.Request.Host.Host }, user.OrganizationId);
+        return Results.Problem(statusCode: 403, title: reason);
     }
 
     private static async Task<IResult> Login(LoginRequest body, HttpContext ctx, UserService users, NpgsqlDataSource db,
@@ -92,6 +104,7 @@ public static class AuthEndpoints
             await Audit.WriteAsync(db, null, body.Login, "login_failed", null, new { ip = ctx.Connection.RemoteIpAddress?.ToString() });
             return Results.Problem(statusCode: 401, title: "Неверный логин или пароль");
         }
+        if (await WrongAddressAsync(ctx, user, db) is { } refused) return refused; // before the code step
         if (!user.TotpEnabled) return await SignInAsync(ctx, user, db, "login");
         // Two-factor login: no session yet, only a short-lived ticket for the code step.
         ctx.Response.Cookies.Append(TicketCookie, protector.Ticket(user.Id, user.SecurityStamp), TicketCookieOptions(ctx, options));
@@ -177,7 +190,7 @@ public static class AuthEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> Me(ClaimsPrincipal user, StationScope scope, NpgsqlDataSource db, UserService users, IOptions<CentralOptions> options)
+    private static async Task<IResult> Me(ClaimsPrincipal user, HttpContext ctx, StationScope scope, NpgsqlDataSource db, UserService users, IOptions<CentralOptions> options)
     {
         var record = await users.FindCachedAsync(user.UserId());
         var totpEnabled = record?.TotpEnabled ?? false;
@@ -203,6 +216,7 @@ public static class AuthEndpoints
             recovery_codes_left = record?.RecoveryCodes.Length ?? 0,
             totp_mandatory = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin),
             totp_setup_required = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin) && !totpEnabled,
+            console = ConsoleHosts.IsConsole(ctx, options.Value),
         });
     }
 

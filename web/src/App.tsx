@@ -1,8 +1,8 @@
 import { BarChartOutlined, BulbOutlined, LogoutOutlined, MenuOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
+import { Alert, Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Select, Tag, Typography } from 'antd';
 import { api, isOwner, isSuper, Me, useMeta } from './api/client';
-import { ReactNode, Suspense, useState } from 'react';
+import { ReactNode, Suspense, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { RequireAuth, useLogout, useMe } from './auth/auth';
 import { useHelpUnseen } from './help/version';
@@ -57,12 +57,23 @@ function Shell({ children }: { children: ReactNode }) {
   const visible = SECTIONS.filter((s) => allowed(s.roles, me.role));
   const item = (s: NavSection) => ({ key: s.path, icon: s.icon, label: badge[s.path] ?? s.label });
   const platform = visible.filter((s) => s.group === 'platform');
-  const items = [
-    ...visible.filter((s) => s.group === 'main').map(item),
-    { type: 'divider' as const },
-    ...visible.filter((s) => s.group === 'service').map(item),
-    ...(platform.length ? [{ type: 'group' as const, label: 'Сервер', children: platform.map(item) }] : []),
-  ];
+  const main = visible.filter((s) => s.group === 'main').map(item);
+  const service = visible.filter((s) => s.group === 'service').map(item);
+  // The superadmin console (own address): the platform comes first, the client's sections are "as the client".
+  const items = me.console
+    ? [
+        ...platform.map(item),
+        { type: 'divider' as const },
+        { type: 'group' as const, label: 'Как клиент', children: main },
+        { type: 'divider' as const },
+        ...service,
+      ]
+    : [
+        ...main,
+        { type: 'divider' as const },
+        ...service,
+        ...(platform.length ? [{ type: 'group' as const, label: 'Сервер', children: platform.map(item) }] : []),
+      ];
   // Report sections keep the period and stations; settings-like ones start clean.
   const keepsFilter = (path: string) => !['/settings', '/help', '/platform'].includes(path);
   const menu = (
@@ -72,15 +83,23 @@ function Shell({ children }: { children: ReactNode }) {
   const moved = legacyPath(location.pathname, location.search);
   const desktop = !!screens.lg;
   useReloadOnNavigateWhenOutdated();
+  useConsoleLanding(me);
+  const asClient = me.console && sectionOf(location.pathname)?.group === 'main';
+  const brand = (
+    <>
+      <Typography.Text strong style={{ whiteSpace: 'nowrap', ...(desktop ? { fontSize: 16 } : {}) }}>Topaz Center</Typography.Text>
+      {me.console && <Tag color="gold" style={{ marginInlineEnd: 0, paddingInline: 5 }}>консоль</Tag>}
+    </>
+  );
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {desktop && (
         <Layout.Sider width={220} theme="light" style={{ position: 'sticky', top: 0, height: '100vh' }}>
           <Flex vertical style={{ height: '100%' }}>
-            <Flex align="center" gap={8} style={{ padding: '16px 20px' }}>
+            <Flex align="center" gap={8} wrap="wrap" style={{ padding: '16px 20px' }}>
               <BarChartOutlined style={{ fontSize: 22, color: '#1668dc' }} />
-              <Typography.Text strong style={{ fontSize: 16 }}>Topaz Center</Typography.Text>
+              {brand}
             </Flex>
             <div style={{ flex: 1, overflow: 'auto' }}>{menu}</div>
             <div style={{ padding: '8px 20px 12px' }}><VersionLabel /></div>
@@ -90,7 +109,7 @@ function Shell({ children }: { children: ReactNode }) {
       <Layout>
         <Layout.Header style={{ padding: '0 16px', display: 'flex', alignItems: 'center', gap: 12, background: 'transparent', height: 56 }}>
           {!desktop && <Button icon={<MenuOutlined />} onClick={() => setDrawer(true)} aria-label="Меню" />}
-          {!desktop && <Typography.Text strong>Topaz Center</Typography.Text>}
+          {!desktop && brand}
           <OrganizationBadge me={me} compact={!desktop} />
           <div style={{ flex: 1 }} />
           <Button
@@ -113,6 +132,11 @@ function Shell({ children }: { children: ReactNode }) {
         </Layout.Header>
         <Layout.Content style={{ padding: desktop ? '8px 24px 24px' : '8px 16px 16px', maxWidth: 1600, width: '100%' }}>
           <UpdateBanner />
+          {asClient && (
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+              message={`Данные клиента «${me.organization ?? 'организация не выбрана'}» — вы смотрите их как администратор сервиса`}
+              action={<Button size="small" onClick={() => navigate('/platform/organizations')}>В консоль</Button>} />
+          )}
           <PageErrorBoundary resetKey={location.pathname}>{moved ? <Navigate to={moved} replace /> : children}</PageErrorBoundary>
         </Layout.Content>
       </Layout>
@@ -122,6 +146,18 @@ function Shell({ children }: { children: ReactNode }) {
       </Drawer>
     </Layout>
   );
+}
+
+/** Opening the console lands on the platform once per tab; after that "/" is the client's «Сводка» as usual. */
+function useConsoleLanding(me: Me) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    if (!me.console || location.pathname !== '/') return;
+    let landed = false;
+    try { landed = sessionStorage.getItem('topaz-console-landed') === '1'; sessionStorage.setItem('topaz-console-landed', '1'); } catch { /* private mode: land every time */ }
+    if (!landed) navigate('/platform/organizations', { replace: true });
+  }, [me.console, location.pathname, navigate]);
 }
 
 /**

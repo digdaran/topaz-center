@@ -81,3 +81,47 @@
 		format json
 	}
 }
+
+# Superadmin console (CONSOLE_DOMAIN, e.g. admin.topaz.08u.ru): the same service, but superadmins sign in only here
+# and nobody else can (Topaz__ConsoleHost). Only the web interface is published; optional allow-list of addresses.
+{$CONSOLE_DOMAIN} {
+	encode gzip
+
+	@outside not remote_ip {$TOPAZ_CONSOLE_ALLOW_IPS}
+	respond @outside 403
+
+	@ui path /api/v1/ui/*
+	handle @ui {
+		reverse_proxy central:8080 {
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+	# Agents, admin/export API, site requests, metrics and health stay on their own addresses.
+	@closed path /api/* /metrics /metrics/* /health/*
+	handle @closed {
+		respond 404
+	}
+	handle {
+		reverse_proxy central:8080 {
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	# Same file as the clients' address: the fail2ban jails cover the console too.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format json
+	}
+}

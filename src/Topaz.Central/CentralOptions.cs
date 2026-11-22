@@ -48,6 +48,11 @@ public sealed class CentralOptions
     /// Empty = the address the browser used.
     /// </summary>
     public string? PublicOrigin { get; set; }
+    /// <summary>
+    /// The superadmin console's own host name (admin.topaz.08u.ru, Ui/ConsoleHosts): superadmins sign in only there,
+    /// everybody else only elsewhere. Empty = one address for all.
+    /// </summary>
+    public string? ConsoleHost { get; set; }
     /// <summary>Session cookies only over HTTPS. False for tests and a local stack without TLS.</summary>
     public bool SecureCookies { get; set; } = true;
     /// <summary>Login attempts (password and code steps, two-factor setup) per address and minute.</summary>

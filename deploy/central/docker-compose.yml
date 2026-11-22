@@ -42,6 +42,7 @@ services:
       Topaz__StationSilentMinutes: ${TOPAZ_STATION_SILENT_MINUTES:-15}
       Topaz__KeysDirectory: /keys
       Topaz__PublicOrigin: https://${DOMAIN:?set DOMAIN in .env}   # passkeys belong to this address
+      Topaz__ConsoleHost: ${CONSOLE_DOMAIN:-}   # superadmins sign in only there (empty = one address for all)
       Topaz__BootstrapOwnerLogin: ${TOPAZ_BOOTSTRAP_OWNER_LOGIN:-}
       Topaz__BootstrapOwnerPassword: ${TOPAZ_BOOTSTRAP_OWNER_PASSWORD:-}
       Topaz__TelegramBotToken: ${TOPAZ_TELEGRAM_BOT_TOKEN:-}
@@ -94,6 +95,8 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (Let's Encrypt account)}
+      CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:-http://console.localhost}   # superadmin console; unset = only a local placeholder address
+      TOPAZ_CONSOLE_ALLOW_IPS: ${TOPAZ_CONSOLE_ALLOW_IPS:-0.0.0.0/0 ::/0}   # console only from these IPs/CIDRs; default: from anywhere
       SITE_DOMAIN: ${SITE_DOMAIN:-http://site.localhost}   # public site (azshub.ru); unset = only a local placeholder address
       TOPAZ_ADMIN_ALLOW_IPS: ${TOPAZ_ADMIN_ALLOW_IPS:-127.0.0.1/32}   # admin/export API from these IPs only
     volumes:

@@ -261,7 +261,8 @@ public static class UiAuthSetup
                     var users = ctx.HttpContext.RequestServices.GetRequiredService<UserService>();
                     var id = Guid.TryParse(ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var g) ? g : Guid.Empty;
                     var user = id == Guid.Empty ? null : await users.FindCachedAsync(id);
-                    if (user is null || !user.IsActive || !user.OrganizationActive || user.SecurityStamp.ToString() != ctx.Principal!.FindFirstValue("stamp"))
+                    if (user is null || !user.IsActive || !user.OrganizationActive || user.SecurityStamp.ToString() != ctx.Principal!.FindFirstValue("stamp")
+                        || ConsoleHosts.Refusal(ctx.HttpContext, user.Role) is not null) // a session belongs to its address (ConsoleHosts)
                     {
                         ctx.RejectPrincipal();
                         await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);

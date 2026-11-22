@@ -78,6 +78,8 @@ export interface Me {
   /** Mandatory but not on yet: only the setup screen works until it is. */
   totp_setup_required: boolean;
   recovery_codes_left: number;
+  /** Signed in at the superadmin console's own address (Topaz__ConsoleHost). */
+  console: boolean;
 }
 
 /** Owner rights (a superadmin has them too). */

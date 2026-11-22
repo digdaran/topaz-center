@@ -87,6 +87,9 @@ public static class PasskeyEndpoints
     /// </summary>
     internal static (string Origin, string RpId) Party(HttpContext ctx, CentralOptions options)
     {
+        // The console has its own address, so its passkeys belong to it (a superadmin makes them anew there).
+        if (ConsoleHosts.IsConsole(ctx, options))
+            return ($"{ctx.Request.Scheme}://{ctx.Request.Host}", ctx.Request.Host.Host);
         if (!string.IsNullOrWhiteSpace(options.PublicOrigin) && Uri.TryCreate(options.PublicOrigin, UriKind.Absolute, out var u))
             return (u.GetLeftPart(UriPartial.Authority), u.Host);
         return ($"{ctx.Request.Scheme}://{ctx.Request.Host}", ctx.Request.Host.Host);

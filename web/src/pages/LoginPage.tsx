@@ -1,6 +1,6 @@
 import { BarChartOutlined, KeyOutlined, LockOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
-import { useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Divider, Flex, Form, Input, Typography } from 'antd';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Divider, Flex, Form, Input, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -16,11 +16,13 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const qc = useQueryClient();
+  // The superadmin console has its own address and looks different, so the two are never confused.
+  const atConsole = useQuery({ queryKey: ['auth-address'], queryFn: () => api<{ console: boolean }>('/auth/address'), staleTime: Infinity }).data?.console ?? false;
 
   const done = async () => {
     await qc.invalidateQueries({ queryKey: ['me'] });
     const next = params.get('next');
-    navigate(safeNext(next), { replace: true });
+    navigate(next ? safeNext(next) : atConsole ? '/platform/organizations' : '/', { replace: true });
   };
 
   const submit = async (v: { login: string; password: string }) => {
@@ -75,7 +77,9 @@ export default function LoginPage() {
         <Flex vertical align="center" gap={4} style={{ marginBottom: 24 }}>
           <BarChartOutlined style={{ fontSize: 36, color: '#1668dc' }} />
           <Typography.Title level={3} style={{ margin: 0 }}>Topaz Center</Typography.Title>
-          <Typography.Text type="secondary">Данные и аналитика АЗС</Typography.Text>
+          {atConsole
+            ? <Tag color="gold" style={{ marginInlineEnd: 0 }}>Консоль администратора сервиса</Tag>
+            : <Typography.Text type="secondary">Данные и аналитика АЗС</Typography.Text>}
         </Flex>
         {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
         {needCode ? (
