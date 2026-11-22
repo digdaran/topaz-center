@@ -61,6 +61,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramBot>());
 builder.Services.AddSingleton<AnomalyDetector>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AnomalyDetector>());
 builder.Services.AddHostedService<StationMonitor>();
+builder.Services.AddSingleton<LeadNotifier>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LeadNotifier>());
+builder.Services.AddSingleton<Leads>();
 builder.Services.AddUiAuth(options.SecureCookies);
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("topaz-center");
 if (!string.IsNullOrWhiteSpace(options.KeysDirectory))
@@ -102,6 +105,10 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("registration-claim", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(10) }));
+    // Requests from the public site: a person sends one, maybe two.
+    o.AddPolicy("lead", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = options.LeadsPerHourPerIp, Window = TimeSpan.FromHours(1) }));
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = options.LoginsPerMinutePerIp, Window = TimeSpan.FromMinutes(1) }));

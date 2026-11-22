@@ -75,6 +75,13 @@ Auth: stations connect by request (docs/architecture.md 2.6): the agent sends `P
 - Metric definitions live in `docs/web.md`; keep them in sync with the SQL.
 - Demo data: `tools/DemoData` (synthetic stations through the real agent protocol, with planted anomalies).
 
+## Public site (site/)
+
+The product is sold as «АЗС Хаб». The landing at `azshub.ru` lives in `site/`. It is plain HTML/CSS/JS with no build step and self-hosted fonts (no Google Fonts: 152-ФЗ). The `site` container (nginx, read-only mount) serves it behind the same Caddy (`SITE_DOMAIN`). Its form posts `/api/leads`, and Caddy rewrites that to central `POST /api/v1/leads` (`Processing/Leads.cs`).
+- Leads are platform data: table `leads` is revoked from `topaz_ui`, and `LeadNotifier` sends them only to superadmin and platform Telegram chats.
+- Screenshots in `site/img` come from `tools/DemoData`, never from real stations.
+- Claims on the page (price, requirements, «только чтение») must stay true when the product changes.
+
 ## Reconciliation with Topaz reports
 
 `tools/reconcile/` compares central data with Topaz's own XML exports (period `DataPacket`, aggregated shift export); usage in its README. Put exports in `samples/` (git-ignored, real data). Rules learned from it, encoded in `003_shift_report.sql` views (`v_shift_*`, `item_rests_at`) and covered by `Shift_report_views_follow_topaz_rules`:

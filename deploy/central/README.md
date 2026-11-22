@@ -50,6 +50,24 @@ curl -x http://127.0.0.1:3128 -s -o /dev/null -w "%{http_code}\n" https://api.te
 
 xray раз в 5 минут проверяет через каждый сервер доступность `api.telegram.org` и ходит через самый быстрый работающий. Сменились серверы в подписке — повторите `make-config.py` и `docker compose restart telegram-proxy`. `config.json` содержит ключи серверов: он не в git и читается только пользователем контейнера.
 
+### Сайт продукта (лендинг)
+
+Статический сайт из `site/` в корне репозитория отдаёт контейнер `site` (nginx, папка смонтирована только для чтения: правка файлов и `git pull` обновляют сайт без пересборки). HTTPS для него получает тот же Caddy.
+
+```bash
+# DNS: A-запись SITE_DOMAIN → IP сервера; затем в .env:
+#   SITE_DOMAIN=azshub.ru
+docker compose up -d site caddy
+```
+
+Форма заявки отправляет `POST /api/leads` на адрес сайта; Caddy передаёт его в `POST /api/v1/leads` центрального сервиса, остальной API с адреса сайта закрыт. Заявки хранятся в таблице `leads` (не видны в веб-интерфейсе) и сразу приходят в Telegram суперадминистраторам: в их личные чаты и в чаты платформы (без организации). Пока такого чата нет, заявки ждут в базе:
+
+```bash
+docker compose exec postgres psql -U topaz topaz -c "select id, created_at, name, contact, stations, city, notified_at from leads order by id desc limit 20"
+```
+
+Номер счётчика Яндекс Метрики — атрибут `data-metrika` у `site.js` в `site/index.html` (пусто — Метрика не загружается). Реквизиты ИП и контакты — в подвале `index.html` и в `privacy.html`.
+
 ## Работа
 
 ```bash

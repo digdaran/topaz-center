@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>АЗС Хаб — все ваши заправки на одном экране</title>
+<meta name="description" content="АЗС Хаб собирает данные из АСУ «Топаз-АЗС» и показывает выручку, маржу, остатки в резервуарах и работу операторов на компьютере и в телефоне. 30 дней бесплатно.">
+<link rel="canonical" href="https://azshub.ru/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="АЗС Хаб — все ваши заправки на одном экране">
+<meta property="og:description" content="Выручка, маржа, резервуары и операторы всех АЗС на «Топазе» — в одном месте. 30 дней бесплатно.">
+<meta property="og:url" content="https://azshub.ru/">
+<meta property="og:image" content="https://azshub.ru/img/og.png">
+<meta name="theme-color" content="#14233B">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/golos-text-cyrillic-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/DSEG7Classic-Bold.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<!-- Before launch: fill in data-metrika (Яндекс Метрика counter id) and the [placeholders] in the footer and contacts. -->
+<a class="skip" href="#main">Перейти к содержанию</a>
+
+<header class="top">
+  <div class="wrap top__in">
+    <a class="logo" href="/" aria-label="АЗС Хаб, на главную">
+      <svg class="logo__mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" fill="#14233B"/><rect x="8" y="9" width="16" height="6" rx="1.5" fill="#F2A900"/><rect x="8" y="18" width="7" height="5" rx="1.5" fill="#F2A900" opacity=".55"/><rect x="17" y="18" width="7" height="5" rx="1.5" fill="#F2A900" opacity=".55"/></svg>
+      <span>АЗС Хаб</span>
+    </a>
+    <nav class="top__nav" aria-label="Разделы">
+      <a href="#vozmozhnosti">Возможности</a>
+      <a href="#podklyuchenie">Подключение</a>
+      <a href="#cena">Цена</a>
+      <a href="#voprosy">Вопросы</a>
+    </nav>
+    <div class="top__actions">
+      <a class="link-quiet" href="https://topaz.08u.ru/">Войти</a>
+      <a class="btn btn--small" href="#zayavka">Попробовать</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="wrap hero__in">
+    <div class="hero__text">
+      <h1>Все ваши АЗС на&nbsp;одном экране</h1>
+      <p class="lead">АЗС Хаб берёт данные из АСУ «Топаз-АЗС» и показывает выручку, маржу, резервуары и работу операторов — на компьютере и в телефоне. Недостачу при сливе вы увидите в тот же день, а не в конце месяца.</p>
+      <div class="hero__cta">
+        <a class="btn" href="#zayavka">Попробовать 30 дней бесплатно</a>
+        <a class="link-strong" href="#podklyuchenie">Как подключиться</a>
+      </div>
+      <p class="hero__note">Подключим удалённо за один день. Карта не нужна.</p>
+    </div>
+
+    <figure class="pump" aria-label="Пример: итоги всей сети за сегодня — 18 426,5 литра, выручка 1 072 380 рублей, маржа 168 940 рублей">
+      <div class="pump__glass">
+        <div class="pump__head">
+          <span>Вся сеть, сегодня</span>
+          <span class="pump__live"><i aria-hidden="true"></i>сейчас</span>
+        </div>
+        <div class="pump__row">
+          <span class="pump__label">Литры</span>
+          <span class="pump__digits" data-count="18426.5" data-decimals="1"><b class="pump__ghost" aria-hidden="true">88888.8</b><b class="pump__value">18426.5</b></span>
+        </div>
+        <div class="pump__row">
+          <span class="pump__label">Выручка, ₽</span>
+          <span class="pump__digits" data-count="1072380"><b class="pump__ghost" aria-hidden="true">8888888</b><b class="pump__value">1072380</b></span>
+        </div>
+        <div class="pump__row pump__row--margin">
+          <span class="pump__label">Маржа, ₽</span>
+          <span class="pump__digits" data-count="168940"><b class="pump__ghost" aria-hidden="true">8888888</b><b class="pump__value">168940</b></span>
+        </div>
+        <ul class="pump__stations" aria-hidden="true">
+          <li><span>Центр</span><span>312 400 ₽</span></li>
+          <li><span>Северная</span><span>286 150 ₽</span></li>
+          <li class="is-alert"><span>Трасса М-4</span><span>недостача при сливе 180 л</span></li>
+        </ul>
+      </div>
+      <figcaption>Пример на демонстрационных данных</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="trust" aria-labelledby="trust-title">
+  <div class="wrap trust__in">
+    <h2 id="trust-title">Мы ничего не меняем в&nbsp;Топазе</h2>
+    <p>Программа на компьютере АЗС только читает базу Топаза — так же, как её читает сменный отчёт. Записать в неё она не может. Касса, колонки и оператор работают как раньше.</p>
+    <ul class="trust__facts">
+      <li>Данные хранятся на сервере в России</li>
+      <li>Вход по паролю и коду из приложения или по отпечатку пальца</li>
+      <li>Пропал интернет на АЗС — данные дождутся связи и придут позже</li>
+    </ul>
+  </div>
+</section>
+
+<section class="pains" aria-labelledby="pains-title">
+  <div class="wrap">
+    <h2 id="pains-title">Знакомо?</h2>
+    <ul class="pains__list">
+      <li>Выручку видите сразу, а сколько заработали, считаете вечером в Excel.</li>
+      <li>Недостачу при сливе замечаете через неделю, когда бензовоз давно уехал.</li>
+      <li>Что ночью происходит на дальней АЗС, знаете только со слов оператора.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="features" id="vozmozhnosti" aria-labelledby="features-title">
+  <div class="wrap">
+    <h2 id="features-title" class="visually-hidden">Возможности</h2>
+
+    <article class="feature">
+      <div class="feature__text">
+        <h3>Сколько вы заработали на&nbsp;самом деле</h3>
+        <p>Выручка и валовая маржа по каждой АЗС, виду топлива и товару магазина. Себестоимость топлива считается по средней закупочной цене в резервуаре, НДС учтён.</p>
+        <ul>
+          <li>маржа на литр и её изменение к прошлому периоду</li>
+          <li>наличные, карты, договоры и топливные карты отдельно</li>
+          <li>сколько внесено в кассы и сколько выдано</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="img/money.png" width="1440" height="900" loading="lazy" alt="Экран «Маржа и деньги»: выручка, себестоимость и маржа по топливу и магазину"></div>
+    </article>
+
+    <article class="feature">
+      <div class="feature__text">
+        <h3>Сервис сам замечает подозрительное</h3>
+        <p>Каждую минуту АЗС Хаб проверяет свежие данные и сразу пишет в Telegram вам или управляющему. Пороги проверок вы настраиваете сами.</p>
+        <ul>
+          <li>разрыв счётчиков колонки между сменами</li>
+          <li>недостача при сливе топлива</li>
+          <li>много прерванных наливов у одного оператора</li>
+          <li>отпуск без оплаты, долгая смена, АЗС без связи</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="img/control.png" width="1440" height="900" loading="lazy" alt="Экран «Контроль»: список событий с важностью и ссылкой на смену"></div>
+    </article>
+
+    <article class="feature">
+      <div class="feature__text">
+        <h3>Когда заказать топливо и&nbsp;сколько</h3>
+        <p>По каждому резервуару: остаток, расход в день, на сколько дней хватит и до какого числа заказать. Где стоит уровнемер — потери по замерам при каждом закрытии смены.</p>
+        <ul>
+          <li>самые срочные резервуары первыми</li>
+          <li>приём топлива: по документам и по замеру</li>
+          <li>напоминание в Telegram, когда пора заказывать</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="img/tanks.png" width="1440" height="900" loading="lazy" alt="Экран «Резервуары»: карточки с остатком, расходом и датой заказа"></div>
+    </article>
+
+    <article class="feature">
+      <div class="feature__text">
+        <h3>Каждая смена — как в&nbsp;отчёте Топаза</h3>
+        <p>Сменные итоги считаются по тем же правилам, что и сменный отчёт Топаза. Мы сверяли их с выгрузками самого Топаза.</p>
+        <ul>
+          <li>наличные в кассе на конец смены</li>
+          <li>каждый отпуск: время, рукав, способ оплаты</li>
+          <li>кто работал на каком рабочем месте</li>
+          <li>статистика по операторам</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="img/shift.png" width="1440" height="900" loading="lazy" alt="Карточка смены: выручка, топливо, магазин и наличные в кассе"></div>
+    </article>
+
+    <div class="more">
+      <h3>И ещё</h3>
+      <dl class="more__list">
+        <div><dt>Магазин</dt><dd>что продаётся лучше, что лежит без движения, чего нет на полке</dd></div>
+        <div><dt>Закупка</dt><dd>список, что купить в ближайшую поездку, сразу на все АЗС, с бюджетом</dd></div>
+        <div><dt>Спрос</dt><dd>в какие дни и часы едут клиенты, прогноз продаж на две недели</dd></div>
+        <div><dt>План-факт</dt><dd>месячный план по литрам или выручке и прогноз на конец месяца</dd></div>
+        <div><dt>Сравнение АЗС</dt><dd>все заправки рядом по любому показателю</dd></div>
+        <div><dt>Сотрудники</dt><dd>управляющий видит только свои АЗС, наблюдатель — без закупочных цен и маржи</dd></div>
+        <div><dt>Excel</dt><dd>любую таблицу можно выгрузить одной кнопкой</dd></div>
+        <div><dt>Телефон</dt><dd>всё работает в браузере телефона, ничего устанавливать не нужно</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="steps" id="podklyuchenie" aria-labelledby="steps-title">
+  <div class="wrap">
+    <h2 id="steps-title">Подключение за один день</h2>
+    <ol class="steps__list">
+      <li>
+        <h3>Вы оставляете заявку</h3>
+        <p>Мы перезваниваем, отвечаем на вопросы и договариваемся о времени.</p>
+      </li>
+      <li>
+        <h3>Мы ставим программу удалённо</h3>
+        <p>Около 15 минут на каждую АЗС. Нужен только удалённый доступ к компьютеру с Топазом, касса не останавливается.</p>
+      </li>
+      <li>
+        <h3>Вы видите свои данные</h3>
+        <p>Сервис загружает историю, которая есть в базе Топаза, а дальше обновляется каждую минуту.</p>
+      </li>
+    </ol>
+    <div class="reqs">
+      <h3>Что нужно на АЗС</h3>
+      <ul>
+        <li>АСУ «Топаз-АЗС» на компьютере АЗС</li>
+        <li>Windows 10 или новее (Windows 7 не подходит)</li>
+        <li>Любой интернет, хватит и мобильного</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="price" id="cena" aria-labelledby="price-title">
+  <div class="wrap price__in">
+    <div class="price__main">
+      <h2 id="price-title">Цена</h2>
+      <p class="price__figure"><span class="price__digits">3000</span><span class="price__unit">₽ в месяц<br>за одну АЗС</span></p>
+      <p class="price__first">Первые 30 дней бесплатно</p>
+    </div>
+    <ul class="price__terms">
+      <li>Все возможности, сколько угодно сотрудников</li>
+      <li>При оплате за год — два месяца в подарок: 30 000 ₽ за АЗС</li>
+      <li>Подключение и настройка бесплатно</li>
+      <li>Оплата по счёту, НДС не облагается</li>
+      <li>Отказаться можно в любой момент: удалим программу и данные</li>
+    </ul>
+  </div>
+</section>
+
+<section class="faq" id="voprosy" aria-labelledby="faq-title">
+  <div class="wrap faq__in">
+    <h2 id="faq-title">Вопросы</h2>
+    <div class="faq__list">
+      <details>
+        <summary>Нужно ли что-то менять в Топазе?</summary>
+        <p>Нет. Программа только читает базу, ничего в ней не меняет и не мешает работе кассы. Настройки Топаза, отчёты и обмен с офисом остаются как были.</p>
+      </details>
+      <details>
+        <summary>Что будет, если на АЗС пропадёт интернет?</summary>
+        <p>Программа сохранит данные на компьютере АЗС и отправит их, когда связь вернётся. Ничего не потеряется, а в сервисе будет видно, сколько АЗС была без связи.</p>
+      </details>
+      <details>
+        <summary>Совпадут ли цифры с отчётами Топаза?</summary>
+        <p>Сменные итоги считаются по правилам сменного отчёта Топаза: так же учитываются виды оплаты, скидки и наличные в кассе. Если на вашей АЗС что-то настроено необычно, покажем, где разница, и поправим.</p>
+      </details>
+      <details>
+        <summary>Кто увидит мои данные?</summary>
+        <p>Только вы и сотрудники, которым вы дадите доступ. Управляющий видит только свои АЗС, наблюдатель не видит закупочных цен и маржи. Данные разных клиентов разделены, сервер находится в России.</p>
+      </details>
+      <details>
+        <summary>Вы связаны с компанией «Топаз-Электро»?</summary>
+        <p>Нет. АЗС Хаб — независимый сервис, который работает с базой АСУ «Топаз-АЗС». Ваш договор с «Топаз-Электро» и его поддержка не меняются.</p>
+      </details>
+      <details>
+        <summary>Что будет после пробного месяца?</summary>
+        <p>Если сервис вам нужен, выставим счёт — ежемесячно или за год. Если нет, удалим программу с компьютеров АЗС и ваши данные с сервера.</p>
+      </details>
+      <details>
+        <summary>Можно подключить только одну АЗС?</summary>
+        <p>Да. Цена считается за каждую АЗС, подключать можно по одной.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="lead-form" id="zayavka" aria-labelledby="form-title">
+  <div class="wrap lead-form__in">
+    <div class="lead-form__text">
+      <h2 id="form-title">Попробуйте 30 дней бесплатно</h2>
+      <p>Оставьте контакт — перезвоним в течение рабочего дня, ответим на вопросы и подключим первую АЗС.</p>
+      <p class="lead-form__alt">Или напишите сами: <a href="https://t.me/[telegram]">Telegram</a>, <a href="mailto:hello@azshub.ru">hello@azshub.ru</a></p>
+    </div>
+    <form class="form" id="lead" novalidate>
+      <label class="field">
+        <span>Как вас зовут</span>
+        <input name="name" autocomplete="name" required maxlength="100">
+      </label>
+      <label class="field">
+        <span>Телефон или Telegram</span>
+        <input name="contact" autocomplete="tel" required maxlength="100" placeholder="+7 900 000-00-00 или @имя">
+      </label>
+      <div class="form__pair">
+        <label class="field">
+          <span>Сколько у вас АЗС</span>
+          <input name="stations" type="number" inputmode="numeric" min="1" max="10000">
+        </label>
+        <label class="field">
+          <span>Город <small>необязательно</small></span>
+          <input name="city" autocomplete="address-level2" maxlength="100">
+        </label>
+      </div>
+      <label class="field field--trap" aria-hidden="true">
+        <span>Сайт</span>
+        <input name="website" tabindex="-1" autocomplete="off">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="consent" required>
+        <span>Согласен на обработку персональных данных по <a href="privacy.html" target="_blank">политике</a></span>
+      </label>
+      <button class="btn btn--wide" type="submit">Оставить заявку</button>
+      <p class="form__status" role="status" aria-live="polite"></p>
+    </form>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__in">
+    <div>
+      <p class="foot__brand">АЗС Хаб</p>
+      <p>ИП [Фамилия Имя Отчество], ИНН [000000000000], ОГРНИП [000000000000000]</p>
+    </div>
+    <div>
+      <p><a href="mailto:hello@azshub.ru">hello@azshub.ru</a></p>
+      <p><a href="https://t.me/[telegram]">Telegram</a></p>
+    </div>
+    <div>
+      <p><a href="privacy.html">Политика обработки персональных данных</a></p>
+      <p><a href="https://topaz.08u.ru/">Вход для клиентов</a></p>
+    </div>
+    <p class="foot__note">АЗС Хаб не связан с ООО «Топаз-Электро». «Топаз» — товарный знак его правообладателя, упоминается только для описания совместимости.</p>
+  </div>
+</footer>
+
+<script src="site.js" defer data-metrika=""></script>
+</body>
+</html>

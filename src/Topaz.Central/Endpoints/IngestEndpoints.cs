@@ -24,6 +24,12 @@ public static class IngestEndpoints
             ToResult(await regs.CreateAsync(body, ClientIp(ctx)))).RequireRateLimiting("registration");
         api.MapPost("/registrations/claim", async (RegistrationClaimRequest body, HttpContext ctx, Registrations regs) =>
             ToResult(await regs.ClaimAsync(body, ClientIp(ctx)))).RequireRateLimiting("registration-claim");
+        // Public site form (site/; Caddy maps the site's /api/leads here).
+        api.MapPost("/leads", async (LeadRequest body, HttpContext ctx, Leads leads) =>
+        {
+            var o = await leads.CreateAsync(body, ClientIp(ctx), ctx.Request.Headers.UserAgent.ToString());
+            return o.Error is null ? Results.StatusCode(o.Status) : Results.Problem(statusCode: o.Status, title: o.Error);
+        }).RequireRateLimiting("lead");
 
         var station = api.MapGroup("").AddEndpointFilter<StationAuthFilter>().RequireRateLimiting("station");
         station.MapPost("/batches", ReceiveBatch);

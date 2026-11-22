@@ -70,16 +70,31 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
+  # Public site (../../site, the landing at SITE_DOMAIN): static files only, behind Caddy; its request form
+  # goes to central through Caddy (/api/leads). Editing site/ needs no rebuild.
+  site:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ../../site:/usr/share/nginx/html:ro
+      - ./site-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [frontend]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run, /tmp]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
-    depends_on: [central]
+    depends_on: [central, site]
     ports:
       - "80:80"
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (Let's Encrypt account)}
+      SITE_DOMAIN: ${SITE_DOMAIN:-http://site.localhost}   # public site (azshub.ru); unset = only a local placeholder address
       TOPAZ_ADMIN_ALLOW_IPS: ${TOPAZ_ADMIN_ALLOW_IPS:-127.0.0.1/32}   # admin/export API from these IPs only
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

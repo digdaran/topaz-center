@@ -40,3 +40,44 @@
 		format json
 	}
 }
+
+# Public site (landing, container "site", files in ../../site). Its request form posts to /api/leads, which goes to
+# central's POST /api/v1/leads; no other API is reachable from this address.
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	@lead {
+		method POST
+		path /api/leads
+	}
+	handle @lead {
+		rewrite * /api/v1/leads
+		reverse_proxy central:8080 {
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+	handle /api/* {
+		respond 404
+	}
+	handle {
+		reverse_proxy site:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# Яндекс Метрика: tag.js from mc.yandex.ru, beacons to mc.yandex.ru/ru (no Webvisor).
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://mc.yandex.ru https://yastatic.net; img-src 'self' data: https://mc.yandex.ru https://mc.yandex.com; connect-src 'self' https://mc.yandex.ru https://mc.yandex.com; frame-src https://mc.yandex.ru https://mc.yandex.com; style-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/site-access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format json
+	}
+}
