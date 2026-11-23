@@ -112,7 +112,7 @@ public sealed class TelegramBot(NpgsqlDataSource db, TelegramApi telegram, IOpti
         if (command == "/start" && arg is not null) await LinkAsync(c, chat, isPrivate ? "personal" : "group", m["chat"]?["title"]?.GetValue<string>(), arg, ct);
         else if (command == "/start" && isPrivate)
             await telegram.SendAsync(chat, "Это бот уведомлений АЗС Хаб. Чтобы получать уведомления, откройте в АЗС Хаб " +
-                                           "<b>Настройки → Уведомления в Telegram</b> и нажмите «Подключить Telegram».", ct);
+                                           "<b>Контроль → Telegram</b> и нажмите «Подключить Telegram».", ct);
         else if (command == "/stop" && isPrivate)
         {
             var n = await c.ExecuteAsync("DELETE FROM notification_channels WHERE target = @chat AND user_id IS NOT NULL", new { chat });

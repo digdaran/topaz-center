@@ -109,6 +109,8 @@ export interface Meta {
   unpriced_receipts: number;
   /** connection requests of new agents (owners and superadmins) */
   pending_registrations: number;
+  /** site requests not marked as handled (superadmins) */
+  new_leads: number;
   item_groups: string[];
   payment_modes: string[];
   data_range: { first_sale: string | null; last_sale: string | null };

@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using Dapper;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Topaz.Central.Ui;
 using Xunit;
 
 namespace Topaz.Central.Tests;
@@ -83,5 +85,47 @@ public sealed class LeadTests(CentralFixture fx) : IClassFixture<CentralFixture>
         await c.ExecuteAsync("SET LOCAL ROLE topaz_ui", transaction: tx);
         var e = await Assert.ThrowsAsync<PostgresException>(() => c.ExecuteScalarAsync<long>("SELECT count(*) FROM leads", transaction: tx));
         Assert.Equal("42501", e.SqlState); // insufficient_privilege
+    }
+
+    [PostgresFact]
+    public async Task The_superadmin_sees_requests_in_the_web_interface_and_marks_them_handled()
+    {
+        var site = fx.Client();
+        site.DefaultRequestHeaders.Add("X-Forwarded-For", "198.51.100.10");
+        Assert.Equal(HttpStatusCode.Created, (await site.PostAsJsonAsync("/api/v1/leads", Lead("Пётр Веб"))).StatusCode);
+        var id = await fx.QueryAsync<long>("SELECT id FROM leads WHERE name = 'Пётр Веб'");
+
+        var super = await LoginAsync("lead-super", Roles.Superadmin);
+        var list = (await super.GetFromJsonAsync<JsonArray>("/api/v1/ui/leads"))!;
+        var row = list.Single(l => l!["id"]!.GetValue<long>() == id)!;
+        Assert.Equal("+7 900 123-45-67", row["contact"]!.GetValue<string>());
+        Assert.Null(row["handled_at"]);
+        var before = (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>();
+        Assert.True(before >= 1);
+
+        (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = true })).EnsureSuccessStatusCode();
+        Assert.Equal("lead-super", await fx.QueryAsync<string>("SELECT handled_by FROM leads WHERE id = @id", new { id }));
+        Assert.Equal(before - 1, (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>());
+        Assert.Contains("lead_handled", await super.GetStringAsync("/api/v1/ui/audit"));
+        (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = false })).EnsureSuccessStatusCode();
+        Assert.Null(await fx.QueryAsync<DateTime?>("SELECT handled_at FROM leads WHERE id = @id", new { id }));
+        Assert.Equal(HttpStatusCode.NotFound, (await super.PostAsJsonAsync("/api/v1/ui/leads/999999999/status", new { handled = true })).StatusCode);
+
+        // Prospects are platform data: an owner neither reads them nor sees their count.
+        var owner = await LoginAsync("lead-owner", Roles.Owner, await fx.QueryAsync<Guid>("SELECT id FROM organizations ORDER BY created_at LIMIT 1"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.GetAsync("/api/v1/ui/leads")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = true })).StatusCode);
+        Assert.Equal(0, (await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>());
+    }
+
+    private async Task<HttpClient> LoginAsync(string login, string role, Guid? org = null)
+    {
+        const string password = "lead-password-1";
+        var users = fx.Factory!.Services.GetRequiredService<UserService>();
+        try { await users.CreateAsync(login, login, role, password, [], org); } catch (PostgresException) { /* exists */ }
+        var c = fx.Factory.CreateClient();
+        c.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
+        (await c.PostAsJsonAsync("/api/v1/ui/auth/login", new { login, password })).EnsureSuccessStatusCode();
+        return c;
     }
 }

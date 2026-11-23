@@ -109,6 +109,14 @@ export function AttentionPanel({ problems }: { problems: StationProblem[] }) {
       to: '/platform/connect', action: 'Открыть заявки',
     });
   }
+  const leads = isSuper(me) ? meta.data?.new_leads ?? 0 : 0;
+  if (leads > 0) {
+    items.push({
+      key: 'leads', tone: 'info', title: <>Новые заявки с сайта: {leads}</>,
+      lines: ['Перезвоните и отметьте заявку как обработанную.'],
+      to: '/platform/leads', action: 'Открыть заявки с сайта',
+    });
+  }
 
   const color = { critical: token.colorError, warning: token.colorWarning, info: token.colorInfo };
   const loading = alerts.isLoading || tanks.isLoading;

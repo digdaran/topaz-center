@@ -94,11 +94,12 @@ export const SECTIONS: NavSection[] = [
   { path: '/help', label: 'Помощь', icon: <QuestionCircleOutlined />, group: 'service' },
   {
     path: '/platform', label: 'Платформа', icon: <ClusterOutlined />, group: 'platform', roles: ['superadmin'],
-    description: 'Для всего сервера: организации, подключение новых АЗС и обновление агентов',
+    description: 'Для всего сервера: организации, подключение новых АЗС, обновление агентов и заявки с сайта',
     tabs: [
       { key: 'organizations', label: 'Организации' },
       { key: 'connect', label: 'Подключение АЗС' },
       { key: 'updates', label: 'Обновление агентов' },
+      { key: 'leads', label: 'Заявки с сайта' },
     ],
   },
 ];

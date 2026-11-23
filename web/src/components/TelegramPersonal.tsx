@@ -17,7 +17,7 @@ export function openTelegram(url: string) {
   window.open(url, '_blank', 'noopener');
 }
 
-/** «Настройки → Уведомления в Telegram»: the user's own chat with the bot, linked by a one-time link. */
+/** «Контроль → Telegram → Мой Telegram»: the user's own chat with the bot, linked by a one-time link. */
 export function TelegramPersonal() {
   const { message } = App.useApp();
   const qc = useQueryClient();

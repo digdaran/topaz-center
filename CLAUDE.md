@@ -81,7 +81,7 @@ Auth: stations connect by request (docs/architecture.md 2.6): the agent sends `P
 ## Public site (site/)
 
 The product is sold as «АЗС Хаб». The landing at `azshub.ru` lives in `site/`. It is plain HTML/CSS/JS with no build step and self-hosted fonts (no Google Fonts: 152-ФЗ). The `site` container (nginx, read-only mount) serves it behind the same Caddy (`SITE_DOMAIN`). Its form posts `/api/leads`, and Caddy rewrites that to central `POST /api/v1/leads` (`Processing/Leads.cs`).
-- Leads are platform data: table `leads` is revoked from `topaz_ui`, and `LeadNotifier` sends them only to superadmin and platform Telegram chats.
+- Leads are platform data: table `leads` is revoked from `topaz_ui`, and `LeadNotifier` sends them only to superadmin and platform Telegram chats. The UI shows them only to superadmins («Платформа → Заявки с сайта», `Ui/LeadEndpoints.cs`, system pool).
 - Screenshots in `site/img` come from `tools/DemoData`, never from real stations.
 - Claims on the page (price, requirements, «только чтение») must stay true when the product changes.
 

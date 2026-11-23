@@ -44,6 +44,7 @@ function Shell({ children }: { children: ReactNode }) {
   const meta = useMeta();
   const unmapped = isOwner(me) ? meta.data?.unmapped_fuels ?? 0 : 0;
   const requests = isSuper(me) ? meta.data?.pending_registrations ?? 0 : 0;
+  const leads = isSuper(me) ? meta.data?.new_leads ?? 0 : 0;
   const unpriced = meta.data?.unpriced_receipts ?? 0;
   const helpNew = useHelpUnseen();
   const counts = alerts.data?.counts;
@@ -51,7 +52,7 @@ function Shell({ children }: { children: ReactNode }) {
     '/control': withBadge('Контроль', counts?.new, counts && counts.critical > 0 ? 'red' : 'orange', 'Новые события'),
     '/money': withBadge('Деньги', unpriced, 'orange', 'Сливы топлива без закупочной цены'),
     '/settings': withBadge('Настройки', unmapped, 'orange', 'Топливо АЗС ждёт сопоставления со справочником'),
-    '/platform': withBadge('Платформа', requests, 'red', 'АЗС ожидают подключения'),
+    '/platform': withBadge('Платформа', requests + leads, requests ? 'red' : 'orange', [requests && 'АЗС ожидают подключения', leads && 'Новые заявки с сайта'].filter(Boolean).join(', ')),
     '/help': withBadge('Помощь', helpNew ? 'новое' : undefined, 'blue', 'Вышло обновление — посмотрите «Что нового»'),
   };
   const visible = SECTIONS.filter((s) => allowed(s.roles, me.role));
