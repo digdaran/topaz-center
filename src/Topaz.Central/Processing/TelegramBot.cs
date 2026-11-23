@@ -111,12 +111,12 @@ public sealed class TelegramBot(NpgsqlDataSource db, TelegramApi telegram, IOpti
 
         if (command == "/start" && arg is not null) await LinkAsync(c, chat, isPrivate ? "personal" : "group", m["chat"]?["title"]?.GetValue<string>(), arg, ct);
         else if (command == "/start" && isPrivate)
-            await telegram.SendAsync(chat, "Это бот уведомлений Topaz Center. Чтобы получать уведомления, откройте в Топаз Центре " +
+            await telegram.SendAsync(chat, "Это бот уведомлений АЗС Хаб. Чтобы получать уведомления, откройте в АЗС Хаб " +
                                            "<b>Настройки → Уведомления в Telegram</b> и нажмите «Подключить Telegram».", ct);
         else if (command == "/stop" && isPrivate)
         {
             var n = await c.ExecuteAsync("DELETE FROM notification_channels WHERE target = @chat AND user_id IS NOT NULL", new { chat });
-            await telegram.SendAsync(chat, n > 0 ? "Уведомления Topaz Center отключены. Подключить снова можно в Топаз Центре." : "Этот чат не подключён к Topaz Center.", ct);
+            await telegram.SendAsync(chat, n > 0 ? "Уведомления АЗС Хаб отключены. Подключить снова можно в АЗС Хаб." : "Этот чат не подключён к АЗС Хаб.", ct);
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class TelegramBot(NpgsqlDataSource db, TelegramApi telegram, IOpti
         {
             await telegram.SendAsync(chat, "Ссылка не подошла: она одноразовая и действует 15 минут" +
                                            (kind == "group" ? ", а эта, возможно, для личного чата" : ", а эта, возможно, для группы") +
-                                           ". Создайте новую в Топаз Центре.", ct);
+                                           ". Создайте новую в АЗС Хаб.", ct);
             return;
         }
         string reply;
@@ -149,7 +149,7 @@ public sealed class TelegramBot(NpgsqlDataSource db, TelegramApi telegram, IOpti
                 ON CONFLICT (user_id) DO UPDATE SET target = EXCLUDED.target, title = EXCLUDED.title, enabled = true,
                     organization_id = EXCLUDED.organization_id, min_severity = EXCLUDED.min_severity, daily_digest = EXCLUDED.daily_digest
                 """, new { link.UserId, link.OrganizationId, chat, title = "Личный: " + link.UserName, link.MinSeverity, link.DailyDigest });
-            reply = $"✅ Готово, {System.Net.WebUtility.HtmlEncode(link.UserName)}: уведомления Topaz Center по вашим АЗС будут приходить сюда.\nОтключить: команда /stop или кнопка в настройках Топаз Центра.";
+            reply = $"✅ Готово, {System.Net.WebUtility.HtmlEncode(link.UserName)}: уведомления АЗС Хаб по вашим АЗС будут приходить сюда.\nОтключить: команда /stop или кнопка в настройках АЗС Хаб.";
         }
         else
         {
@@ -159,7 +159,7 @@ public sealed class TelegramBot(NpgsqlDataSource db, TelegramApi telegram, IOpti
                 ON CONFLICT (organization_id, target) WHERE user_id IS NULL
                 DO UPDATE SET title = EXCLUDED.title, enabled = true, min_severity = EXCLUDED.min_severity, daily_digest = EXCLUDED.daily_digest
                 """, new { link.OrganizationId, chat, title = groupTitle ?? "Группа", link.MinSeverity, link.DailyDigest });
-            reply = "✅ Готово: уведомления Topaz Center будут приходить в эту группу.";
+            reply = "✅ Готово: уведомления АЗС Хаб будут приходить в эту группу.";
         }
         await Audit.WriteAsync(db, link.UserId, link.Login, "telegram_linked", "telegram:" + kind, new { kind }, link.OrganizationId);
         await telegram.SendAsync(chat, reply, ct);

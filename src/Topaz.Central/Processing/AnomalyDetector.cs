@@ -734,7 +734,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
     private static string Format(IReadOnlyList<Pending> alerts)
     {
         var icon = new Dictionary<string, string> { ["critical"] = "🔴", ["warning"] = "🟠", ["info"] = "🔵" };
-        var sb = new StringBuilder("<b>Topaz Center: новые события</b>\n");
+        var sb = new StringBuilder("<b>АЗС Хаб: новые события</b>\n");
         foreach (var a in alerts.OrderByDescending(a => SeverityRank[a.Severity]).Take(15))
             sb.Append('\n').Append(icon[a.Severity]).Append(" <b>").Append(WebUtility.HtmlEncode(a.Station)).Append("</b>: ")
               .Append(WebUtility.HtmlEncode(a.Title)).Append(a.Details is null ? "" : "\n<i>" + WebUtility.HtmlEncode(a.Details) + "</i>");
@@ -763,7 +763,7 @@ public sealed class AnomalyDetector(NpgsqlDataSource db, TelegramApi telegram, I
                 FROM v_station_status v JOIN stations s ON s.id = v.id WHERE v.status = 'active' AND (@org::uuid IS NULL OR s.organization_id = @org)
                   AND (@ids::uuid[] IS NULL OR s.id = ANY(@ids))
                 """, new { org, ids });
-            var text = $"<b>Topaz Center: сводка за сутки</b>\nСобытий: 🔴 {counts.GetValueOrDefault("critical")} · 🟠 {counts.GetValueOrDefault("warning")} · 🔵 {counts.GetValueOrDefault("info")}\n" +
+            var text = $"<b>АЗС Хаб: сводка за сутки</b>\nСобытий: 🔴 {counts.GetValueOrDefault("critical")} · 🟠 {counts.GetValueOrDefault("warning")} · 🔵 {counts.GetValueOrDefault("info")}\n" +
                        $"АЗС на связи: {stations.Total - stations.Silent} из {stations.Total}";
             if (await SendAsync(c, ch, text, ct))
                 await c.ExecuteAsync("UPDATE notification_channels SET last_digest = @d WHERE id = @id", new { d = msk.Date, id = ch.Id });

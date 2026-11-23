@@ -83,7 +83,7 @@ export default function LoginPage() {
       <Card style={{ width: 380, maxWidth: '100%' }}>
         <Flex vertical align="center" gap={4} style={{ marginBottom: 24 }}>
           <BarChartOutlined style={{ fontSize: 36, color: '#1668dc' }} />
-          <Typography.Title level={3} style={{ margin: 0 }}>Topaz Center</Typography.Title>
+          <Typography.Title level={3} style={{ margin: 0 }}>АЗС Хаб</Typography.Title>
           {atConsole
             ? <Tag color="gold" style={{ marginInlineEnd: 0 }}>Консоль администратора сервиса</Tag>
             : <Typography.Text type="secondary">Данные и аналитика АЗС</Typography.Text>}

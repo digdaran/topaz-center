@@ -68,7 +68,7 @@ public sealed class PasskeyChallenges(IDataProtectionProvider provider, IMemoryC
 /// </summary>
 public static class PasskeyEndpoints
 {
-    private const string RpName = "Topaz Center";
+    private const string RpName = "АЗС Хаб";
     private const int TimeoutMs = 120_000;
 
     public static void MapUiPasskeys(this RouteGroupBuilder ui)

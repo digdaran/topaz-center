@@ -345,7 +345,7 @@ public static class ControlEndpoints
 
     private static async Task<IResult> TestAsync(TelegramApi telegram, string target, CancellationToken ct)
     {
-        var r = await telegram.SendAsync(target, "✅ Topaz Center: тестовое сообщение. Уведомления работают.", ct);
+        var r = await telegram.SendAsync(target, "✅ АЗС Хаб: тестовое сообщение. Уведомления работают.", ct);
         return r.Ok ? Results.NoContent() : Results.Problem(statusCode: 502, title: "Telegram не принял сообщение: проверьте, что бот есть в чате и не заблокирован");
     }
 

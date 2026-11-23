@@ -87,7 +87,7 @@ function Shell({ children }: { children: ReactNode }) {
   const asClient = me.console && sectionOf(location.pathname)?.group === 'main';
   const brand = (
     <>
-      <Typography.Text strong style={{ whiteSpace: 'nowrap', ...(desktop ? { fontSize: 16 } : {}) }}>Topaz Center</Typography.Text>
+      <Typography.Text strong style={{ whiteSpace: 'nowrap', ...(desktop ? { fontSize: 16 } : {}) }}>АЗС Хаб</Typography.Text>
       {me.console && <Tag color="gold" style={{ marginInlineEnd: 0, paddingInline: 5 }}>консоль</Tag>}
     </>
   );
@@ -144,7 +144,7 @@ function Shell({ children }: { children: ReactNode }) {
           <PageErrorBoundary resetKey={location.pathname}>{moved ? <Navigate to={moved} replace /> : children}</PageErrorBoundary>
         </Layout.Content>
       </Layout>
-      <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="Topaz Center" styles={{ body: { padding: 0 } }}
+      <Drawer open={drawer} onClose={() => setDrawer(false)} placement="left" width={260} title="АЗС Хаб" styles={{ body: { padding: 0 } }}
         footer={<VersionLabel />}>
         {menu}
       </Drawer>

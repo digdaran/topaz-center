@@ -23,7 +23,7 @@ export default function ProfilePage() {
   };
   return (
     <>
-    <PageTitle title="Профиль" description={`${me.name} · вход в Topaz Center: пароль, код из приложения, отпечаток или лицо`} />
+    <PageTitle title="Профиль" description={`${me.name} · вход в АЗС Хаб: пароль, код из приложения, отпечаток или лицо`} />
     <Flex gap={16} wrap align="start">
     <Card size="small" title="Пароль" style={{ width: 420, maxWidth: '100%' }}>
       <Form form={form} layout="vertical" onFinish={submit}>

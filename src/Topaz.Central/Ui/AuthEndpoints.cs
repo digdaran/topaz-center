@@ -64,7 +64,7 @@ public static class AuthEndpoints
 
     /// <summary>Between the password and the code: who passed the password step (encrypted, 5 minutes).</summary>
     public const string TicketCookie = "topaz_ui_2fa";
-    private const string Issuer = "Topaz Center";
+    private const string Issuer = "АЗС Хаб";
 
     private static CookieOptions TicketCookieOptions(HttpContext ctx, IOptions<CentralOptions> options) => new()
     {
