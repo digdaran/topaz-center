@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Topaz.Central.Processing;
 using Topaz.Central.Ui;
 using Xunit;
 
@@ -88,7 +89,7 @@ public sealed class LeadTests(CentralFixture fx) : IClassFixture<CentralFixture>
     }
 
     [PostgresFact]
-    public async Task The_superadmin_sees_requests_in_the_web_interface_and_marks_them_handled()
+    public async Task The_superadmin_moves_a_request_through_stages_notes_it_and_deletes_it()
     {
         var site = fx.Client();
         site.DefaultRequestHeaders.Add("X-Forwarded-For", "198.51.100.10");
@@ -96,26 +97,81 @@ public sealed class LeadTests(CentralFixture fx) : IClassFixture<CentralFixture>
         var id = await fx.QueryAsync<long>("SELECT id FROM leads WHERE name = 'Пётр Веб'");
 
         var super = await LoginAsync("lead-super", Roles.Superadmin);
-        var list = (await super.GetFromJsonAsync<JsonArray>("/api/v1/ui/leads"))!;
-        var row = list.Single(l => l!["id"]!.GetValue<long>() == id)!;
+        var row = (await super.GetFromJsonAsync<JsonArray>("/api/v1/ui/leads"))!.Single(l => l!["id"]!.GetValue<long>() == id)!;
         Assert.Equal("+7 900 123-45-67", row["contact"]!.GetValue<string>());
-        Assert.Null(row["handled_at"]);
+        Assert.Equal("new", row["stage"]!.GetValue<string>());
         var before = (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>();
         Assert.True(before >= 1);
 
-        (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = true })).EnsureSuccessStatusCode();
-        Assert.Equal("lead-super", await fx.QueryAsync<string>("SELECT handled_by FROM leads WHERE id = @id", new { id }));
+        (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "work", note = "перезвонить в пятницу" })).EnsureSuccessStatusCode();
         Assert.Equal(before - 1, (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>());
-        Assert.Contains("lead_handled", await super.GetStringAsync("/api/v1/ui/audit"));
-        (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = false })).EnsureSuccessStatusCode();
-        Assert.Null(await fx.QueryAsync<DateTime?>("SELECT handled_at FROM leads WHERE id = @id", new { id }));
-        Assert.Equal(HttpStatusCode.NotFound, (await super.PostAsJsonAsync("/api/v1/ui/leads/999999999/status", new { handled = true })).StatusCode);
+        Assert.Equal(("work", "lead-super", "перезвонить в пятницу"),
+            await fx.QueryAsync<(string, string, string)>("SELECT stage, stage_by, note FROM leads WHERE id = @id", new { id }));
+        // Changing only the note keeps the stage; the audit log does not get the note's text.
+        (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { note = "2 АЗС" })).EnsureSuccessStatusCode();
+        Assert.Equal("work", await fx.QueryAsync<string>("SELECT stage FROM leads WHERE id = @id", new { id }));
+        Assert.DoesNotContain("2 АЗС", await super.GetStringAsync("/api/v1/ui/audit"));
 
-        // Prospects are platform data: an owner neither reads them nor sees their count.
+        // A refusal needs a reason; "other" needs words.
+        Assert.Equal(HttpStatusCode.BadRequest, (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "refused" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "refused", refuse_reason = "other" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "lost" })).StatusCode);
+        (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "refused", refuse_reason = "price" })).EnsureSuccessStatusCode();
+        var month = await fx.QueryAsync<string>("SELECT to_char(created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') FROM leads WHERE id = @id", new { id });
+        var summary = (await super.GetFromJsonAsync<JsonObject>($"/api/v1/ui/leads/summary?month={month}"))!;
+        Assert.True(summary["stages"]!["refused"]!.GetValue<int>() >= 1);
+        Assert.True(summary["refuse_reasons"]!["price"]!.GetValue<int>() >= 1);
+        // Back to work: the reason is gone.
+        (await super.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "work" })).EnsureSuccessStatusCode();
+        Assert.Null(await fx.QueryAsync<string?>("SELECT refuse_reason FROM leads WHERE id = @id", new { id }));
+
+        // Prospects are platform data: an owner neither reads them, changes them nor sees their count.
         var owner = await LoginAsync("lead-owner", Roles.Owner, await fx.QueryAsync<Guid>("SELECT id FROM organizations ORDER BY created_at LIMIT 1"));
         Assert.Equal(HttpStatusCode.Forbidden, (await owner.GetAsync("/api/v1/ui/leads")).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync($"/api/v1/ui/leads/{id}/status", new { handled = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.GetAsync("/api/v1/ui/leads/summary")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.PatchAsJsonAsync($"/api/v1/ui/leads/{id}", new { stage = "work" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.DeleteAsync($"/api/v1/ui/leads/{id}")).StatusCode);
         Assert.Equal(0, (await owner.GetFromJsonAsync<JsonObject>("/api/v1/ui/meta"))!["new_leads"]!.GetValue<int>());
+
+        // Deleting erases the person's data; the log keeps only the number.
+        (await super.DeleteAsync($"/api/v1/ui/leads/{id}")).EnsureSuccessStatusCode();
+        Assert.Equal(0L, await fx.QueryAsync<long>("SELECT count(*) FROM leads WHERE id = @id", new { id }));
+        Assert.Equal(1L, await fx.QueryAsync<long>("SELECT count(*) FROM audit_log WHERE action = 'lead_deleted' AND entity = @e AND details IS NULL", new { e = "lead:" + id }));
+        Assert.Equal(HttpStatusCode.NotFound, (await super.DeleteAsync($"/api/v1/ui/leads/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await super.PatchAsJsonAsync("/api/v1/ui/leads/999999999", new { stage = "work" })).StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task A_request_waiting_a_day_is_reminded_once_and_old_refusals_are_erased()
+    {
+        var telegram = new ControlTests.FakeTelegram();
+        await using var app = fx.Factory!.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Topaz:TelegramBotToken", "123:secret");
+            b.UseSetting("Topaz:TelegramApiBase", "http://telegram.test");
+            b.UseSetting("Topaz:TelegramPolling", "false");
+            b.ConfigureTestServices(s => s.AddHttpClient("telegram").ConfigurePrimaryHttpMessageHandler(() => telegram));
+        });
+        await using (var c = new NpgsqlConnection(fx.ConnectionString))
+        {
+            await c.ExecuteAsync("""
+                INSERT INTO notification_channels (target, title, min_severity, daily_digest)
+                SELECT '-100777', 'Платформа 2', 'warning', false WHERE NOT EXISTS (SELECT 1 FROM notification_channels WHERE target = '-100777');
+                INSERT INTO leads (created_at, name, contact, consent_at, notified_at) VALUES (now() - interval '25 hours', 'Забытый', '+7 900 000-00-01', now(), now());
+                INSERT INTO leads (created_at, name, contact, consent_at, notified_at) VALUES (now() - interval '2 hours', 'Свежий', '+7 900 000-00-02', now(), now());
+                INSERT INTO leads (created_at, name, contact, consent_at, notified_at, stage) VALUES (now() - interval '25 hours', 'Позвонили', '+7 900 000-00-03', now(), now(), 'work');
+                INSERT INTO leads (created_at, name, contact, consent_at, notified_at, stage, stage_at, refuse_reason)
+                    VALUES (now() - interval '400 days', 'Старый отказ', '+7 900 000-00-04', now(), now(), 'refused', now() - interval '370 days', 'price');
+                """);
+        }
+        var notifier = app.Services.GetRequiredService<LeadNotifier>();
+        notifier.Wake();
+        for (var i = 0; i < 200 && await fx.QueryAsync<DateTime?>("SELECT reminded_at FROM leads WHERE name = 'Забытый'") is null; i++) await Task.Delay(50);
+        await notifier.RoundAsync(CancellationToken.None); // a second round sends no second reminder
+
+        Assert.Single(telegram.Sent, s => s.Body.StartsWith("-100777\n") && s.Body.Contains("Забытый") && s.Body.Contains("ждёт звонка"));
+        Assert.DoesNotContain(telegram.Sent, s => s.Body.Contains("Свежий") || s.Body.Contains("Позвонили"));
+        Assert.Equal(0L, await fx.QueryAsync<long>("SELECT count(*) FROM leads WHERE name = 'Старый отказ'"));
     }
 
     private async Task<HttpClient> LoginAsync(string login, string role, Guid? org = null)

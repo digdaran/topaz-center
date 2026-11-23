@@ -83,6 +83,8 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
     public static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
     public const int MaxAttempts = 1000; // about 16 hours of a Telegram outage
     public static readonly TimeSpan KeepFor = TimeSpan.FromDays(3 * 365); // privacy policy: kept up to three years
+    public static readonly TimeSpan KeepRefusedFor = TimeSpan.FromDays(365); // a refusal: a year after it
+    public static readonly TimeSpan RemindAfter = TimeSpan.FromHours(24); // the site promises a call within a working day
 
     private readonly SemaphoreSlim _wake = new(0, 1);
 
@@ -109,12 +111,18 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
     internal async Task RoundAsync(CancellationToken ct)
     {
         await using var c = await db.OpenConnectionAsync(ct);
-        await c.ExecuteAsync("DELETE FROM leads WHERE created_at < now() - @keep", new { keep = KeepFor });
+        await c.ExecuteAsync("DELETE FROM leads WHERE created_at < now() - @keep OR (stage = 'refused' AND stage_at < now() - @keepRefused)",
+            new { keep = KeepFor, keepRefused = KeepRefusedFor });
         if (!telegram.Configured) return;
         var leads = (await c.QueryAsync<Lead>(
             "SELECT id, created_at, name, contact, stations, city, comment, page FROM leads WHERE notified_at IS NULL AND notify_attempts < @max ORDER BY id LIMIT 20",
             new { max = MaxAttempts })).ToList();
-        if (leads.Count == 0) return;
+        // One reminder about a request still waiting for a call a day later (only after it was announced).
+        var waiting = (await c.QueryAsync<Lead>("""
+            SELECT id, created_at, name, contact, stations, city, comment, page FROM leads
+            WHERE stage = 'new' AND reminded_at IS NULL AND notified_at IS NOT NULL AND created_at < now() - @after ORDER BY id LIMIT 20
+            """, new { after = RemindAfter })).ToList();
+        if (leads.Count == 0 && waiting.Count == 0) return;
         var chats = (await c.QueryAsync<string>("""
             SELECT ch.target FROM notification_channels ch LEFT JOIN users u ON u.id = ch.user_id
             WHERE ch.enabled AND ((ch.user_id IS NULL AND ch.organization_id IS NULL) OR (u.role = 'superadmin' AND u.is_active))
@@ -131,12 +139,21 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
                 ? "UPDATE leads SET notified_at = now() WHERE id = @id"
                 : "UPDATE leads SET notify_attempts = notify_attempts + 1 WHERE id = @id", new { id = lead.Id });
         }
+        foreach (var lead in waiting)
+        {
+            var text = $"⏰ <b>Заявка №{lead.Id} ждёт звонка больше суток</b>\n{WebUtility.HtmlEncode(lead.Name)}: <code>{WebUtility.HtmlEncode(lead.Contact)}</code>\n" +
+                       "Отметьте этап в «Платформа → Заявки с сайта».";
+            var sent = false;
+            foreach (var chat in chats)
+                sent |= (await telegram.SendAsync(chat, text, ct)).Ok;
+            if (sent) await c.ExecuteAsync("UPDATE leads SET reminded_at = now() WHERE id = @id", new { id = lead.Id });
+        }
     }
 
     private static string Format(Lead l)
     {
         static string H(string s) => WebUtility.HtmlEncode(s);
-        var sb = new StringBuilder("📝 <b>Заявка с сайта</b>\n");
+        var sb = new StringBuilder($"📝 <b>Заявка с сайта №{l.Id}</b>\n");
         sb.Append("Имя: ").Append(H(l.Name)).Append('\n');
         sb.Append("Связь: <code>").Append(H(l.Contact)).Append("</code>\n");
         if (l.Stations is { } n) sb.Append("АЗС: ").Append(n).Append('\n');
