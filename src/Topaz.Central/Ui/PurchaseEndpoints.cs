@@ -17,7 +17,7 @@ public sealed record PurchaseListBody(DateTime TripDate, string? Note, PurchaseL
 /// </summary>
 public static class PurchaseEndpoints
 {
-    private static readonly CultureInfo Ru = CultureInfo.GetCultureInfo("ru-RU");
+    private static readonly NumberFormatInfo Ru = RuNumbers.Format;
 
     public static void MapUiPurchasing(this RouteGroupBuilder ui)
     {

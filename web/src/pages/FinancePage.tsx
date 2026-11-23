@@ -8,7 +8,7 @@ import { PayBreakdown, usePayColor } from '../components/PayBreakdown';
 import { bucketLabel, compact, int, liters, money, Num, pct } from '../lib/format';
 
 type R = Record<string, any>;
-interface Finance { filter: { g: string }; vat: { mode: string; rate: number }; fuel: R; shop: R; by_station: R[]; by_fuel: R[]; by_group: R[]; series: R[]; cash: R[] }
+interface Finance { filter: { g: string }; vat: { mode: string; rate: number }; fuel: R; shop: R; by_station: R[]; by_fuel: R[]; by_group: R[]; series: R[]; cash: R[]; payroll?: { total: number; accrued: number; bonus: number; fine: number } }
 
 const BIG = { fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } as const;
 
@@ -60,6 +60,10 @@ export default function FinancePage({ view = 'margin' }: { view?: 'margin' | 'co
                   <FigureList rows={[
                     { key: 'vat', label: 'Маржа считается', value: net ? `без НДС ${Number(data.vat.rate)} %` : 'с НДС', hint: <>Меняется в <Link to="/settings/organization">Настройки → Маржа и НДС</Link></> },
                     { key: 'fiscal', label: 'Продажи с чеком или по договору', value: revenue ? pct(fiscal / revenue) : '—', hint: `Доля выручки с фискальным чеком или по договору (ведомости, топливные карты)${net ? ': из неё вычитается НДС для маржи' : ''}` },
+                    ...(data.payroll ? [
+                      { key: 'pay', label: 'Зарплаты операторов', value: money(data.payroll.total), hint: <>Начислено за смены периода по схемам оплаты, с премиями и штрафами. <Link to="/money/payroll">Деньги → Зарплаты</Link></> },
+                      { key: 'after', label: 'Маржа после зарплат', value: noCosts ? '—' : money(margin - Number(data.payroll.total)), strong: true },
+                    ] : []),
                   ]} />
                 </Col>
               </Row>

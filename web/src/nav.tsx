@@ -45,11 +45,12 @@ export const SECTIONS: NavSection[] = [
   },
   {
     path: '/money', label: 'Деньги', icon: <WalletOutlined />, group: 'main', roles: MONEY_ROLES,
-    description: 'Маржа, деньги по дням, продажи по договорам и закупочные цены',
+    description: 'Маржа, деньги по дням, продажи по договорам, закупочные цены и зарплаты операторов',
     tabs: [
       { key: 'margin', label: 'Маржа и деньги' },
       { key: 'contracts', label: 'Договоры' },
       { key: 'costs', label: 'Себестоимость' },
+      { key: 'payroll', label: 'Зарплаты', roles: OWNER_ROLES },
     ],
   },
   {

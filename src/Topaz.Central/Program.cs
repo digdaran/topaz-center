@@ -197,6 +197,7 @@ ui.MapUiRegistrations();
 ui.MapUiLeads();
 ui.MapUiOrganizations();
 ui.MapUiPurchasing();
+ui.MapUiPayroll();
 // SPA client-side routes: GET only and never under /api. A 200 for an unknown API path would make an
 // agent with a misconfigured URL treat batches as delivered and drop them.
 app.MapFallback(async ctx =>

@@ -687,7 +687,8 @@ internal static class Sender
 
 /// <summary>
 /// What an owner would enter by hand, done in the demo's own database (idempotent, every round): purchase prices of
-/// every fuel delivery and of the goods (so margins are shown), confirmed fuel types, the organization's name.
+/// every fuel delivery and of the goods (so margins are shown), confirmed fuel types, the organization's name,
+/// schemes of pay (so the payroll is filled).
 /// </summary>
 internal static class DemoSetup
 {
@@ -734,6 +735,20 @@ internal static class DemoSetup
             INSERT INTO rollup_dirty (station_id, kind)
             SELECT DISTINCT s.id, 'all' FROM stations s
             WHERE s.id IN (SELECT station_id FROM stock UNION SELECT station_id FROM receipts) OR EXISTS (SELECT 1 FROM items);
+
+            -- Schemes of pay (Деньги → Зарплаты), a different combination per station; oils without the shop %.
+            INSERT INTO pay_schemes (station_id, valid_from, shift_fixed, fuel_pct, shop_pct, per_liter, min_shift_hours, excluded_groups, updated_by)
+            SELECT s.id, DATE '2020-01-01',
+                   CASE s.n % 3 WHEN 1 THEN 3000 WHEN 2 THEN 0 ELSE 2500 END,
+                   CASE s.n % 3 WHEN 2 THEN 1 ELSE 0 END,
+                   CASE s.n % 3 WHEN 0 THEN 5 ELSE 10 END,
+                   CASE s.n % 3 WHEN 0 THEN 0.5 ELSE 0 END,
+                   1,
+                   CASE WHEN s.n % 3 = 1 THEN COALESCE((SELECT array_agg(r.key::bigint) FROM records r
+                                                        WHERE r.station_id = s.id AND r.dataset = 'dcItemsGrps' AND r.data->>'Name' = 'Масла'), '{}') ELSE '{}' END,
+                   'demo'
+            FROM (SELECT id, row_number() OVER (ORDER BY name) AS n FROM stations) s
+            WHERE NOT EXISTS (SELECT 1 FROM pay_schemes p WHERE p.station_id = s.id);
             """);
         cmd.CommandTimeout = 600;
         await cmd.ExecuteNonQueryAsync();

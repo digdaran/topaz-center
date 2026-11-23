@@ -114,10 +114,16 @@ public static partial class MoneyEndpoints
             """, f.Args);
 
         object vat;
-        await using (var vc = await db.OpenConnectionAsync()) vat = await VatAsync(vc);
+        object? payroll = null;
+        await using (var vc = await db.OpenConnectionAsync())
+        {
+            vat = await VatAsync(vc);
+            // 1.33: operators' pay as an expense of the period, for the owner only (a manager does not see salaries).
+            if (ctx.User.IsInRole(Roles.Owner)) payroll = await PayrollEndpoints.ExpenseAsync(vc, f.Stations, f.From, f.To, ctx.RequestAborted);
+        }
         return Results.Ok(new
         {
-            filter = OverviewEndpoints.Describe(f), vat,
+            filter = OverviewEndpoints.Describe(f), vat, payroll,
             fuel = (await fuelTotalT).Single(), shop = (await shopTotalT).Single(),
             by_station = await byStationT, by_fuel = await byFuelT, by_group = await byGroupT, series = await seriesT, cash = await cashT,
         });
@@ -153,7 +159,7 @@ public static partial class MoneyEndpoints
             static string Q(string v) => "\"" + v.Replace("\"", "\"\"") + "\"";
             foreach (var r in rows)
                 sb.Append(string.Join(';', Q(r.Station), r.Month, Q(r.Category), Q(r.PaymentMode), Q(r.Fuel),
-                    r.Liters.ToString("0.##", CultureInfo.GetCultureInfo("ru-RU")), r.Amount.ToString("0.00", CultureInfo.GetCultureInfo("ru-RU")), r.Orders)).Append("\r\n");
+                    r.Liters.ToString("0.##", RuNumbers.Format), r.Amount.ToString("0.00", RuNumbers.Format), r.Orders)).Append("\r\n");
             var bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
             return Results.File(bytes, "text/csv; charset=utf-8", $"prodazhi-po-dogovoram-{f.From:yyyy-MM-dd}-{f.To:yyyy-MM-dd}.csv");
         }
