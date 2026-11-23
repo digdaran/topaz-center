@@ -4,7 +4,8 @@ using Npgsql;
 
 namespace Topaz.Central.Ui;
 
-public sealed record OrganizationBody(string? Name, bool? IsActive);
+/// <summary>TrialUntil: "yyyy-MM-dd" sets the last day of the trial, "" removes the trial.</summary>
+public sealed record OrganizationBody(string? Name, bool? IsActive, string? TrialUntil = null);
 public sealed record MoveStationBody(Guid OrganizationId);
 public sealed record OrganizationSettingsBody(string? MarginVat, decimal? VatRate);
 
@@ -125,7 +126,8 @@ public static class OrganizationEndpoints
             SELECT o.id, o.name, o.is_active AS IsActive, o.created_at AS CreatedAt,
                    (SELECT count(*) FROM stations s WHERE s.organization_id = o.id) AS Stations,
                    (SELECT count(*) FROM users u WHERE u.organization_id = o.id) AS Users,
-                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id AND u.role = 'owner' AND u.is_active) AS Owners
+                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id AND u.role = 'owner' AND u.is_active) AS Owners,
+                   o.trial_until AS TrialUntil, (SELECT min(l.id) FROM leads l WHERE l.organization_id = o.id) AS LeadId
             FROM organizations o ORDER BY o.name
             """);
         var stations = (await c.QueryAsync<(Guid Id, string Name, Guid? Org)>(
@@ -133,11 +135,12 @@ public static class OrganizationEndpoints
         return Results.Ok(orgs.Select(o => new
         {
             id = o.Id, name = o.Name, is_active = o.IsActive, created_at = o.CreatedAt, stations = o.Stations, users = o.Users, owners = o.Owners,
+            trial_until = o.TrialUntil?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), lead_id = o.LeadId,
             station_list = stations[o.Id].Select(s => new { id = s.Id, name = s.Name }),
         }));
     }
 
-    private sealed record OrgRow(Guid Id, string Name, bool IsActive, DateTime CreatedAt, long Stations, long Users, long Owners);
+    private sealed record OrgRow(Guid Id, string Name, bool IsActive, DateTime CreatedAt, long Stations, long Users, long Owners, DateTime? TrialUntil, long? LeadId);
 
     private static async Task<IResult> Create(OrganizationBody body, ClaimsPrincipal user, NpgsqlDataSource db)
     {
@@ -162,13 +165,23 @@ public static class OrganizationEndpoints
     {
         var name = body.Name?.Trim();
         if (name is { Length: 0 or > 100 }) return Results.Problem(statusCode: 400, title: "Название организации: от 1 до 100 символов");
+        DateTime? trial = null;
+        if (body.TrialUntil is { Length: > 0 } t)
+        {
+            if (!DateTime.TryParseExact(t, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d))
+                return Results.Problem(statusCode: 400, title: "Дата пробного периода: ГГГГ-ММ-ДД");
+            trial = d;
+        }
         await using var c = await db.OpenConnectionAsync();
         try
         {
+            // A new trial date asks for a new reminder (LeadNotifier).
             var n = await c.ExecuteAsync("""
-                UPDATE organizations SET name = COALESCE(@name, name), name_normalized = COALESCE(lower(@name), name_normalized), is_active = COALESCE(@IsActive, is_active)
+                UPDATE organizations SET name = COALESCE(@name, name), name_normalized = COALESCE(lower(@name), name_normalized), is_active = COALESCE(@IsActive, is_active),
+                    trial_until = CASE WHEN @setTrial THEN @trial::date ELSE trial_until END,
+                    trial_reminded_at = CASE WHEN @setTrial AND @trial::date IS DISTINCT FROM trial_until THEN NULL ELSE trial_reminded_at END
                 WHERE id = @id
-                """, new { id, name, body.IsActive });
+                """, new { id, name, body.IsActive, setTrial = body.TrialUntil is not null, trial });
             if (n == 0) return Results.NotFound();
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)

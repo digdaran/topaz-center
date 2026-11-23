@@ -6,6 +6,7 @@ import { api, useMeta } from '../api/client';
 import { useMe } from '../auth/auth';
 import { QueryState } from '../components/ui';
 import { dateTime } from '../lib/format';
+import { approvalOrganizations } from '../lib/leadClient';
 
 interface TopazInfo { last_session_id?: number; last_session_num?: number; last_session_start?: string; last_session_operator?: string; fuels?: string[]; server_version?: string }
 interface Request {
@@ -141,7 +142,7 @@ export default function StationRequests() {
                   <Form.Item name="station_name" label="Название АЗС" rules={[{ required: true, max: 100 }]}><Input /></Form.Item>
                   <Form.Item name="organization_id" label="Организация (хозяин АЗС)" rules={[{ required: true, message: 'Выберите организацию' }]}
                     extra="Данные АЗС увидят только пользователи этой организации.">
-                    <Select options={(me.organizations ?? []).filter((o) => o.is_active).map((o) => ({ value: o.id, label: o.name }))} />
+                    <Select options={approvalOrganizations(me.organizations ?? [])} />
                   </Form.Item>
                 </>
               )}

@@ -174,12 +174,124 @@ public sealed class LeadTests(CentralFixture fx) : IClassFixture<CentralFixture>
         Assert.Equal(0L, await fx.QueryAsync<long>("SELECT count(*) FROM leads WHERE name = 'Старый отказ'"));
     }
 
-    private async Task<HttpClient> LoginAsync(string login, string role, Guid? org = null)
+
+    private async Task SendBatchAsync(string token)
+    {
+        var data = new JsonObject { ["Id"] = 1 };
+        var batch = new Topaz.Contracts.BatchEnvelope
+        {
+            BatchId = Guid.NewGuid(), Seq = 1, CreatedAt = DateTimeOffset.UtcNow, AgentVersion = "t",
+            Items = [new Topaz.Contracts.RecordChange { Dataset = "lead_test", Key = "1", Hash = new string('a', 64), Data = data }],
+        };
+        (await fx.Client(token).PostAsJsonAsync("/api/v1/batches", batch, Topaz.Contracts.Protocol.Json)).EnsureSuccessStatusCode();
+        await fx.WaitProcessedAsync();
+    }
+
+    [PostgresFact]
+    public async Task A_request_becomes_a_client_who_changes_the_password_connects_a_station_and_gets_a_trial()
+    {
+        var telegram = new ControlTests.FakeTelegram();
+        await using var app = fx.Factory!.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Topaz:TelegramBotToken", "123:secret");
+            b.UseSetting("Topaz:TelegramApiBase", "http://telegram.test");
+            b.UseSetting("Topaz:TelegramPolling", "false");
+            b.UseSetting("Topaz:PublicOrigin", "https://hub.example");
+            b.ConfigureTestServices(s => s.AddHttpClient("telegram").ConfigurePrimaryHttpMessageHandler(() => telegram));
+        });
+        await using (var c = new NpgsqlConnection(fx.ConnectionString))
+            await c.ExecuteAsync("""
+                INSERT INTO notification_channels (target, title, min_severity, daily_digest)
+                SELECT '-100888', 'Платформа 3', 'warning', false WHERE NOT EXISTS (SELECT 1 FROM notification_channels WHERE target = '-100888')
+                """);
+        var site = fx.Client();
+        site.DefaultRequestHeaders.Add("X-Forwarded-For", "198.51.100.11");
+        Assert.Equal(HttpStatusCode.Created, (await site.PostAsJsonAsync("/api/v1/leads", Lead("Сергей Клиент"))).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await site.PostAsJsonAsync("/api/v1/leads", Lead("Сергей Ещё АЗС"))).StatusCode);
+        var id = await fx.QueryAsync<long>("SELECT id FROM leads WHERE name = 'Сергей Клиент'");
+        var second = await fx.QueryAsync<long>("SELECT id FROM leads WHERE name = 'Сергей Ещё АЗС'");
+
+        var super = await LoginAsync("lead-super", Roles.Superadmin, client: app.CreateClient());
+        var owner = await LoginAsync("lead-owner2", Roles.Owner, await fx.QueryAsync<Guid>("SELECT id FROM organizations ORDER BY created_at LIMIT 1"));
+        Assert.Equal(HttpStatusCode.Forbidden, (await owner.PostAsJsonAsync($"/api/v1/ui/leads/{id}/client", new { mode = "new" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/client", new { mode = "new", organization_name = "Сеть Сергея", owner_login = "a b" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/client", new { mode = "new", organization_name = "Сеть Сергея", owner_login = "lead-super" })).StatusCode);
+        Assert.Equal(0L, await fx.QueryAsync<long>("SELECT count(*) FROM organizations WHERE name = 'Сеть Сергея'")); // nothing half-made
+
+        var created = await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/client", new { mode = "new", organization_name = "Сеть Сергея", owner_name = "Сергей", owner_login = "sergey.client" });
+        created.EnsureSuccessStatusCode();
+        var r = (await created.Content.ReadFromJsonAsync<JsonObject>())!;
+        var org = r["organization_id"]!.GetValue<Guid>();
+        var password = r["password"]!.GetValue<string>();
+        Assert.Equal(12, password.Length);
+        Assert.Equal("https://hub.example", r["service_url"]!.GetValue<string>());
+        Assert.Equal(("work", org), await fx.QueryAsync<(string, Guid)>("SELECT stage, organization_id FROM leads WHERE id = @id", new { id }));
+        Assert.Equal(HttpStatusCode.Conflict, (await super.PostAsJsonAsync($"/api/v1/ui/leads/{id}/client", new { mode = "new", organization_name = "Ещё", owner_login = "sergey2" })).StatusCode);
+        Assert.DoesNotContain(password, await super.GetStringAsync("/api/v1/ui/audit")); // the password is shown once, never stored in clear
+        var orgs = (await super.GetFromJsonAsync<JsonArray>("/api/v1/ui/organizations"))!;
+        Assert.Equal(id, orgs.Single(o => o!["id"]!.GetValue<Guid>() == org)!["lead_id"]!.GetValue<long>());
+        var meOrgs = (await super.GetFromJsonAsync<JsonObject>("/api/v1/ui/auth/me"))!["organizations"]!.AsArray();
+        Assert.Equal(id, meOrgs.Single(o => o!["id"]!.GetValue<Guid>() == org)!["lead_id"]!.GetValue<long>());
+
+        // The owner signs in with the temporary password: only the password change works until it is replaced.
+        var client = fx.Factory!.CreateClient();
+        client.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
+        (await client.PostAsJsonAsync("/api/v1/ui/auth/login", new { login = "sergey.client", password })).EnsureSuccessStatusCode();
+        Assert.True((await client.GetFromJsonAsync<JsonObject>("/api/v1/ui/auth/me"))!["password_change_required"]!.GetValue<bool>());
+        var refused = await client.GetAsync("/api/v1/ui/meta");
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("password_change_required", await refused.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/v1/ui/auth/password", new { current_password = password, new_password = password })).StatusCode);
+        (await client.PostAsJsonAsync("/api/v1/ui/auth/password", new { current_password = password, new_password = "sergey-own-password" })).EnsureSuccessStatusCode();
+        Assert.False((await client.GetFromJsonAsync<JsonObject>("/api/v1/ui/auth/me"))!["password_change_required"]!.GetValue<bool>());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/v1/ui/meta")).StatusCode);
+
+        // An existing client attached to a request: no owner, no trial, not "connected" by its old stations.
+        var old = await fx.EnrollAsync("АЗС-старый-клиент", org);
+        await SendBatchAsync(old.Token);
+        var attached = await super.PostAsJsonAsync($"/api/v1/ui/leads/{second}/client", new { mode = "existing", organization_id = org });
+        attached.EnsureSuccessStatusCode();
+        Assert.Null((await attached.Content.ReadFromJsonAsync<JsonObject>())!["password"]);
+
+        // The first station sends data: the request is connected, the trial runs 30 days from that day, Telegram hears it once.
+        var notifier = app.Services.GetRequiredService<LeadNotifier>();
+        await notifier.RoundAsync(CancellationToken.None);
+        Assert.Equal("connected", await fx.QueryAsync<string>("SELECT stage FROM leads WHERE id = @id", new { id })); // old station counts: created after the client
+        Assert.Equal("work", await fx.QueryAsync<string>("SELECT stage FROM leads WHERE id = @second", new { second }));
+        var today = DateTime.UtcNow.AddHours(3).Date;
+        Assert.Equal(today.AddDays(30), await fx.QueryAsync<DateTime>("SELECT trial_until FROM organizations WHERE id = @org", new { org }));
+        await notifier.RoundAsync(CancellationToken.None);
+        Assert.Single(telegram.Sent, m => m.Body.StartsWith("-100888\n") && m.Body.Contains($"Клиент из заявки №{id} подключил первую АЗС"));
+
+        var next = await fx.EnrollAsync("АЗС-вторая-клиента", org);
+        await SendBatchAsync(next.Token);
+        await notifier.RoundAsync(CancellationToken.None);
+        Assert.Equal("connected", await fx.QueryAsync<string>("SELECT stage FROM leads WHERE id = @second", new { second }));
+        Assert.Equal(today.AddDays(30), await fx.QueryAsync<DateTime>("SELECT trial_until FROM organizations WHERE id = @org", new { org })); // unchanged
+
+        // The trial ends soon: one reminder; a new date asks again; "" removes the trial.
+        (await super.PatchAsJsonAsync($"/api/v1/ui/organizations/{org}", new { trial_until = today.AddDays(2).ToString("yyyy-MM-dd") })).EnsureSuccessStatusCode();
+        await notifier.RoundAsync(CancellationToken.None);
+        await notifier.RoundAsync(CancellationToken.None);
+        Assert.Single(telegram.Sent, m => m.Body.StartsWith("-100888\n") && m.Body.Contains("Пробный период «Сеть Сергея»"));
+        (await super.PatchAsJsonAsync($"/api/v1/ui/organizations/{org}", new { trial_until = today.AddDays(1).ToString("yyyy-MM-dd") })).EnsureSuccessStatusCode();
+        await notifier.RoundAsync(CancellationToken.None);
+        Assert.Equal(2, telegram.Sent.Count(m => m.Body.StartsWith("-100888\n") && m.Body.Contains("Пробный период «Сеть Сергея»")));
+        (await super.PatchAsJsonAsync($"/api/v1/ui/organizations/{org}", new { trial_until = "" })).EnsureSuccessStatusCode();
+        Assert.Null(await fx.QueryAsync<DateTime?>("SELECT trial_until FROM organizations WHERE id = @org", new { org }));
+        Assert.Equal(HttpStatusCode.BadRequest, (await super.PatchAsJsonAsync($"/api/v1/ui/organizations/{org}", new { trial_until = "31.12.2026" })).StatusCode);
+
+        // Deleting the request keeps the client.
+        (await super.DeleteAsync($"/api/v1/ui/leads/{id}")).EnsureSuccessStatusCode();
+        Assert.Equal(1L, await fx.QueryAsync<long>("SELECT count(*) FROM organizations WHERE id = @org", new { org }));
+    }
+
+    private async Task<HttpClient> LoginAsync(string login, string role, Guid? org = null, HttpClient? client = null)
     {
         const string password = "lead-password-1";
         var users = fx.Factory!.Services.GetRequiredService<UserService>();
         try { await users.CreateAsync(login, login, role, password, [], org); } catch (PostgresException) { /* exists */ }
-        var c = fx.Factory.CreateClient();
+        var c = client ?? fx.Factory.CreateClient();
         c.DefaultRequestHeaders.Add(UiAuthSetup.CsrfHeader, "1");
         (await c.PostAsJsonAsync("/api/v1/ui/auth/login", new { login, password })).EnsureSuccessStatusCode();
         return c;

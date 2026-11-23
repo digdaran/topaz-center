@@ -70,13 +70,15 @@ export interface Me {
   organization_id: string | null;
   organization: string | null;
   /** Superadmin only: all organizations for the header switch. */
-  organizations: { id: string; name: string; is_active: boolean }[] | null;
+  organizations: { id: string; name: string; is_active: boolean; stations?: number; lead_id?: number | null }[] | null;
   /** Two-factor login (code from an authenticator app). */
   totp_enabled: boolean;
   /** Superadmin: mandatory, cannot be turned off. */
   totp_mandatory: boolean;
   /** Mandatory but not on yet: only the setup screen works until it is. */
   totp_setup_required: boolean;
+  /** A temporary password (a new client's owner): only the password change works until it is replaced. */
+  password_change_required: boolean;
   recovery_codes_left: number;
   /** Signed in at the superadmin console's own address (Topaz__ConsoleHost). */
   console: boolean;

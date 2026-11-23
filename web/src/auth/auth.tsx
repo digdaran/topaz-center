@@ -3,6 +3,7 @@ import { Button, Card, Flex, Spin, Typography } from 'antd';
 import { createContext, ReactNode, useContext } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { api, ApiError, Me } from '../api/client';
+import { PasswordForm } from '../components/PasswordForm';
 import { TotpSetup } from '../components/TotpSetup';
 
 const MeContext = createContext<Me | null>(null);
@@ -29,6 +30,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (isLoading) return <Spin fullscreen />;
   if (error || !data) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   if (data.totp_setup_required) return <TotpRequired />;
+  if (data.password_change_required) return <PasswordChangeRequired />;
   return <MeContext.Provider value={data}>{children}</MeContext.Provider>;
 }
 
@@ -44,6 +46,23 @@ function TotpRequired() {
           отключён. Это займёт пару минут.
         </Typography.Paragraph>
         <TotpSetup />
+      </Card>
+    </Flex>
+  );
+}
+
+/** A new client's owner signs in with the temporary password from the superadmin and sets an own one first. */
+function PasswordChangeRequired() {
+  const logout = useLogout();
+  const qc = useQueryClient();
+  return (
+    <Flex align="center" justify="center" style={{ minHeight: '100vh', padding: 16 }}>
+      <Card style={{ width: 440, maxWidth: '100%' }} title="Придумайте свой пароль"
+        extra={<Button type="link" onClick={logout}>Выйти</Button>}>
+        <Typography.Paragraph type="secondary">
+          Вы вошли по временному паролю, который вам прислали. Замените его на свой — не короче 10 символов. Временный пароль после этого перестанет действовать.
+        </Typography.Paragraph>
+        <PasswordForm currentLabel="Временный пароль" onChanged={() => qc.invalidateQueries({ queryKey: ['me'] })} />
       </Card>
     </Flex>
   );

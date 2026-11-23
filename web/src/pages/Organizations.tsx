@@ -1,12 +1,17 @@
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import { App, Button, DatePicker, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import dayjs from 'dayjs';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { dateTime, int } from '../lib/format';
 
 interface Org {
   id: string; name: string; is_active: boolean; created_at: string; stations: number; users: number; owners: number;
+  /** last day of the free month (yyyy-MM-dd); null = no trial */
+  trial_until: string | null;
+  /** the site request this client came from */
+  lead_id: number | null;
   station_list: { id: string; name: string }[];
 }
 
@@ -53,7 +58,18 @@ export default function Organizations() {
         columns={[
           {
             title: 'Название', dataIndex: 'name', render: (v: string, o) => (
-              <Typography.Text editable={{ onChange: (n) => { if (n.trim() && n.trim() !== v) update(o, { name: n.trim() }); }, triggerType: ['icon', 'text'] }}>{v}</Typography.Text>
+              <>
+                <Typography.Text editable={{ onChange: (n) => { if (n.trim() && n.trim() !== v) update(o, { name: n.trim() }); }, triggerType: ['icon', 'text'] }}>{v}</Typography.Text>
+                {o.lead_id != null && <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>из заявки №{o.lead_id}</Typography.Text></div>}
+              </>
+            ),
+          },
+          {
+            title: 'Пробный период до', dataIndex: 'trial_until', width: 170,
+            render: (v: string | null, o) => (
+              <DatePicker size="small" format="DD.MM.YYYY" placeholder="—" style={{ width: 140 }} value={v ? dayjs(v) : null}
+                status={v && dayjs(v).isBefore(dayjs(), 'day') ? 'warning' : undefined}
+                onChange={(d) => update(o, { trial_until: d ? d.format('YYYY-MM-DD') : '' })} />
             ),
           },
           {

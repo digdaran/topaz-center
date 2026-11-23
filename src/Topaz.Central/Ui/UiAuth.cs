@@ -51,6 +51,8 @@ public sealed class UserRecord
     public long? TotpLastStep { get; set; }
     public string[] RecoveryCodes { get; set; } = [];
     public bool TotpEnabled => TotpSecret is not null;
+    /// <summary>A temporary password given by the superadmin (a new client's owner): changed before anything else.</summary>
+    public bool MustChangePassword { get; set; }
 }
 
 /// <summary>User storage, password hashing (PBKDF2 via ASP.NET Identity) and login checks.</summary>
@@ -67,7 +69,7 @@ public sealed class UserService(NpgsqlDataSource db, IMemoryCache cache)
                u.is_active AS IsActive, u.failed_logins AS FailedLogins, u.locked_until AS LockedUntil,
                u.organization_id AS OrganizationId, COALESCE(o.is_active, true) AS OrganizationActive,
                u.totp_secret AS TotpSecret, u.totp_pending AS TotpPending, u.totp_last_step AS TotpLastStep,
-               u.recovery_codes AS RecoveryCodes
+               u.recovery_codes AS RecoveryCodes, u.must_change_password AS MustChangePassword
         FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
         """;
 
@@ -294,6 +296,26 @@ public static class UiAuthSetup
                 && Guid.TryParse(http.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)
                 && await users.FindCachedAsync(id) is { TotpEnabled: false })
                 return Results.Problem(statusCode: 403, title: SetupRequired, type: "totp_setup_required");
+            return await next(context);
+        }
+    }
+
+    /// <summary>
+    /// A temporary password (UserRecord.MustChangePassword) opens only /auth/* (me, logout, changing the password)
+    /// until the user sets an own one. Checked against the user row, like TotpRequiredFilter.
+    /// </summary>
+    public sealed class PasswordChangeRequiredFilter(UserService users) : IEndpointFilter
+    {
+        public const string Message = "Смените временный пароль на свой";
+
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var http = context.HttpContext;
+            if (http.User.Identity?.IsAuthenticated == true
+                && !http.Request.Path.StartsWithSegments(Topaz.Contracts.Protocol.ApiPrefix + "/ui/auth")
+                && Guid.TryParse(http.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)
+                && await users.FindCachedAsync(id) is { MustChangePassword: true })
+                return Results.Problem(statusCode: 403, title: Message, type: "password_change_required");
             return await next(context);
         }
     }

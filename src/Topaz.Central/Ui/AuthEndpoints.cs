@@ -202,7 +202,12 @@ public static class AuthEndpoints
         var org = user.OrganizationId();
         var orgName = org is null ? null : await c.ExecuteScalarAsync<string?>("SELECT name FROM organizations WHERE id = @org", new { org });
         var organizations = user.IsInRole(Roles.Superadmin)
-            ? (await c.QueryAsync("SELECT id, name, is_active FROM organizations ORDER BY name")).ToList()
+            ? (await c.QueryAsync("""
+                SELECT o.id, o.name, o.is_active,
+                       (SELECT count(*)::int FROM stations s WHERE s.organization_id = o.id) AS stations,
+                       (SELECT min(l.id) FROM leads l WHERE l.organization_id = o.id) AS lead_id
+                FROM organizations o ORDER BY o.name
+                """)).ToList()
             : null;
         return Results.Ok(new
         {
@@ -219,6 +224,7 @@ public static class AuthEndpoints
             recovery_codes_left = record?.RecoveryCodes.Length ?? 0,
             totp_mandatory = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin),
             totp_setup_required = options.Value.RequireTotpForSuperadmin && user.IsInRole(Roles.Superadmin) && !totpEnabled,
+            password_change_required = record?.MustChangePassword ?? false,
             console = ConsoleHosts.IsConsole(ctx, options.Value),
             demo = options.Value.DemoMode,
         });
@@ -231,12 +237,14 @@ public static class AuthEndpoints
         var (result, _) = await users.CheckLoginAsync(me.Login, body.CurrentPassword ?? "");
         if (result != UserService.LoginResult.Ok) return Results.Problem(statusCode: 400, title: "Текущий пароль неверен");
         if (UserService.ValidatePassword(body.NewPassword) is { } error) return Results.Problem(statusCode: 400, title: error);
+        if (body.NewPassword == body.CurrentPassword) return Results.Problem(statusCode: 400, title: "Новый пароль должен отличаться от текущего");
         var stamp = Guid.NewGuid();
         await using (var c = await db.OpenConnectionAsync())
-            await c.ExecuteAsync("UPDATE users SET password_hash = @h, security_stamp = @stamp WHERE id = @id",
+            await c.ExecuteAsync("UPDATE users SET password_hash = @h, security_stamp = @stamp, must_change_password = false WHERE id = @id",
                 new { id = me.Id, h = UserService.HashPassword(body.NewPassword!), stamp });
         users.Forget(me.Id);
         me.SecurityStamp = stamp;
+        me.MustChangePassword = false;
         await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, UserService.Principal(me, principal.OrganizationId())); // keep this session
         await Audit.WriteAsync(db, me.Id, me.Login, "password_changed", "user:" + me.Id, null);
         return Results.NoContent();

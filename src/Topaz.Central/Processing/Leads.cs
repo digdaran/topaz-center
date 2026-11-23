@@ -85,6 +85,8 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
     public static readonly TimeSpan KeepFor = TimeSpan.FromDays(3 * 365); // privacy policy: kept up to three years
     public static readonly TimeSpan KeepRefusedFor = TimeSpan.FromDays(365); // a refusal: a year after it
     public static readonly TimeSpan RemindAfter = TimeSpan.FromHours(24); // the site promises a call within a working day
+    public const int TrialDays = 30; // the site: «30 дней бесплатно»
+    public const int TrialReminderDays = 3;
 
     private readonly SemaphoreSlim _wake = new(0, 1);
 
@@ -113,7 +115,18 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
         await using var c = await db.OpenConnectionAsync(ct);
         await c.ExecuteAsync("DELETE FROM leads WHERE created_at < now() - @keep OR (stage = 'refused' AND stage_at < now() - @keepRefused)",
             new { keep = KeepFor, keepRefused = KeepRefusedFor });
+        await ConnectAsync(c);
+        // The end of a trial is near (Moscow date): once per trial date (changing the date asks again).
+        var trials = (await c.QueryAsync<(Guid Id, string Name, DateTime TrialUntil)>("""
+            SELECT id, name, trial_until FROM organizations
+            WHERE trial_until IS NOT NULL AND trial_reminded_at IS NULL AND is_active
+              AND trial_until <= (now() AT TIME ZONE 'Europe/Moscow')::date + @days
+            """, new { days = TrialReminderDays })).ToList();
         if (!telegram.Configured) return;
+        var connected = (await c.QueryAsync<(long LeadId, string Organization, DateTime? TrialUntil)>("""
+            SELECT l.id, o.name, o.trial_until FROM leads l JOIN organizations o ON o.id = l.organization_id
+            WHERE l.stage = 'connected' AND l.stage_by = @auto AND l.connected_announced_at IS NULL ORDER BY l.id LIMIT 20
+            """, new { auto = AutoConnected })).ToList();
         var leads = (await c.QueryAsync<Lead>(
             "SELECT id, created_at, name, contact, stations, city, comment, page FROM leads WHERE notified_at IS NULL AND notify_attempts < @max ORDER BY id LIMIT 20",
             new { max = MaxAttempts })).ToList();
@@ -122,7 +135,7 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
             SELECT id, created_at, name, contact, stations, city, comment, page FROM leads
             WHERE stage = 'new' AND reminded_at IS NULL AND notified_at IS NOT NULL AND created_at < now() - @after ORDER BY id LIMIT 20
             """, new { after = RemindAfter })).ToList();
-        if (leads.Count == 0 && waiting.Count == 0) return;
+        if (leads.Count == 0 && waiting.Count == 0 && connected.Count == 0 && trials.Count == 0) return;
         var chats = (await c.QueryAsync<string>("""
             SELECT ch.target FROM notification_channels ch LEFT JOIN users u ON u.id = ch.user_id
             WHERE ch.enabled AND ((ch.user_id IS NULL AND ch.organization_id IS NULL) OR (u.role = 'superadmin' AND u.is_active))
@@ -148,6 +161,53 @@ public sealed class LeadNotifier(NpgsqlDataSource db, TelegramApi telegram, ILog
                 sent |= (await telegram.SendAsync(chat, text, ct)).Ok;
             if (sent) await c.ExecuteAsync("UPDATE leads SET reminded_at = now() WHERE id = @id", new { id = lead.Id });
         }
+        foreach (var (leadId, org, trialUntil) in connected)
+            if (await SendAllAsync(chats, $"✅ <b>Клиент из заявки №{leadId} подключил первую АЗС</b>\n«{WebUtility.HtmlEncode(org)}»: данные пошли." +
+                                          (trialUntil is { } t ? $" Пробный период до {t:dd.MM.yyyy}." : ""), ct))
+                await c.ExecuteAsync("UPDATE leads SET connected_announced_at = now() WHERE id = @leadId", new { leadId });
+        foreach (var t in trials)
+        {
+            var left = (t.TrialUntil.Date - DateTime.UtcNow.AddHours(3).Date).Days;
+            var when = left < 0 ? "закончился" : left == 0 ? "заканчивается сегодня" : $"заканчивается {t.TrialUntil:dd.MM.yyyy}";
+            if (await SendAllAsync(chats, $"⏳ <b>Пробный период «{WebUtility.HtmlEncode(t.Name)}» {when}</b>\nПора договориться об оплате или продлить пробный период в «Платформа → Организации».", ct))
+                await c.ExecuteAsync("UPDATE organizations SET trial_reminded_at = now() WHERE id = @id", new { id = t.Id });
+        }
+    }
+
+    private async Task<bool> SendAllAsync(List<string> chats, string text, CancellationToken ct)
+    {
+        var sent = false;
+        foreach (var chat in chats) sent |= (await telegram.SendAsync(chat, text, ct)).Ok;
+        return sent;
+    }
+
+    /// <summary>Who moved a request to "connected" when the client's first station sent data.</summary>
+    public const string AutoConnected = "автоматически";
+
+    /// <summary>
+    /// A request whose organization's station has sent data becomes "connected"; the organization's trial starts on
+    /// the day of the first data (Moscow), unless a trial date is already set. Announced by the next rounds.
+    /// </summary>
+    private static async Task ConnectAsync(NpgsqlConnection c)
+    {
+        await using var tx = await c.BeginTransactionAsync();
+        // A station connected after the request was turned into a client (an existing client adds a new one).
+        var rows = (await c.QueryAsync<(long LeadId, Guid Org, DateTime FirstData, bool Created)>("""
+            SELECT l.id, o.id, f.first_data, l.client_created
+            FROM leads l JOIN organizations o ON o.id = l.organization_id
+            CROSS JOIN LATERAL (SELECT min(b.received_at) AS first_data FROM raw_batches b JOIN stations s ON s.id = b.station_id
+                                WHERE s.organization_id = o.id AND s.created_at >= l.client_at AND b.status = 'processed') f
+            WHERE l.stage IN ('new', 'work') AND l.client_at IS NOT NULL AND f.first_data IS NOT NULL
+            FOR UPDATE OF l
+            """, transaction: tx)).ToList();
+        foreach (var r in rows)
+        {
+            await c.ExecuteAsync("UPDATE leads SET stage = 'connected', stage_at = now(), stage_by = @auto WHERE id = @LeadId", new { r.LeadId, auto = AutoConnected }, tx);
+            if (r.Created) // an existing client attached to a request has no trial
+                await c.ExecuteAsync("UPDATE organizations SET trial_until = COALESCE(trial_until, (@FirstData AT TIME ZONE 'Europe/Moscow')::date + @days) WHERE id = @Org",
+                    new { r.FirstData, r.Org, days = TrialDays }, tx);
+        }
+        await tx.CommitAsync();
     }
 
     private static string Format(Lead l)

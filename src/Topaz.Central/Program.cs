@@ -181,7 +181,8 @@ app.MapIngest();
 app.MapAdmin();
 
 var ui = app.MapGroup(Protocol.ApiPrefix + "/ui").RequireAuthorization(Policies.Ui).RequireRateLimiting("ui")
-    .AddEndpointFilter<UiAuthSetup.CsrfFilter>().AddEndpointFilter<UiAuthSetup.DemoReadOnlyFilter>().AddEndpointFilter<UiAuthSetup.TotpRequiredFilter>();
+    .AddEndpointFilter<UiAuthSetup.CsrfFilter>().AddEndpointFilter<UiAuthSetup.DemoReadOnlyFilter>().AddEndpointFilter<UiAuthSetup.TotpRequiredFilter>()
+    .AddEndpointFilter<UiAuthSetup.PasswordChangeRequiredFilter>();
 ui.MapUiAuth();
 ui.MapUiOverview();
 ui.MapUiShifts();
