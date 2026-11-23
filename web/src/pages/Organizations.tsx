@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { dateTime, int } from '../lib/format';
+import { type Carried, MOVE_NOTE, movedMessage } from '../lib/stationMove';
 
 interface Org {
   id: string; name: string; is_active: boolean; created_at: string; stations: number; users: number; owners: number;
@@ -92,10 +93,14 @@ export default function Organizations() {
       <Modal open={moving} title="Передать АЗС другой организации" okText="Передать" cancelText="Отмена" onCancel={() => setMoving(false)} destroyOnClose
         onOk={async () => {
           const v = await moveForm.validateFields();
-          if (await call(() => api(`/stations/${v.station}/organization`, { method: 'POST', body: { organization_id: v.target } }), 'АЗС передана')) setMoving(false);
+          let carried: Carried | undefined;
+          if (await call(async () => { carried = (await api<{ carried?: Carried }>(`/stations/${v.station}/organization`, { method: 'POST', body: { organization_id: v.target } })).carried; })) {
+            message.success(movedMessage(carried));
+            setMoving(false);
+          }
         }}>
         <Typography.Paragraph type="secondary">
-          Вся история АЗС переходит к новой организации. Управляющие и наблюдатели прежней организации теряют к ней доступ, её владелец перестаёт её видеть.
+          {MOVE_NOTE}
         </Typography.Paragraph>
         <Form form={moveForm} layout="vertical">
           <Form.Item name="station" label="АЗС" rules={[{ required: true, message: 'Выберите АЗС' }]}>

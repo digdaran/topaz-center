@@ -208,9 +208,57 @@ public static class OrganizationEndpoints
             new { id, o = body.OrganizationId }, tx);
         // The station's own costs go with it; margins are recomputed with the new organization's org-wide costs.
         await c.ExecuteAsync("UPDATE item_costs SET organization_id = @o WHERE station_id = @id", new { id, o = body.OrganizationId }, tx);
+        var carried = from is { } f && f != body.OrganizationId ? await CarryOrganizationSettingsAsync(c, tx, f, body.OrganizationId, id) : null;
         await c.ExecuteAsync("INSERT INTO rollup_dirty (station_id, kind) VALUES (@id, 'all')", new { id }, tx);
         await tx.CommitAsync();
-        await Audit.WriteAsync(db, user.UserId(), user.Identity?.Name, "station_moved", "station:" + id, new { from, to = body.OrganizationId }, body.OrganizationId);
-        return Results.NoContent();
+        await Audit.WriteAsync(db, user.UserId(), user.Identity?.Name, "station_moved", "station:" + id, new { from, to = body.OrganizationId, carried }, body.OrganizationId);
+        return Results.Ok(new { carried });
+    }
+
+    public sealed record Carried(int ItemCosts, int RuleOverrides, int Chats, int PurchaseLists);
+
+    /// <summary>
+    /// The organization's last station goes to an organization without stations (a client re-registered as a new
+    /// company): the org-wide settings go with it, otherwise the station would lose its shop costs, rule settings and
+    /// Telegram group chats. In any other case they stay: they belong to the stations that remain, or the target's own win.
+    /// Personal chats stay with their users. Returns null when nothing is carried.
+    /// </summary>
+    private static async Task<Carried?> CarryOrganizationSettingsAsync(NpgsqlConnection c, NpgsqlTransaction tx, Guid from, Guid to, Guid station)
+    {
+        var p = new { from, to, station };
+        if (await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM stations WHERE organization_id = @from)", p, tx)
+            || await c.ExecuteScalarAsync<bool>("SELECT EXISTS (SELECT 1 FROM stations WHERE organization_id = @to AND id <> @station)", p, tx))
+            return null;
+        // The target's own costs and rule settings win over the moved ones.
+        var costs = await c.ExecuteAsync("""
+            UPDATE item_costs ic SET organization_id = @to
+            WHERE ic.organization_id = @from AND ic.station_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM item_costs t WHERE t.organization_id = @to AND t.station_id IS NULL AND t.item_key = ic.item_key)
+            """, p, tx);
+        var rules = await c.ExecuteAsync("""
+            INSERT INTO alert_rule_overrides (organization_id, code, enabled, threshold, severity)
+            SELECT @to, code, enabled, threshold, severity FROM alert_rule_overrides WHERE organization_id = @from
+            ON CONFLICT (organization_id, code) DO NOTHING
+            """, p, tx);
+        await c.ExecuteAsync("DELETE FROM alert_rule_overrides WHERE organization_id = @from", p, tx);
+        var chats = await c.ExecuteAsync("""
+            UPDATE notification_channels n SET organization_id = @to
+            WHERE n.organization_id = @from AND n.user_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM notification_channels t WHERE t.organization_id = @to AND t.user_id IS NULL AND t.target = n.target)
+            """, p, tx);
+        await c.ExecuteAsync("""
+            UPDATE organizations t SET margin_vat = f.margin_vat, vat_rate = f.vat_rate FROM organizations f WHERE t.id = @to AND f.id = @from
+            """, p, tx);
+        await c.ExecuteAsync("""
+            INSERT INTO purchase_settings (organization_id, trip_weekdays, lead_days, service_a, service_b, service_c, history_days, updated_by, updated_at)
+            SELECT @to, trip_weekdays, lead_days, service_a, service_b, service_c, history_days, updated_by, updated_at FROM purchase_settings WHERE organization_id = @from
+            ON CONFLICT (organization_id) DO NOTHING
+            """, p, tx);
+        var lists = await c.ExecuteAsync("""
+            UPDATE purchase_lists l SET organization_id = @to
+            WHERE l.organization_id = @from
+              AND NOT EXISTS (SELECT 1 FROM purchase_list_lines x WHERE x.list_id = l.id AND x.station_id <> @station)
+            """, p, tx);
+        return costs + rules + chats + lists == 0 ? null : new Carried(costs, rules, chats, lists);
     }
 }

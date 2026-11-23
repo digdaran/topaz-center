@@ -353,6 +353,33 @@ public sealed class TenantIsolationTests(CentralFixture fx) : IClassFixture<Cent
         (await super.PostAsJsonAsync($"/api/v1/ui/stations/{g.Station}/organization", new { organization_id = g.Org })).EnsureSuccessStatusCode();
     }
     [PostgresFact]
+    public async Task The_last_station_moved_to_a_new_organization_takes_the_org_wide_settings_along()
+    {
+        var (_, b, super) = await SetupAsync();
+        var d = await TenantAsync(super, "Дельта", "ISO-Дельта-АЗС");
+        await fx.QueryAsync<int>("INSERT INTO alert_rule_overrides (organization_id, code, enabled) VALUES (@o, 'shift_too_long', false) RETURNING 1", new { o = d.Org });
+        var created = await super.PostAsJsonAsync("/api/v1/ui/organizations", new { name = "Дельта-Новая" });
+        var fresh = (await created.Content.ReadFromJsonAsync<JsonObject>())!["id"]!.GetValue<Guid>();
+
+        var moved = await super.PostAsJsonAsync($"/api/v1/ui/stations/{d.Station}/organization", new { organization_id = fresh });
+        moved.EnsureSuccessStatusCode();
+        var carried = (await moved.Content.ReadFromJsonAsync<JsonObject>())!["carried"]!;
+        Assert.Equal(1, carried["item_costs"]!.GetValue<int>());
+        Assert.Equal(1, carried["rule_overrides"]!.GetValue<int>());
+        Assert.Equal(1, carried["chats"]!.GetValue<int>());
+        Assert.Equal(fresh, await fx.QueryAsync<Guid>("SELECT organization_id FROM item_costs WHERE station_id IS NULL AND item_key = 'name:кофе Дельта'"));
+        Assert.Equal(fresh, await fx.QueryAsync<Guid>("SELECT organization_id FROM notification_channels WHERE target = @t", new { t = d.ChatId }));
+        Assert.Equal(0L, await fx.QueryAsync<long>("SELECT count(*) FROM alert_rule_overrides WHERE organization_id = @o", new { o = d.Org }));
+        Assert.False(await fx.QueryAsync<bool>("SELECT enabled FROM alert_rule_overrides WHERE organization_id = @o AND code = 'shift_too_long'", new { o = fresh }));
+
+        // A station joining an organization that already has stations takes nothing: the target's settings stay as they are.
+        var back = await super.PostAsJsonAsync($"/api/v1/ui/stations/{d.Station}/organization", new { organization_id = b.Org });
+        Assert.Null((await back.Content.ReadFromJsonAsync<JsonObject>())!["carried"]);
+        Assert.Equal(fresh, await fx.QueryAsync<Guid>("SELECT organization_id FROM item_costs WHERE station_id IS NULL AND item_key = 'name:кофе Дельта'"));
+        (await super.PostAsJsonAsync($"/api/v1/ui/stations/{d.Station}/organization", new { organization_id = fresh })).EnsureSuccessStatusCode();
+    }
+
+    [PostgresFact]
     public async Task A_user_moved_to_another_organization_takes_the_own_telegram_chat_along()
     {
         var (a, b, super) = await SetupAsync();

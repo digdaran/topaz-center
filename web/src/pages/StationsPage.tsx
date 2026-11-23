@@ -6,6 +6,7 @@ import { api, isOwner, isSuper } from '../api/client';
 import { useMe } from '../auth/auth';
 import { FigureList, QueryState } from '../components/ui';
 import { dateTime, dec, int } from '../lib/format';
+import { type Carried, MOVE_NOTE, movedMessage } from '../lib/stationMove';
 
 interface StationRow {
   id: string; name: string; topaz_name: string; display_name: string | null; time_zone: string; time_zone_manual: boolean; region: string | null;
@@ -107,7 +108,7 @@ export default function StationsPage() {
       title: `Передать «${r.name}» другой организации`,
       content: (
         <>
-          <p>Вся история АЗС перейдёт к новой организации; её управляющие и наблюдатели в текущей организации потеряют доступ.</p>
+          <p>{MOVE_NOTE}</p>
           <Select style={{ width: '100%' }} placeholder="Организация" onChange={(v) => { target = v; }}
             options={(me.organizations ?? []).filter((o) => o.id !== me.organization_id).map((o) => ({ value: o.id, label: o.name }))} />
         </>
@@ -115,8 +116,8 @@ export default function StationsPage() {
       okText: 'Передать', cancelText: 'Отмена',
       onOk: async () => {
         if (!target) { message.error('Выберите организацию'); throw new Error('no target'); }
-        await api(`/stations/${r.id}/organization`, { method: 'POST', body: { organization_id: target } });
-        message.success('АЗС передана');
+        const res = await api<{ carried?: Carried }>(`/stations/${r.id}/organization`, { method: 'POST', body: { organization_id: target } });
+        message.success(movedMessage(res.carried));
         qc.invalidateQueries();
       },
     });
