@@ -83,7 +83,7 @@
     };
   }
 
-  // ---------------------------------------------------------------- Яндекс Метрика (no Webvisor)
+  // ---------------------------------------------------------------- Яндекс Метрика (with Webvisor; form fields are not recorded: ym-disable-keys)
   var counter = script && script.dataset.metrika;
   function goal(name) { if (counter && window.ym) window.ym(Number(counter), 'reachGoal', name); }
   if (counter) {
@@ -91,8 +91,8 @@
     window.ym.l = +new Date();
     var s = document.createElement('script');
     s.async = true;
-    s.src = 'https://mc.yandex.ru/metrika/tag.js';
+    s.src = 'https://mc.yandex.ru/metrika/tag.js?id=' + counter;
     document.head.appendChild(s);
-    window.ym(Number(counter), 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: false });
+    window.ym(Number(counter), 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: true });
   }
 })();

@@ -18,7 +18,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<!-- Before launch: fill in data-metrika (Яндекс Метрика counter id) and the [placeholders] in the footer and contacts. -->
+<!-- Before launch: fill in the [placeholders] in the footer and contacts. -->
 <a class="skip" href="#main">Перейти к содержанию</a>
 
 <header class="top">
@@ -268,16 +268,16 @@
       <h2 id="form-title">Попробуйте 30 дней бесплатно</h2>
       <p>Оставьте контакт — перезвоним в течение рабочего дня, ответим на вопросы и подключим первую АЗС.</p>
       <p class="lead-form__alt">Сначала хотите посмотреть? <a href="https://demo.topaz.08u.ru/">Откройте демо</a> — там всё как у клиента, только АЗС вымышленные.</p>
-      <p class="lead-form__alt">Или напишите сами: <a href="https://t.me/[telegram]">Telegram</a>, <a href="mailto:hello@azshub.ru">hello@azshub.ru</a></p>
+      <p class="lead-form__alt">Или напишите сами: <a href="https://t.me/ars08">Telegram</a>, <a href="mailto:arslanbar@yandex.ru">arslanbar@yandex.ru</a></p>
     </div>
     <form class="form" id="lead" novalidate>
       <label class="field">
         <span>Как вас зовут</span>
-        <input name="name" autocomplete="name" required maxlength="100">
+        <input class="ym-disable-keys" name="name" autocomplete="name" required maxlength="100">
       </label>
       <label class="field">
         <span>Телефон или Telegram</span>
-        <input name="contact" autocomplete="tel" required maxlength="100" placeholder="+7 900 000-00-00 или @имя">
+        <input class="ym-disable-keys" name="contact" autocomplete="tel" required maxlength="100" placeholder="+7 900 000-00-00 или @имя">
       </label>
       <div class="form__pair">
         <label class="field">
@@ -286,7 +286,7 @@
         </label>
         <label class="field">
           <span>Город <small>необязательно</small></span>
-          <input name="city" autocomplete="address-level2" maxlength="100">
+          <input class="ym-disable-keys" name="city" autocomplete="address-level2" maxlength="100">
         </label>
       </div>
       <label class="field field--trap" aria-hidden="true">
@@ -309,11 +309,11 @@
   <div class="wrap foot__in">
     <div>
       <p class="foot__brand">АЗС Хаб</p>
-      <p>ИП [Фамилия Имя Отчество], ИНН [000000000000], ОГРНИП [000000000000000]</p>
+      <p>ИП Баранов Арслан Юрьевич, ИНН 080201204069, ОГРНИП 318081600004936</p>
     </div>
     <div>
-      <p><a href="mailto:hello@azshub.ru">hello@azshub.ru</a></p>
-      <p><a href="https://t.me/[telegram]">Telegram</a></p>
+      <p><a href="mailto:arslanbar@yandex.ru">arslanbar@yandex.ru</a></p>
+      <p><a href="https://t.me/ars08">Telegram</a></p>
     </div>
     <div>
       <p><a href="privacy.html">Политика обработки персональных данных</a></p>
@@ -324,6 +324,6 @@
   </div>
 </footer>
 
-<script src="site.js" defer data-metrika=""></script>
+<script src="site.js" defer data-metrika="114582586"></script>
 </body>
 </html>

@@ -57,6 +57,7 @@ xray раз в 5 минут проверяет через каждый серв�
 ```bash
 # DNS: A-запись SITE_DOMAIN → IP сервера; затем в .env:
 #   SITE_DOMAIN=azshub.ru
+#   SITE_WWW_DOMAIN=www.azshub.ru   # по желанию: переадресация на SITE_DOMAIN
 docker compose up -d site caddy
 ```
 
